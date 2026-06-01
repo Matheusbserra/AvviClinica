@@ -1,0 +1,75 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@500;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  background: #f5f6f8;
+  --font-title: Poppins, "Segoe UI", Arial, Helvetica, sans-serif;
+  --font-body: Inter, "Segoe UI", Arial, Helvetica, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(184, 134, 43, 0.10), transparent 34rem),
+    linear-gradient(135deg, #f7f8fb 0%, #f3f0ea 100%);
+  color: #111827;
+  font-family: var(--font-body);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+button,
+nav,
+aside,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-title);
+}
+
+input,
+select,
+textarea,
+table,
+.dashboard-copy {
+  font-family: var(--font-body);
+}
+
+button {
+  font-family: var(--font-title);
+}
+
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #a7b7ce transparent;
+}
+
+.thin-scrollbar::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: #a7b7ce;
+  border-radius: 999px;
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded-lg border border-avvi-line bg-white/90 px-3 py-2 text-sm text-avvi-ink outline-none transition placeholder:text-slate-400 focus:border-avvi-blue focus:bg-white focus:ring-4 focus:ring-amber-100/70;
+  }
+}
