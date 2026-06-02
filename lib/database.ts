@@ -93,25 +93,27 @@ export async function syncEntity<T extends EntityName>(entity: T, records: Entit
     .map((row) => String(row.record_id))
     .filter((recordId) => !currentIds.has(recordId));
 
-  if (deleteIds.length) {
+  for (const ids of chunkArray(deleteIds, 50)) {
     const { error } = await supabase
       .from("avvi_records")
       .delete()
       .eq("entity", entity)
-      .in("record_id", deleteIds);
+      .in("record_id", ids);
     if (error) throw error;
   }
 
   if (!records.length) return;
-  const { error } = await supabase
-    .from("avvi_records")
-    .upsert(records.map((record) => ({
-      entity,
-      record_id: getRecordId(record),
-      data: record,
-      updated_at: new Date().toISOString()
-    })), { onConflict: "entity,record_id" });
-  if (error) throw error;
+  for (const batch of chunkArray(records, 25)) {
+    const { error } = await supabase
+      .from("avvi_records")
+      .upsert(batch.map((record) => ({
+        entity,
+        record_id: getRecordId(record),
+        data: record,
+        updated_at: new Date().toISOString()
+      })), { onConflict: "entity,record_id" });
+    if (error) throw error;
+  }
 }
 
 export async function syncEntityDiff<T extends EntityName>(entity: T, previous: EntityPayloadMap[T][], next: EntityPayloadMap[T][]) {
@@ -125,12 +127,38 @@ export async function syncEntityDiff<T extends EntityName>(entity: T, previous: 
     return !oldRecord || JSON.stringify(oldRecord) !== JSON.stringify(record);
   });
 
-  await Promise.all([
-    ...removedIds.map((recordId) => deleteRecord(entity, recordId)),
-    ...changedRecords.map((record) => upsertRecord(entity, record))
-  ]);
+  for (const ids of chunkArray(removedIds, 50)) {
+    if (!supabase || !ids.length) continue;
+    const { error } = await supabase
+      .from("avvi_records")
+      .delete()
+      .eq("entity", entity)
+      .in("record_id", ids);
+    if (error) throw error;
+  }
+
+  for (const batch of chunkArray(changedRecords, 25)) {
+    if (!supabase || !batch.length) continue;
+    const { error } = await supabase
+      .from("avvi_records")
+      .upsert(batch.map((record) => ({
+        entity,
+        record_id: getRecordId(record),
+        data: record,
+        updated_at: new Date().toISOString()
+      })), { onConflict: "entity,record_id" });
+    if (error) throw error;
+  }
 }
 
 export function getRecordId(record: { id?: string; month?: string }) {
   return record.id || record.month || crypto.randomUUID();
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }

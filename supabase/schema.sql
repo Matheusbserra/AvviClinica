@@ -14,7 +14,7 @@ create table if not exists public.avvi_records (
 
 create index if not exists avvi_records_entity_idx on public.avvi_records (entity);
 create index if not exists avvi_records_updated_at_idx on public.avvi_records (updated_at desc);
-create index if not exists avvi_records_data_gin_idx on public.avvi_records using gin (data);
+drop index if exists public.avvi_records_data_gin_idx;
 
 create table if not exists public.app_users (
   id uuid primary key default gen_random_uuid(),

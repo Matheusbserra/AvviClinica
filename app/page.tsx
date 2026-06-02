@@ -468,18 +468,16 @@ export default function Home() {
         }, 0);
 
         if (isEmptyDatabase) {
-          await Promise.all([
-            syncEntity("patients", initialPatients),
-            syncEntity("professionals", initialProfessionals),
-            syncEntity("procedures", initialProcedures),
-            syncEntity("appointments", initialAppointments),
-            syncEntity("financial_entries", initialEntries),
-            syncEntity("revenues", initialRevenues),
-            syncEntity("fixed_costs", initialCosts),
-            syncEntity("receipts", initialReceipts),
-            syncEntity("professional_receipts", []),
-            syncEntity("monthly_goals", initialGoals)
-          ]);
+          await syncEntity("patients", initialPatients);
+          await syncEntity("professionals", initialProfessionals);
+          await syncEntity("procedures", initialProcedures);
+          await syncEntity("appointments", initialAppointments);
+          await syncEntity("financial_entries", initialEntries);
+          await syncEntity("revenues", initialRevenues);
+          await syncEntity("fixed_costs", initialCosts);
+          await syncEntity("receipts", initialReceipts);
+          await syncEntity("professional_receipts", []);
+          await syncEntity("monthly_goals", initialGoals);
         }
         setSyncError("");
       } catch (error) {
@@ -529,18 +527,21 @@ export default function Home() {
         lastSyncedSnapshot.current = next;
         return;
       }
-      Promise.all([
-        syncEntityDiff("patients", previous.patients, next.patients),
-        syncEntityDiff("professionals", previous.professionals, next.professionals),
-        syncEntityDiff("procedures", previous.procedures, next.procedures),
-        syncEntityDiff("appointments", previous.appointments, next.appointments),
-        syncEntityDiff("financial_entries", previous.financial_entries, next.financial_entries),
-        syncEntityDiff("revenues", previous.revenues, next.revenues),
-        syncEntityDiff("fixed_costs", previous.fixed_costs, next.fixed_costs),
-        syncEntityDiff("receipts", previous.receipts, next.receipts),
-        syncEntityDiff("professional_receipts", previous.professional_receipts, next.professional_receipts),
-        syncEntityDiff("monthly_goals", previous.monthly_goals, next.monthly_goals)
-      ]).then(() => {
+      const syncedPrevious = previous;
+      async function saveChanges() {
+        await syncEntityDiff("patients", syncedPrevious.patients, next.patients);
+        await syncEntityDiff("professionals", syncedPrevious.professionals, next.professionals);
+        await syncEntityDiff("procedures", syncedPrevious.procedures, next.procedures);
+        await syncEntityDiff("appointments", syncedPrevious.appointments, next.appointments);
+        await syncEntityDiff("financial_entries", syncedPrevious.financial_entries, next.financial_entries);
+        await syncEntityDiff("revenues", syncedPrevious.revenues, next.revenues);
+        await syncEntityDiff("fixed_costs", syncedPrevious.fixed_costs, next.fixed_costs);
+        await syncEntityDiff("receipts", syncedPrevious.receipts, next.receipts);
+        await syncEntityDiff("professional_receipts", syncedPrevious.professional_receipts, next.professional_receipts);
+        await syncEntityDiff("monthly_goals", syncedPrevious.monthly_goals, next.monthly_goals);
+      }
+
+      saveChanges().then(() => {
         lastSyncedSnapshot.current = next;
         setSyncError("");
       }).catch((error) => setSyncError(`Erro ao salvar no Supabase: ${(error as Error).message}`));
