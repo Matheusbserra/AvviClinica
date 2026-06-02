@@ -193,6 +193,36 @@ function professionalPercentForEntry(entry: Pick<FinancialEntry, "procedureLines
   return lines.reduce((sum, line) => sum + Number(line.servicePrice) * Number(line.quantity) * Number(line.professionalPercent), 0) / gross;
 }
 
+function professionalReceiptProcedureRows(entry: FinancialEntry, procedureNameForLine: (line: ProcedureLine) => string) {
+  const lines = entry.procedureLines?.length ? entry.procedureLines : [entryToLine(entry)];
+  const grossTotal = lines.reduce((sum, line) => sum + Number(line.servicePrice) * Number(line.quantity), 0);
+  const machineFee = entry.payments.reduce((sum, payment) => sum + Number(payment.fee || 0), 0) + Number(entry.machineFee || 0);
+  const discount = Number(entry.commercialDiscount || 0) + entry.payments.reduce((sum, payment) => sum + Number(payment.discount || 0), 0);
+
+  return lines.map((line) => {
+    const gross = Number(line.servicePrice) * Number(line.quantity);
+    const ratio = grossTotal ? gross / grossTotal : 0;
+    const lineDiscount = discount * ratio;
+    const lineFee = machineFee * ratio;
+    const lineCost = Number(line.productCost) * Number(line.quantity);
+    const received = Math.max(0, gross - lineDiscount);
+    const profit = received - lineCost - lineFee;
+    const professionalValue = Math.max(0, profit) * (Number(line.professionalPercent) / 100);
+
+    return {
+      procedure: procedureNameForLine(line),
+      quantity: Number(line.quantity) || 1,
+      gross,
+      cost: lineCost,
+      fee: lineFee,
+      discount: lineDiscount,
+      profit,
+      professionalPercent: Number(line.professionalPercent) || 0,
+      professionalValue
+    };
+  });
+}
+
 function calculateCardFee(amount: number, cardBrand?: PaymentItem["cardBrand"], installments?: number) {
   const brand = cardBrand ?? "Mastercard";
   const term = Math.min(12, Math.max(1, Number(installments) || 1));
@@ -944,28 +974,31 @@ export default function Home() {
     doc.text(`Total a pagar: ${currency(total)}`, 20, 78);
     doc.setFontSize(9);
     let y = 94;
-    const headers = ["Data", "Paciente", "Procedimentos", "Recebido", "Lucro", "% Prof.", "Taxa", "Desconto", "V. Prof."];
-    const widths = [15, 26, 40, 18, 18, 12, 16, 16, 18];
+    const headers = ["Data", "Paciente", "Produto", "Qtd", "Valor", "Custo", "Taxa", "Desc.", "Lucro", "%", "V. Prof."];
+    const widths = [14, 24, 35, 8, 17, 17, 15, 15, 17, 9, 17];
     y += drawPdfRow(doc, headers, widths, 10, y, true);
     selectedEntries.forEach((entry) => {
-      const summary = calculateEntry(entry);
-      if (y > 252) {
-        doc.addPage();
-        y = 24;
-        y += drawPdfRow(doc, headers, widths, 10, y, true);
-      }
-      const discount = entry.payments.reduce((sum, payment) => sum + payment.discount, 0) + entry.commercialDiscount;
-      y += drawPdfRow(doc, [
-        formatDate(entry.date),
-        patientName(entry.patientId),
-        procedureName(entry),
-        currency(summary.received),
-        currency(summary.baseProfit),
-        `${professionalPercentForEntry(entry).toFixed(1)}%`,
-        currency(summary.machineFee),
-        currency(discount),
-        currency(summary.professionalValue)
-      ], widths, 10, y, false);
+      const rows = professionalReceiptProcedureRows(entry, (line) => procedures.find((procedure) => procedure.id === line.procedureId)?.name || line.manualProcedure || procedureName(entry));
+      rows.forEach((row) => {
+        if (y > 252) {
+          doc.addPage();
+          y = 24;
+          y += drawPdfRow(doc, headers, widths, 10, y, true);
+        }
+        y += drawPdfRow(doc, [
+          formatDate(entry.date),
+          patientName(entry.patientId),
+          row.procedure,
+          String(row.quantity),
+          currency(row.gross),
+          currency(row.cost),
+          currency(row.fee),
+          currency(row.discount),
+          currency(row.profit),
+          `${row.professionalPercent.toFixed(0)}%`,
+          currency(row.professionalValue)
+        ], widths, 10, y, false);
+      });
     });
     y = Math.min(y + 22, 268);
     doc.line(55, y, 155, y);
