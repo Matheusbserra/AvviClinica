@@ -134,6 +134,9 @@ function isDateInPeriod(date: string, start: string, end: string) {
 }
 
 function monthPeriod(month: string) {
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    return { start: "", end: "" };
+  }
   const start = `${month}-01`;
   return { start, end: format(endOfMonth(parseISO(start)), "yyyy-MM-dd") };
 }
@@ -922,7 +925,10 @@ export default function Home() {
     const firstProfessionalId = professionalPaymentFilter !== "todos" ? professionalPaymentFilter : selectedEntries[0].professionalId;
     const professional = professionals.find((item) => item.id === firstProfessionalId);
     const total = selectedEntries.reduce((sum, entry) => sum + calculateEntry(entry).professionalValue, 0);
-    const issuedAt = format(new Date(), "yyyy-MM-dd");
+    const issuedAt = selectedEntries
+      .map((entry) => entry.date)
+      .sort()
+      .at(-1) ?? format(new Date(), "yyyy-MM-dd");
     const doc = new jsPDF();
     const logo = await imageToDataUrl("/logo-avvi.png");
     if (logo) {
@@ -1071,13 +1077,13 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-transparent">
       <div className="flex w-full">
-        <aside className="fixed left-0 top-0 z-40 hidden h-screen w-80 shrink-0 border-r border-white/70 bg-white/90 p-5 shadow-panel backdrop-blur-xl lg:block">
+        <aside className="fixed left-0 top-0 z-40 hidden h-screen w-80 shrink-0 border-r border-white/70 bg-white/90 p-4 shadow-panel backdrop-blur-xl lg:block">
           <div className="flex h-full flex-col">
-            <div className="mb-6 text-center">
-              <Image src="/logo-avvi.png" alt="AVVI Clínica" width={220} height={90} className="mx-auto h-20 w-auto object-contain" priority />
-              <p className="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-avvi-blue">Gestão integrada</p>
+            <div className="mb-4 text-center">
+              <Image src="/logo-avvi.png" alt="AVVI Clínica" width={200} height={82} className="mx-auto h-16 w-auto object-contain" priority />
+              <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-avvi-blue">Gestão integrada</p>
             </div>
-            <nav className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1 thin-scrollbar">
+            <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 thin-scrollbar">
               <SidebarGroup label="Operação">
                 {tabs.filter((tab) => ["Agenda"].includes(tab.id)).map((tab) => {
                   const Icon = tab.icon;
@@ -1085,9 +1091,9 @@ export default function Home() {
                     <button
                       key={tab.id}
                       onClick={() => setActiveTab(tab.id)}
-                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
                     >
-                      <Icon size={18} />
+                      <Icon size={15} />
                       <span>{tab.id}</span>
                     </button>
                   );
@@ -1100,9 +1106,9 @@ export default function Home() {
                     <button
                       key={tab.id}
                       onClick={() => setActiveTab(tab.id)}
-                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
                     >
-                      <Icon size={18} />
+                      <Icon size={15} />
                       <span>{tab.id}</span>
                     </button>
                   );
@@ -1115,23 +1121,23 @@ export default function Home() {
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
-                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
                   >
-                    <Icon size={18} />
+                    <Icon size={15} />
                     <span>{tab.id}</span>
                   </button>
                 );
                 })}
               </SidebarGroup>
             </nav>
-            <div className="mt-5 space-y-3">
-              <div className="rounded-md border border-[#eadcc4] bg-avvi-soft p-3 text-sm text-slate-600">
+            <div className="mt-3 space-y-2">
+              <div className="rounded-md border border-[#eadcc4] bg-avvi-soft p-2.5 text-xs text-slate-600">
                 <p className="font-semibold text-avvi-ink">Perfil atual</p>
                 <p>Administrador</p>
-                <p className="mt-2 text-xs">Acesso total a relatórios, metas, valores e cadastros.</p>
+                <p className="mt-1 text-[10px]">Acesso total a relatórios, metas, valores e cadastros.</p>
               </div>
-              <button onClick={handleLogout} className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-100 bg-white px-4 py-3 text-sm font-bold text-avvi-red transition hover:bg-red-50" title="Sair do sistema">
-                <LogOut size={17} />
+              <button onClick={handleLogout} className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-100 bg-white px-4 py-2.5 text-xs font-bold text-avvi-red transition hover:bg-red-50" title="Sair do sistema">
+                <LogOut size={15} />
                 <span>Sair</span>
               </button>
             </div>
@@ -2829,7 +2835,7 @@ function Panel({ children }: { children: ReactNode }) {
 function SidebarGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <p className="mb-2 px-3 text-xs font-bold uppercase tracking-[0.16em] text-slate-400">{label}</p>
+      <p className="mb-1.5 px-3 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</p>
       <div className="space-y-1">{children}</div>
     </div>
   );
