@@ -27,9 +27,12 @@ import {
   ChevronRight,
   CircleDollarSign,
   Download,
+  Eye,
+  EyeOff,
   FileText,
   Goal,
   LayoutDashboard,
+  LogOut,
   Plus,
   HandCoins,
   ReceiptText,
@@ -51,10 +54,13 @@ import { importedClients } from "@/lib/importedClients";
 import { importedRevenues } from "@/lib/importedRevenues";
 import { importedCosts } from "@/lib/importedCosts";
 import { calculateEntry, currency, monthKey, percent, summarizeMonth } from "@/lib/calculations";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { appDataTableMissing, selectEntity, syncEntity } from "@/lib/database";
 import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, ViewMode } from "@/lib/types";
+import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 
 type Tab = "Agenda" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
-type MonthlyGoals = { month: string; companyGoal: number; professionalGoals: Record<string, number> };
+type MonthlyGoals = StoredMonthlyGoals;
 
 const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
@@ -86,36 +92,8 @@ const cardFeeRates: Record<NonNullable<PaymentItem["cardBrand"]>, number[]> = {
 
 const blankPayment: PaymentItem = { id: "pay-new", method: "Pix", amount: 0, fee: 0, discount: 0, installments: 1 };
 const procedurePaymentMethods: PaymentMethod[] = [...paymentMethods, "Crédito Futuro" as PaymentMethod];
-const storageKeys = {
-  patients: "avvi.patients",
-  professionals: "avvi.professionals",
-  procedures: "avvi.procedures",
-  appointments: "avvi.appointments",
-  entries: "avvi.financialEntries",
-  revenues: "avvi.revenues.v6",
-  costs: "avvi.costs.v2",
-  receipts: "avvi.receipts",
-  professionalReceipts: "avvi.professionalReceipts",
-  goals: "avvi.monthlyGoals"
-};
-
 function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function loadStored<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
-  try {
-    const raw = window.localStorage.getItem(key);
-    return raw ? JSON.parse(raw) as T : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function saveStored<T>(key: string, value: T) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(key, JSON.stringify(value));
 }
 
 function savePatientRecord(form: Patient, patients: Patient[]) {
@@ -323,6 +301,12 @@ function upsertMonthlyGoal(goals: MonthlyGoals[], goal: MonthlyGoals) {
   return goals.some((item) => item.month === goal.month) ? goals.map((item) => item.month === goal.month ? goal : item) : [...goals, goal];
 }
 
+function applyRemoteList<T extends { id?: string; month?: string }>(current: T[], recordId: string, record: T, remove: boolean) {
+  const matches = (item: T) => (item.id || item.month) === recordId;
+  if (remove) return current.filter((item) => !matches(item));
+  return current.some(matches) ? current.map((item) => matches(item) ? record : item) : [record, ...current];
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("Agenda");
   const [viewMode, setViewMode] = useState<ViewMode>("Dia");
@@ -331,16 +315,16 @@ export default function Home() {
   const [professionalFilter, setProfessionalFilter] = useState("todos");
   const [reportFilter, setReportFilter] = useState("Todos");
   const [search, setSearch] = useState("");
-  const [patients, setPatients] = useState<Patient[]>(() => mergePatients(loadStored(storageKeys.patients, seedPatients), importedClients));
-  const [professionals, setProfessionals] = useState<Professional[]>(() => loadStored(storageKeys.professionals, seedProfessionals));
-  const [procedures, setProcedures] = useState<Procedure[]>(() => mergeProcedures(loadStored(storageKeys.procedures, seedProcedures), catalogProcedures));
-  const [appointments, setAppointments] = useState<Appointment[]>(() => loadStored(storageKeys.appointments, seedAppointments));
-  const [entries, setEntries] = useState<FinancialEntry[]>(() => loadStored(storageKeys.entries, seedFinancialEntries));
-  const [revenues, setRevenues] = useState<RevenueEntry[]>(() => mergeRevenues(loadStored(storageKeys.revenues, []), importedRevenues));
-  const [costs, setCosts] = useState<FixedCost[]>(() => mergeCosts(loadStored(storageKeys.costs, loadStored("avvi.costs", seedFixedCosts)), importedCosts));
-  const [receipts, setReceipts] = useState<Receipt[]>(() => loadStored(storageKeys.receipts, seedReceipts));
-  const [professionalReceipts, setProfessionalReceipts] = useState<ProfessionalPaymentReceipt[]>(() => loadStored(storageKeys.professionalReceipts, []));
-  const [monthlyGoals, setMonthlyGoals] = useState<MonthlyGoals[]>(() => loadStored(storageKeys.goals, [makeMonthlyGoal("2026-05", seedProfessionals)]));
+  const [patients, setPatients] = useState<Patient[]>(() => mergePatients(seedPatients, importedClients));
+  const [professionals, setProfessionals] = useState<Professional[]>(seedProfessionals);
+  const [procedures, setProcedures] = useState<Procedure[]>(() => mergeProcedures(seedProcedures, catalogProcedures));
+  const [appointments, setAppointments] = useState<Appointment[]>(seedAppointments);
+  const [entries, setEntries] = useState<FinancialEntry[]>(seedFinancialEntries);
+  const [revenues, setRevenues] = useState<RevenueEntry[]>(importedRevenues);
+  const [costs, setCosts] = useState<FixedCost[]>(() => mergeCosts(seedFixedCosts, importedCosts));
+  const [receipts, setReceipts] = useState<Receipt[]>(seedReceipts);
+  const [professionalReceipts, setProfessionalReceipts] = useState<ProfessionalPaymentReceipt[]>([]);
+  const [monthlyGoals, setMonthlyGoals] = useState<MonthlyGoals[]>(() => [makeMonthlyGoal("2026-05", seedProfessionals)]);
   const [selectedSlot, setSelectedSlot] = useState<{ hour: number; professionalId: string } | null>(null);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [appointmentForm, setAppointmentForm] = useState(makeAppointmentForm("ana", selectedDate, 8));
@@ -352,48 +336,200 @@ export default function Home() {
   const [costForm, setCostForm] = useState(makeCostForm());
   const [professionalPaymentFilter, setProfessionalPaymentFilter] = useState("todos");
   const [selectedProfessionalEntryIds, setSelectedProfessionalEntryIds] = useState<string[]>([]);
-  const [isAuthenticated, setIsAuthenticated] = useState(() => loadStored("avvi.authenticated", false));
+  const [isAuthenticated, setIsAuthenticated] = useState(() => typeof window !== "undefined" && window.sessionStorage.getItem("avvi.session") === "active");
   const [loginForm, setLoginForm] = useState({ login: "", password: "" });
   const [loginError, setLoginError] = useState("");
-  const didMount = useRef(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const didHydrate = useRef(false);
+  const isRemoteUpdate = useRef(false);
+  const [syncError, setSyncError] = useState(() => isSupabaseConfigured ? "" : "Supabase não configurado. Preencha NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local.");
 
   const visibleProfessionals = professionalFilter === "todos" ? professionals : professionals.filter((professional) => professional.id === professionalFilter);
   const currentMonthSummary = useMemo(() => summarizeMonth(revenues, costs, selectedMonth), [revenues, costs, selectedMonth]);
   const previousMonthKey = previousMonth(selectedMonth);
   const previousSummary = useMemo(() => summarizeMonth(revenues, costs, previousMonthKey), [revenues, costs, previousMonthKey]);
 
+  function applyRemoteRecord(entity: string, eventType: string, recordId: string, data: unknown) {
+    const remove = eventType === "DELETE";
+    if (entity === "patients") setPatients((current) => applyRemoteList(current, recordId, data as Patient, remove));
+    if (entity === "professionals") setProfessionals((current) => applyRemoteList(current, recordId, data as Professional, remove));
+    if (entity === "procedures") setProcedures((current) => applyRemoteList(current, recordId, data as Procedure, remove));
+    if (entity === "appointments") setAppointments((current) => applyRemoteList(current, recordId, data as Appointment, remove));
+    if (entity === "financial_entries") setEntries((current) => applyRemoteList(current, recordId, data as FinancialEntry, remove));
+    if (entity === "revenues") setRevenues((current) => applyRemoteList(current, recordId, data as RevenueEntry, remove));
+    if (entity === "fixed_costs") setCosts((current) => applyRemoteList(current, recordId, data as FixedCost, remove));
+    if (entity === "receipts") setReceipts((current) => applyRemoteList(current, recordId, data as Receipt, remove));
+    if (entity === "professional_receipts") setProfessionalReceipts((current) => applyRemoteList(current, recordId, data as ProfessionalPaymentReceipt, remove));
+    if (entity === "monthly_goals") setMonthlyGoals((current) => applyRemoteList(current, recordId, data as MonthlyGoals, remove));
+  }
+
   useEffect(() => {
-    if (!didMount.current) {
-      didMount.current = true;
+    if (!isSupabaseConfigured) {
+      didHydrate.current = true;
+      return;
     }
-    window.localStorage.removeItem("avvi.revenues");
-    window.localStorage.removeItem("avvi.revenues.v2");
-    window.localStorage.removeItem("avvi.revenues.v3");
-    window.localStorage.removeItem("avvi.revenues.v4");
-    window.localStorage.removeItem("avvi.revenues.v5");
-    saveStored(storageKeys.patients, patients);
-    saveStored(storageKeys.professionals, professionals);
-    saveStored(storageKeys.procedures, procedures);
-    saveStored(storageKeys.appointments, appointments);
-    saveStored(storageKeys.entries, entries);
-    saveStored(storageKeys.revenues, revenues);
-    saveStored(storageKeys.costs, costs);
-    saveStored(storageKeys.receipts, receipts);
-    saveStored(storageKeys.professionalReceipts, professionalReceipts);
-    saveStored(storageKeys.goals, monthlyGoals);
+
+    let cancelled = false;
+
+    async function hydrateFromSupabase() {
+      try {
+        const [
+          dbPatients,
+          dbProfessionals,
+          dbProcedures,
+          dbAppointments,
+          dbEntries,
+          dbRevenues,
+          dbCosts,
+          dbReceipts,
+          dbProfessionalReceipts,
+          dbGoals
+        ] = await Promise.all([
+          selectEntity("patients"),
+          selectEntity("professionals"),
+          selectEntity("procedures"),
+          selectEntity("appointments"),
+          selectEntity("financial_entries"),
+          selectEntity("revenues"),
+          selectEntity("fixed_costs"),
+          selectEntity("receipts"),
+          selectEntity("professional_receipts"),
+          selectEntity("monthly_goals")
+        ]);
+        if (cancelled) return;
+
+        const initialPatients = mergePatients(seedPatients, importedClients);
+        const initialProfessionals = seedProfessionals;
+        const initialProcedures = mergeProcedures(seedProcedures, catalogProcedures);
+        const initialAppointments = seedAppointments;
+        const initialEntries = seedFinancialEntries;
+        const initialRevenues = importedRevenues;
+        const initialCosts = mergeCosts(seedFixedCosts, importedCosts);
+        const initialReceipts = seedReceipts;
+        const initialGoals = [makeMonthlyGoal("2026-05", seedProfessionals)];
+        const isEmptyDatabase = !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
+
+        isRemoteUpdate.current = true;
+        setPatients(dbPatients.length ? dbPatients : initialPatients);
+        setProfessionals(dbProfessionals.length ? dbProfessionals : initialProfessionals);
+        setProcedures(dbProcedures.length ? dbProcedures : initialProcedures);
+        setAppointments(dbAppointments.length ? dbAppointments : initialAppointments);
+        setEntries(dbEntries.length ? dbEntries : initialEntries);
+        setRevenues(dbRevenues.length ? dbRevenues : initialRevenues);
+        setCosts(dbCosts.length ? dbCosts : initialCosts);
+        setReceipts(dbReceipts.length ? dbReceipts : initialReceipts);
+        setProfessionalReceipts(dbProfessionalReceipts);
+        setMonthlyGoals(dbGoals.length ? dbGoals : initialGoals);
+        window.setTimeout(() => {
+          isRemoteUpdate.current = false;
+          didHydrate.current = true;
+        }, 0);
+
+        if (isEmptyDatabase) {
+          await Promise.all([
+            syncEntity("patients", initialPatients),
+            syncEntity("professionals", initialProfessionals),
+            syncEntity("procedures", initialProcedures),
+            syncEntity("appointments", initialAppointments),
+            syncEntity("financial_entries", initialEntries),
+            syncEntity("revenues", initialRevenues),
+            syncEntity("fixed_costs", initialCosts),
+            syncEntity("receipts", initialReceipts),
+            syncEntity("professional_receipts", []),
+            syncEntity("monthly_goals", initialGoals)
+          ]);
+        }
+        setSyncError("");
+      } catch (error) {
+        didHydrate.current = true;
+        const message = appDataTableMissing(error)
+          ? "Tabela avvi_records não encontrada no Supabase. Execute supabase/schema.sql no SQL Editor."
+          : `Erro ao conectar ao Supabase: ${(error as Error).message}`;
+        setSyncError(message);
+      }
+    }
+
+    hydrateFromSupabase();
+
+    const channel = supabase?.channel("avvi-records-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "avvi_records" }, (payload) => {
+        const row = (payload.eventType === "DELETE" ? payload.old : payload.new) as { entity?: string; record_id?: string; data?: unknown };
+        if (!row?.entity) return;
+        isRemoteUpdate.current = true;
+        applyRemoteRecord(row.entity, payload.eventType, String(row.record_id), row.data);
+        window.setTimeout(() => { isRemoteUpdate.current = false; }, 0);
+      })
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      if (channel) supabase?.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!didHydrate.current || isRemoteUpdate.current || !isSupabaseConfigured) return;
+    const timeout = window.setTimeout(() => {
+      Promise.all([
+        syncEntity("patients", patients),
+        syncEntity("professionals", professionals),
+        syncEntity("procedures", procedures),
+        syncEntity("appointments", appointments),
+        syncEntity("financial_entries", entries),
+        syncEntity("revenues", revenues),
+        syncEntity("fixed_costs", costs),
+        syncEntity("receipts", receipts),
+        syncEntity("professional_receipts", professionalReceipts),
+        syncEntity("monthly_goals", monthlyGoals)
+      ]).then(() => setSyncError("")).catch((error) => setSyncError(`Erro ao salvar no Supabase: ${(error as Error).message}`));
+    }, 500);
+    return () => window.clearTimeout(timeout);
   }, [patients, professionals, procedures, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals]);
 
   useEffect(() => {
-    saveStored("avvi.authenticated", isAuthenticated);
-  }, [isAuthenticated]);
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) setIsAuthenticated(true);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthenticated(Boolean(session));
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
 
-  function handleLogin() {
-    if (loginForm.login.trim().toLowerCase() === "admin" && loginForm.password === "avvi123") {
+  async function handleLogin() {
+    if (loginForm.login.trim().toLowerCase() === "admin" && loginForm.password === "avvi2025@") {
       setIsAuthenticated(true);
+      window.sessionStorage.setItem("avvi.session", "active");
       setLoginError("");
       return;
     }
+    if (supabase) {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: loginForm.login.trim(),
+        password: loginForm.password
+      });
+      if (!error) {
+        setIsAuthenticated(true);
+        window.sessionStorage.setItem("avvi.session", "active");
+        setLoginError("");
+        return;
+      }
+      setLoginError(error.message);
+      return;
+    }
     setLoginError("Login ou senha inválidos.");
+  }
+
+  async function handleLogout() {
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+    window.sessionStorage.removeItem("avvi.session");
+    setIsAuthenticated(false);
+    setLoginForm({ login: "", password: "" });
+    setLoginError("");
+    setActiveTab("Agenda");
   }
 
   function openSlot(hour: number, professionalId: string) {
@@ -776,10 +912,15 @@ export default function Home() {
           <h1 className="mt-3 text-2xl font-bold text-avvi-ink">Acesse o sistema</h1>
           <div className="mt-6 space-y-3 text-left">
             <FormField label="Login">
-              <input className="input" value={loginForm.login} onChange={(event) => setLoginForm({ ...loginForm, login: event.target.value })} placeholder="admin" />
+              <input className="input" value={loginForm.login} onChange={(event) => setLoginForm({ ...loginForm, login: event.target.value })} placeholder="email@avviclinica.com" />
             </FormField>
             <FormField label="Senha">
-              <input className="input" type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="avvi123" onKeyDown={(event) => { if (event.key === "Enter") handleLogin(); }} />
+              <div className="relative">
+                <input className="input pr-11" type={showPassword ? "text" : "password"} value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Senha" onKeyDown={(event) => { if (event.key === "Enter") handleLogin(); }} />
+                <button type="button" onClick={() => setShowPassword((current) => !current)} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 text-slate-500 hover:bg-avvi-soft hover:text-avvi-blue" title={showPassword ? "Ocultar senha" : "Mostrar senha"}>
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </FormField>
           </div>
           {loginError && <p className="mt-3 text-sm font-bold text-avvi-red">{loginError}</p>}
@@ -793,13 +934,44 @@ export default function Home() {
     <main className="min-h-screen bg-transparent">
       <div className="flex w-full">
         <aside className="fixed left-0 top-0 z-40 hidden h-screen w-80 shrink-0 border-r border-white/70 bg-white/90 p-5 shadow-panel backdrop-blur-xl lg:block">
-          <div className="mb-6 text-center">
-            <Image src="/logo-avvi.png" alt="AVVI Clínica" width={220} height={90} className="mx-auto h-20 w-auto object-contain" priority />
-            <p className="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-avvi-blue">Gestão integrada</p>
-          </div>
-          <nav className="space-y-5">
-            <SidebarGroup label="Operação">
-              {tabs.filter((tab) => ["Agenda"].includes(tab.id)).map((tab) => {
+          <div className="flex h-full flex-col">
+            <div className="mb-6 text-center">
+              <Image src="/logo-avvi.png" alt="AVVI Clínica" width={220} height={90} className="mx-auto h-20 w-auto object-contain" priority />
+              <p className="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-avvi-blue">Gestão integrada</p>
+            </div>
+            <nav className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1 thin-scrollbar">
+              <SidebarGroup label="Operação">
+                {tabs.filter((tab) => ["Agenda"].includes(tab.id)).map((tab) => {
+                  const Icon = tab.icon;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
+                    >
+                      <Icon size={18} />
+                      <span>{tab.id}</span>
+                    </button>
+                  );
+                })}
+              </SidebarGroup>
+              <SidebarGroup label="Financeiro">
+                {tabs.filter((tab) => ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Custos"].includes(tab.id)).map((tab) => {
+                  const Icon = tab.icon;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
+                    >
+                      <Icon size={18} />
+                      <span>{tab.id}</span>
+                    </button>
+                  );
+                })}
+              </SidebarGroup>
+              <SidebarGroup label="Cadastros">
+                {tabs.filter((tab) => ["Cadastro de Procedimentos", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas"].includes(tab.id)).map((tab) => {
                 const Icon = tab.icon;
                 return (
                   <button
@@ -811,48 +983,30 @@ export default function Home() {
                     <span>{tab.id}</span>
                   </button>
                 );
-              })}
-            </SidebarGroup>
-            <SidebarGroup label="Financeiro">
-              {tabs.filter((tab) => ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Custos"].includes(tab.id)).map((tab) => {
-                const Icon = tab.icon;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
-                  >
-                    <Icon size={18} />
-                    <span>{tab.id}</span>
-                  </button>
-                );
-              })}
-            </SidebarGroup>
-            <SidebarGroup label="Cadastros">
-              {tabs.filter((tab) => ["Cadastro de Procedimentos", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas"].includes(tab.id)).map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
-                >
-                  <Icon size={18} />
-                  <span>{tab.id}</span>
-                </button>
-              );
-              })}
-            </SidebarGroup>
-          </nav>
-          <div className="mt-6 rounded-md border border-[#eadcc4] bg-avvi-soft p-3 text-sm text-slate-600">
-            <p className="font-semibold text-avvi-ink">Perfil atual</p>
-            <p>Administrador</p>
-            <p className="mt-2 text-xs">Acesso total a relatórios, metas, valores e cadastros.</p>
+                })}
+              </SidebarGroup>
+            </nav>
+            <div className="mt-5 space-y-3">
+              <div className="rounded-md border border-[#eadcc4] bg-avvi-soft p-3 text-sm text-slate-600">
+                <p className="font-semibold text-avvi-ink">Perfil atual</p>
+                <p>Administrador</p>
+                <p className="mt-2 text-xs">Acesso total a relatórios, metas, valores e cadastros.</p>
+              </div>
+              <button onClick={handleLogout} className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-100 bg-white px-4 py-3 text-sm font-bold text-avvi-red transition hover:bg-red-50" title="Sair do sistema">
+                <LogOut size={17} />
+                <span>Sair</span>
+              </button>
+            </div>
           </div>
         </aside>
 
         <section className="min-w-0 flex-1 px-4 py-5 lg:ml-80 lg:px-7">
           <Header activeTab={activeTab} />
+          {syncError && (
+            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-avvi-red">
+              {syncError}
+            </div>
+          )}
           <MobileTabs activeTab={activeTab} setActiveTab={setActiveTab} />
 
           {activeTab === "Agenda" && (

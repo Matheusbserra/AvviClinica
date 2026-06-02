@@ -1,6 +1,34 @@
-# AVVI Clínica Web
+# AVVI Clinica Web
 
-Sistema web para gestão da AVVI Clínica, unindo agenda clínica, fechamento financeiro, recibos, procedimentos base, custos fixos e dashboard de performance.
+Sistema web para gestao da AVVI Clinica, com agenda, financeiro, receitas, custos, pagamento profissional, cadastros, metas e dashboard.
+
+## Supabase
+
+O sistema usa persistencia real no Supabase via `@supabase/supabase-js`.
+
+1. Crie o projeto no Supabase.
+2. Execute `supabase/schema.sql` no SQL Editor.
+3. Configure `.env.local`:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=sua_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=sua_chave_anon
+```
+
+Os dados sao salvos na tabela `avvi_records`, separados por entidade:
+
+- `patients`
+- `professionals`
+- `procedures`
+- `appointments`
+- `financial_entries`
+- `revenues`
+- `fixed_costs`
+- `receipts`
+- `professional_receipts`
+- `monthly_goals`
+
+O schema tambem cria tabelas auxiliares para usuarios, prontuarios, observacoes e historico/auditoria.
 
 ## Como rodar
 
@@ -16,22 +44,8 @@ Em desenvolvimento:
 pnpm dev
 ```
 
-A aplicação roda por padrão em `http://localhost:3000`.
+A aplicacao roda por padrao em `http://localhost:3000`.
 
-## O que foi implementado
+## Persistencia
 
-- Agenda diária com calendário lateral, filtro de profissionais, busca, colunas por profissional e horários de 8h às 20h.
-- Modal de agendamento com paciente, procedimento, profissional, status e ações operacionais.
-- Lançamento de procedimentos com cálculo automático de custos, taxas, descontos, lucro base, valor da empresa e comissão profissional.
-- Pagamento misto por múltiplos itens de pagamento.
-- Exportação Excel dos lançamentos filtrados.
-- Geração de recibo em PDF e histórico local.
-- Cadastro e ativação/desativação de procedimentos base.
-- Cadastro de custos com status, replicação mensal e parcelamento no crédito.
-- Dashboard com resultado mensal, receitas, despesas, cards por profissional, metas e gráficos.
-- Schema inicial para Supabase/PostgreSQL em `supabase/schema.sql`.
-- Persistência local no navegador com `localStorage` para manter cadastros, edições, exclusões, agenda, lançamentos, custos e recibos após recarregar a página.
-
-## Observação
-
-Esta v1 está implementada como aplicação funcional com persistência local no navegador para validar fluxo, layout e regras. O próximo passo natural é conectar as telas ao Supabase usando o schema fornecido, autenticação e políticas RLS por perfil.
+Ao abrir o sistema, os dados sao carregados do Supabase. Se o banco estiver vazio, a aplicacao envia a base inicial/importada para o Supabase. Criacoes, edicoes, exclusoes, status, receitas, custos, agendamentos, procedimentos, pacientes, recibos e metas sao sincronizados automaticamente no banco.
