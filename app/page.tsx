@@ -53,6 +53,7 @@ import { catalogProcedures } from "@/lib/catalogProcedures";
 import { importedClients } from "@/lib/importedClients";
 import { importedRevenues } from "@/lib/importedRevenues";
 import { importedCosts } from "@/lib/importedCosts";
+import { applyProcedureCostOverrides } from "@/lib/procedureCosts";
 import { calculateEntry, currency, monthKey, percent, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { appDataTableMissing, selectEntityState, syncEntity, syncEntityDiff } from "@/lib/database";
@@ -247,7 +248,7 @@ function makeMachineFeeCost(entry: FinancialEntry, patientName: string): FixedCo
 
 function mergeProcedures(current: Procedure[], imported: Procedure[]) {
   const names = new Set(current.map((procedure) => normalizeName(procedure.name)));
-  return [...current, ...imported.filter((procedure) => !names.has(normalizeName(procedure.name)))];
+  return applyProcedureCostOverrides([...current, ...imported.filter((procedure) => !names.has(normalizeName(procedure.name)))]);
 }
 
 function mergePatients(current: Patient[], imported: Patient[]) {
@@ -447,7 +448,7 @@ export default function Home() {
 
         const dbPatients = dbPatientsState.records;
         const dbProfessionals = dbProfessionalsState.records;
-        const dbProcedures = dbProceduresState.records;
+        const dbProcedures = applyProcedureCostOverrides(dbProceduresState.records);
         const dbAppointments = dbAppointmentsState.records;
         const dbEntries = dbEntriesState.records;
         const dbRevenues = dbRevenuesState.records;
@@ -469,7 +470,7 @@ export default function Home() {
         const remoteSnapshot: DataSnapshot = {
           patients: dbPatients.length ? dbPatients : initialPatients,
           professionals: dbProfessionals.length ? dbProfessionals : initialProfessionals,
-          procedures: dbProcedures.length ? dbProcedures : initialProcedures,
+          procedures: dbProceduresState.records.length ? dbProcedures : initialProcedures,
           appointments: dbAppointments.length ? dbAppointments : initialAppointments,
           financial_entries: dbEntries.length ? dbEntries : initialEntries,
           revenues: dbRevenues.length ? dbRevenues : initialRevenues,
@@ -490,7 +491,14 @@ export default function Home() {
           dbProfessionalReceiptsState.latestUpdatedAt,
           dbGoalsState.latestUpdatedAt
         ].filter(Boolean).sort().at(-1) ?? "";
-        const localSnapshot = readLocalSnapshot();
+        const savedLocalSnapshot = readLocalSnapshot();
+        const localSnapshot = savedLocalSnapshot ? {
+          ...savedLocalSnapshot,
+          data: {
+            ...savedLocalSnapshot.data,
+            procedures: applyProcedureCostOverrides(savedLocalSnapshot.data.procedures)
+          }
+        } : null;
         const shouldUseLocalSnapshot = Boolean(localSnapshot?.savedAt && (!latestRemoteUpdate || localSnapshot.savedAt > latestRemoteUpdate));
         const hydratedSnapshot = shouldUseLocalSnapshot ? localSnapshot!.data : remoteSnapshot;
 
@@ -522,6 +530,9 @@ export default function Home() {
           await syncEntity("receipts", initialReceipts);
           await syncEntity("professional_receipts", []);
           await syncEntity("monthly_goals", initialGoals);
+        }
+        if (dbProceduresState.records.length) {
+          await syncEntityDiff("procedures", dbProceduresState.records, dbProcedures);
         }
         if (shouldUseLocalSnapshot) {
           await syncEntityDiff("patients", remoteSnapshot.patients, hydratedSnapshot.patients);
