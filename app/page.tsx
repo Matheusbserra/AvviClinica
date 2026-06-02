@@ -182,6 +182,22 @@ function futureCreditUsed(entry?: Pick<FinancialEntry, "payments">) {
   return entry?.payments.reduce((sum, payment) => payment.method === "Crédito Futuro" ? sum + Number(payment.amount) : sum, 0) ?? 0;
 }
 
+function productCostOnly(entry: Pick<FinancialEntry, "quantity" | "productCost" | "procedureLines">) {
+  const lines = entry.procedureLines?.length ? entry.procedureLines : [{
+    quantity: entry.quantity,
+    productCost: entry.productCost
+  }];
+  return lines.reduce((sum, line) => sum + Number(line.productCost) * Number(line.quantity), 0);
+}
+
+function servicesTotal(entry: Pick<FinancialEntry, "quantity" | "servicePrice" | "procedureLines">) {
+  const lines = entry.procedureLines?.length ? entry.procedureLines : [{
+    quantity: entry.quantity,
+    servicePrice: entry.servicePrice
+  }];
+  return lines.reduce((sum, line) => sum + Number(line.servicePrice) * Number(line.quantity), 0);
+}
+
 function professionalPercentForEntry(entry: Pick<FinancialEntry, "procedureLines" | "servicePrice" | "quantity" | "professionalPercent">) {
   const lines = entry.procedureLines?.length ? entry.procedureLines : [{
     servicePrice: entry.servicePrice,
@@ -919,46 +935,48 @@ export default function Home() {
     });
   }
 
-  function generateReceipt() {
-    const professional = professionals.find((item) => item.id === receiptForm.professionalId);
+  function savePatientReceiptPdf(receipt: Receipt) {
+    const professional = professionals.find((item) => item.id === receipt.professionalId);
     const doc = new jsPDF();
     doc.setFontSize(18);
     doc.text("AVVI Clínica", 20, 22);
     doc.setFontSize(12);
     doc.text("Recibo de Pagamento", 20, 34);
     doc.line(20, 39, 190, 39);
-    doc.text(`Paciente: ${receiptForm.patientName}`, 20, 52);
-    doc.text(`CPF: ${receiptForm.cpf}`, 20, 62);
-    doc.text(`Procedimento: ${receiptForm.procedure}`, 20, 72);
-    doc.text(`Valor pago: ${currency(Number(receiptForm.amount))}`, 20, 82);
-    doc.text(`Forma de pagamento: ${receiptForm.paymentMethod}`, 20, 92);
-    doc.text(`Data: ${formatDate(receiptForm.date)}`, 20, 102);
+    doc.text(`Paciente: ${receipt.patientName}`, 20, 52);
+    doc.text(`CPF: ${receipt.cpf}`, 20, 62);
+    doc.text(`Procedimento: ${receipt.procedure}`, 20, 72);
+    doc.text(`Valor pago: ${currency(Number(receipt.amount))}`, 20, 82);
+    doc.text(`Forma de pagamento: ${receipt.paymentMethod}`, 20, 92);
+    doc.text(`Data: ${formatDate(receipt.date)}`, 20, 102);
     doc.text(`Profissional: ${professional?.name ?? ""}`, 20, 112);
-    doc.text(`Observações: ${receiptForm.notes || "-"}`, 20, 122);
+    doc.text(`Observações: ${receipt.notes || "-"}`, 20, 122);
     doc.text("Declaro o recebimento do valor acima referente ao procedimento informado.", 20, 146);
     doc.line(55, 172, 155, 172);
     doc.text("AVVI Clínica", 88, 180);
-    doc.save(`recibo-avvi-${receiptForm.patientName || "paciente"}.pdf`);
-    setReceipts((current) => [{ ...receiptForm, id: id("receipt"), amount: Number(receiptForm.amount) || 0 }, ...current]);
+    doc.save(`recibo-avvi-${receipt.patientName || "paciente"}.pdf`);
+  }
+
+  function generateReceipt() {
+    const receipt = { ...receiptForm, id: id("receipt"), amount: Number(receiptForm.amount) || 0 };
+    savePatientReceiptPdf(receipt);
+    setReceipts((current) => [receipt, ...current]);
     setReceiptForm(makeReceiptForm());
   }
 
-  async function generateProfessionalReceipt() {
-    const selectedEntries = entries.filter((entry) => selectedProfessionalEntryIds.includes(entry.id));
-    if (!selectedEntries.length) return;
-    const alreadyReceipted = professionalReceipts.flatMap((receipt) => receipt.entryIds);
-    const duplicatedEntry = selectedEntries.find((entry) => alreadyReceipted.includes(entry.id));
-    if (duplicatedEntry) {
-      window.alert("Um ou mais serviços selecionados já fazem parte de um recibo profissional. Exclua o recibo anterior para gerar novamente.");
-      return;
-    }
-    const firstProfessionalId = professionalPaymentFilter !== "todos" ? professionalPaymentFilter : selectedEntries[0].professionalId;
-    const professional = professionals.find((item) => item.id === firstProfessionalId);
-    const total = selectedEntries.reduce((sum, entry) => sum + calculateEntry(entry).professionalValue, 0);
-    const issuedAt = selectedEntries
-      .map((entry) => entry.date)
-      .sort()
-      .at(-1) ?? format(new Date(), "yyyy-MM-dd");
+  async function saveProfessionalReceiptPdf(selectedEntries: FinancialEntry[], professionalId: string, issuedAt: string) {
+    const professional = professionals.find((item) => item.id === professionalId);
+    const receiptRows = selectedEntries.flatMap((entry) => professionalReceiptProcedureRows(
+      entry,
+      (line) => procedures.find((procedure) => procedure.id === line.procedureId)?.name || line.manualProcedure || procedureName(entry)
+    ).map((row) => ({ entry, row })));
+    const total = receiptRows.reduce((sum, item) => sum + item.row.professionalValue, 0);
+    const totalPaid = receiptRows.reduce((sum, item) => sum + item.row.gross, 0);
+    const totalProductCost = receiptRows.reduce((sum, item) => sum + item.row.cost, 0);
+    const totalMachineFee = receiptRows.reduce((sum, item) => sum + item.row.fee, 0);
+    const totalDiscount = receiptRows.reduce((sum, item) => sum + item.row.discount, 0);
+    const totalCost = totalProductCost + totalMachineFee + totalDiscount;
+    const totalProfit = totalPaid - totalCost;
     const doc = new jsPDF();
     const logo = await imageToDataUrl("/logo-avvi.png");
     if (logo) {
@@ -974,36 +992,63 @@ export default function Home() {
     doc.text(`Total a pagar: ${currency(total)}`, 20, 78);
     doc.setFontSize(9);
     let y = 94;
+    y += drawProfessionalReceiptSummary(doc, {
+      productCost: totalProductCost,
+      totalCost,
+      totalPaid,
+      totalMachineFee,
+      totalDiscount,
+      totalProfit,
+      professionalValue: total
+    }, 10, y);
+    y += 7;
     const headers = ["Data", "Paciente", "Produto", "Qtd", "Valor", "Custo", "Taxa", "Desc.", "Lucro", "%", "V. Prof."];
     const widths = [14, 24, 35, 8, 17, 17, 15, 15, 17, 9, 17];
     y += drawPdfRow(doc, headers, widths, 10, y, true);
-    selectedEntries.forEach((entry) => {
-      const rows = professionalReceiptProcedureRows(entry, (line) => procedures.find((procedure) => procedure.id === line.procedureId)?.name || line.manualProcedure || procedureName(entry));
-      rows.forEach((row) => {
-        if (y > 252) {
-          doc.addPage();
-          y = 24;
-          y += drawPdfRow(doc, headers, widths, 10, y, true);
-        }
-        y += drawPdfRow(doc, [
-          formatDate(entry.date),
-          patientName(entry.patientId),
-          row.procedure,
-          String(row.quantity),
-          currency(row.gross),
-          currency(row.cost),
-          currency(row.fee),
-          currency(row.discount),
-          currency(row.profit),
-          `${row.professionalPercent.toFixed(0)}%`,
-          currency(row.professionalValue)
-        ], widths, 10, y, false);
-      });
+    receiptRows.forEach(({ entry, row }) => {
+      if (y > 252) {
+        doc.addPage();
+        y = 24;
+        y += drawPdfRow(doc, headers, widths, 10, y, true);
+      }
+      y += drawPdfRow(doc, [
+        formatDate(entry.date),
+        patientName(entry.patientId),
+        row.procedure,
+        String(row.quantity),
+        currency(row.gross),
+        currency(row.cost),
+        currency(row.fee),
+        currency(row.discount),
+        currency(row.profit),
+        `${row.professionalPercent.toFixed(0)}%`,
+        currency(row.professionalValue)
+      ], widths, 10, y, false);
     });
-    y = Math.min(y + 22, 268);
+    y = drawProfessionalReceiptFormulas(doc, Math.min(y + 6, 230));
+    y = Math.min(y + 20, 268);
     doc.line(55, y, 155, y);
     doc.text("Assinatura da profissional", 78, y + 8);
     doc.save(`pagamento-profissional-${professional?.name ?? "avvi"}.pdf`);
+    return total;
+  }
+
+  async function generateProfessionalReceipt() {
+    const selectedEntries = entries.filter((entry) => selectedProfessionalEntryIds.includes(entry.id));
+    if (!selectedEntries.length) return;
+    const alreadyReceipted = professionalReceipts.flatMap((receipt) => receipt.entryIds);
+    const duplicatedEntry = selectedEntries.find((entry) => alreadyReceipted.includes(entry.id));
+    if (duplicatedEntry) {
+      window.alert("Um ou mais serviços selecionados já fazem parte de um recibo profissional. Exclua o recibo anterior para gerar novamente.");
+      return;
+    }
+    const firstProfessionalId = professionalPaymentFilter !== "todos" ? professionalPaymentFilter : selectedEntries[0].professionalId;
+    const professional = professionals.find((item) => item.id === firstProfessionalId);
+    const issuedAt = selectedEntries
+      .map((entry) => entry.date)
+      .sort()
+      .at(-1) ?? format(new Date(), "yyyy-MM-dd");
+    const total = await saveProfessionalReceiptPdf(selectedEntries, firstProfessionalId, issuedAt);
     const receipt: ProfessionalPaymentReceipt = {
       id: id("professional-receipt"),
       date: issuedAt,
@@ -1027,6 +1072,17 @@ export default function Home() {
       notes: ""
     }, ...current]);
     setSelectedProfessionalEntryIds([]);
+  }
+
+  async function reopenProfessionalReceipt(receiptId: string) {
+    const receipt = professionalReceipts.find((item) => item.id === receiptId);
+    if (!receipt) return;
+    const receiptEntries = entries.filter((entry) => receipt.entryIds.includes(entry.id));
+    if (!receiptEntries.length) {
+      window.alert("Não encontrei os lançamentos deste recibo para abrir o PDF novamente.");
+      return;
+    }
+    await saveProfessionalReceiptPdf(receiptEntries, receipt.professionalId, receipt.date);
   }
 
   function deleteProfessionalReceipt(receiptId: string) {
@@ -1246,6 +1302,7 @@ export default function Home() {
               receipts={receipts}
               professionals={professionals}
               generateReceipt={generateReceipt}
+              reopenReceipt={savePatientReceiptPdf}
               professionalName={professionalName}
             />
           )}
@@ -1263,6 +1320,7 @@ export default function Home() {
               generateReceipt={generateProfessionalReceipt}
               professionalReceipts={professionalReceipts}
               deleteProfessionalReceipt={deleteProfessionalReceipt}
+              reopenProfessionalReceipt={reopenProfessionalReceipt}
               patientName={patientName}
               professionalName={professionalName}
               procedureName={procedureName}
@@ -1759,6 +1817,10 @@ function FinancialView(props: {
   procedureName: (entry: FinancialEntry) => string;
 }) {
   const summary = calculateEntry(props.entryForm);
+  const productCost = productCostOnly(props.entryForm);
+  const totalServices = servicesTotal(props.entryForm);
+  const totalCost = productCost + summary.discount + summary.machineFee;
+  const profit = totalServices - totalCost;
   const initialPeriod = monthPeriod(props.selectedMonth);
   const [periodStart, setPeriodStart] = useState(initialPeriod.start);
   const [periodEnd, setPeriodEnd] = useState(initialPeriod.end);
@@ -1889,13 +1951,13 @@ function FinancialView(props: {
           </div>
         </div>
         <PaymentEditor form={props.entryForm} setForm={props.setEntryForm} patients={props.patients} />
-        <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-sm md:grid-cols-7">
-          <SummaryItem label="Custo total" value={currency(summary.productCost)} />
-          <SummaryItem label="Total pago" value={currency(summary.paymentTotal)} />
+        <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-xs md:grid-cols-7">
+          <SummaryItem label="Custo de produtos" value={currency(productCost)} />
+          <SummaryItem label="Descontos" value={currency(summary.discount)} tone="red" />
           <SummaryItem label="Taxa maquininha" value={currency(summary.machineFee)} tone="red" />
-          <SummaryItem label="Desconto" value={currency(summary.discount)} tone="red" />
-          <SummaryItem label="Lucro base" value={currency(summary.baseProfit)} tone="green" />
-          <SummaryItem label="Valor empresa" value={currency(summary.companyValue)} tone="blue" />
+          <SummaryItem label="Custo total" value={currency(totalCost)} />
+          <SummaryItem label="Total de serviços" value={currency(totalServices)} tone="blue" />
+          <SummaryItem label="Lucro" value={currency(profit)} tone="green" />
           <SummaryItem label="Valor profissional" value={currency(summary.professionalValue)} tone="violet" />
         </div>
         <div className="mt-4 flex justify-end">
@@ -2006,6 +2068,9 @@ function FinancialEntriesTable(props: {
 function PaymentEditor({ form, setForm, patients }: { form: ReturnType<typeof makeEntryForm>; setForm: (form: ReturnType<typeof makeEntryForm>) => void; patients: Patient[] }) {
   const selectedPatient = patients.find((patient) => patient.id === form.patientId);
   const availableFutureCredit = Number(selectedPatient?.futureCredit) || 0;
+  const totalDue = Math.max(0, servicesTotal(form) - (Number(form.commercialDiscount) || 0));
+  const paidTotal = form.payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const remainingPayment = Math.max(0, totalDue - paidTotal);
 
   function updatePayment(index: number, patch: Partial<PaymentItem>) {
     setForm({
@@ -2037,7 +2102,7 @@ function PaymentEditor({ form, setForm, patients }: { form: ReturnType<typeof ma
     <div className="mt-4 rounded-md border border-avvi-line p-3">
       <div className="mb-2 flex items-center justify-between">
         <p className="font-bold">Formas de pagamento</p>
-        <button onClick={() => setForm({ ...form, payments: [...form.payments, { ...blankPayment, id: id("payment") }] })} className="text-sm font-bold text-avvi-blue"><Plus className="mr-1 inline" size={14} />Adicionar</button>
+        <button onClick={() => setForm({ ...form, payments: [...form.payments, { ...blankPayment, id: id("payment"), amount: remainingPayment }] })} className="text-sm font-bold text-avvi-blue"><Plus className="mr-1 inline" size={14} />Adicionar</button>
       </div>
       <div className="space-y-2">
         {form.payments.map((payment, index) => (
@@ -2125,7 +2190,7 @@ function ProcedureDetailPanel({ entry, procedures, procedureName }: { entry: Fin
   );
 }
 
-function ReceiptsView({ receiptForm, setReceiptForm, receipts, professionals, generateReceipt, professionalName }: { receiptForm: ReturnType<typeof makeReceiptForm>; setReceiptForm: (form: ReturnType<typeof makeReceiptForm>) => void; receipts: Receipt[]; professionals: Professional[]; generateReceipt: () => void; professionalName: (id?: string) => string }) {
+function ReceiptsView({ receiptForm, setReceiptForm, receipts, professionals, generateReceipt, reopenReceipt, professionalName }: { receiptForm: ReturnType<typeof makeReceiptForm>; setReceiptForm: (form: ReturnType<typeof makeReceiptForm>) => void; receipts: Receipt[]; professionals: Professional[]; generateReceipt: () => void; reopenReceipt: (receipt: Receipt) => void; professionalName: (id?: string) => string }) {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
       <Panel>
@@ -2147,9 +2212,16 @@ function ReceiptsView({ receiptForm, setReceiptForm, receipts, professionals, ge
         <div className="space-y-2">
           {receipts.map((receipt) => (
             <div key={receipt.id} className="rounded-md border border-avvi-line p-3 text-sm">
-              <p className="font-bold">{receipt.patientName}</p>
-              <p>{receipt.procedure} · {currency(receipt.amount)}</p>
-              <p className="text-slate-500">{formatDate(receipt.date)} · {professionalName(receipt.professionalId)}</p>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="font-bold">{receipt.patientName}</p>
+                  <p>{receipt.procedure} · {currency(receipt.amount)}</p>
+                  <p className="text-slate-500">{formatDate(receipt.date)} · {professionalName(receipt.professionalId)}</p>
+                </div>
+                <button onClick={() => reopenReceipt(receipt)} className="rounded-md border border-avvi-line p-2 text-avvi-blue hover:bg-avvi-soft" title="Abrir PDF novamente">
+                  <FileText size={14} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -2170,6 +2242,7 @@ function ProfessionalPaymentView(props: {
   generateReceipt: () => void;
   professionalReceipts: ProfessionalPaymentReceipt[];
   deleteProfessionalReceipt: (id: string) => void;
+  reopenProfessionalReceipt: (id: string) => void;
   patientName: (id?: string) => string;
   professionalName: (id?: string) => string;
   procedureName: (entry: FinancialEntry) => string;
@@ -2260,9 +2333,14 @@ function ProfessionalPaymentView(props: {
                     <p className="text-slate-500">{formatDate(receipt.date)}</p>
                     <p className="mt-1 font-bold text-avvi-violet">{currency(receipt.total)}</p>
                   </div>
-                  <button onClick={() => props.deleteProfessionalReceipt(receipt.id)} className="rounded-md border border-red-100 p-2 text-avvi-red hover:bg-red-50" title="Excluir recibo">
-                    <Trash2 size={14} />
-                  </button>
+                  <div className="flex gap-1">
+                    <button onClick={() => props.reopenProfessionalReceipt(receipt.id)} className="rounded-md border border-avvi-line p-2 text-avvi-blue hover:bg-avvi-soft" title="Abrir PDF novamente">
+                      <FileText size={14} />
+                    </button>
+                    <button onClick={() => props.deleteProfessionalReceipt(receipt.id)} className="rounded-md border border-red-100 p-2 text-avvi-red hover:bg-red-50" title="Excluir recibo">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
               </div>
             )) : <p className="rounded-md bg-slate-50 p-3 text-sm text-slate-500">Nenhum recibo gerado neste período.</p>}
@@ -2937,6 +3015,53 @@ function drawPdfRow(doc: jsPDF, values: string[], widths: number[], x: number, y
   return rowHeight;
 }
 
+function drawProfessionalReceiptSummary(doc: jsPDF, values: { productCost: number; totalCost: number; totalPaid: number; totalMachineFee: number; totalDiscount: number; totalProfit: number; professionalValue: number }, x: number, y: number) {
+  const items = [
+    { label: "Custo produtos", value: values.productCost, color: [71, 85, 105] },
+    { label: "Desconto", value: values.totalDiscount, color: [220, 38, 38] },
+    { label: "Taxa maq.", value: values.totalMachineFee, color: [194, 65, 12] },
+    { label: "Custo total", value: values.totalCost, color: [71, 85, 105] },
+    { label: "Total serviços", value: values.totalPaid, color: [15, 23, 42] },
+    { label: "Lucro", value: values.totalProfit, color: [0, 139, 92] },
+    { label: "V. profissional", value: values.professionalValue, color: [99, 102, 241] }
+  ];
+  const cardWidth = 27;
+  const cardHeight = 17;
+
+  items.forEach((item, index) => {
+    const currentX = x + (index * cardWidth);
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(currentX, y - 6, cardWidth - 2, cardHeight, 2, 2, "FD");
+    doc.setFontSize(6.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(item.label, currentX + 2, y - 1);
+    doc.setFontSize(8);
+    doc.setTextColor(item.color[0], item.color[1], item.color[2]);
+    doc.text(currency(item.value), currentX + 2, y + 6);
+  });
+  doc.setTextColor(0, 0, 0);
+  return cardHeight + 2;
+}
+
+function drawProfessionalReceiptFormulas(doc: jsPDF, y: number) {
+  if (y > 228) {
+    doc.addPage();
+    y = 24;
+  }
+  doc.setDrawColor(226, 232, 240);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(10, y, 190, 24, 2, 2, "FD");
+  doc.setFontSize(7);
+  doc.setTextColor(71, 85, 105);
+  doc.text("Fórmulas utilizadas:", 14, y + 6);
+  doc.text("Custo total = desconto + custo dos produtos + taxa da maquininha", 14, y + 12);
+  doc.text("Lucro = total de serviços - custo total", 14, y + 17);
+  doc.text("Valor profissional = lucro x % profissional cadastrado", 14, y + 22);
+  doc.setTextColor(0, 0, 0);
+  return y + 24;
+}
+
 function SummaryItem({ label, value, tone = "slate" }: { label: string; value: string; tone?: "slate" | "red" | "green" | "blue" | "violet" }) {
   const colors = { slate: "text-slate-700", red: "text-avvi-red", green: "text-avvi-green", blue: "text-avvi-blue", violet: "text-avvi-violet" };
   return <div><p className="text-xs text-slate-500">{label}</p><p className={`font-bold ${colors[tone]}`}>{value}</p></div>;
@@ -3006,7 +3131,7 @@ function makeAppointmentForm(professionalId: string, date: string, hour: number)
 }
 
 function makeEntryForm() {
-  return { id: "", appointmentId: undefined as string | undefined, patientId: "", patientName: "", professionalId: "", procedureId: "", manualProcedure: "", quantity: 1, servicePrice: 0, productCost: 0, machineFee: 0, commercialDiscount: 0, discountSplit: "Empresa e profissional dividem" as DiscountSplit, professionalPercent: 70, procedureLines: [makeProcedureLine()], date: "2026-05-27", notes: "", payments: [{ ...blankPayment, id: id("payment") }] };
+  return { id: "", appointmentId: undefined as string | undefined, patientId: "", patientName: "", professionalId: "", procedureId: "", manualProcedure: "", quantity: 1, servicePrice: 0, productCost: 0, machineFee: 0, commercialDiscount: 0, discountSplit: "Empresa e profissional dividem" as DiscountSplit, professionalPercent: 70, procedureLines: [makeProcedureLine()], date: todayKey(), notes: "", payments: [{ ...blankPayment, id: id("payment") }] };
 }
 
 function makeProcedureLine(): ProcedureLine {
