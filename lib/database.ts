@@ -114,6 +114,23 @@ export async function syncEntity<T extends EntityName>(entity: T, records: Entit
   if (error) throw error;
 }
 
+export async function syncEntityDiff<T extends EntityName>(entity: T, previous: EntityPayloadMap[T][], next: EntityPayloadMap[T][]) {
+  const previousById = new Map(previous.map((record) => [getRecordId(record), record]));
+  const nextById = new Map(next.map((record) => [getRecordId(record), record]));
+
+  const removedIds = [...previousById.keys()].filter((recordId) => !nextById.has(recordId));
+  const changedRecords = next.filter((record) => {
+    const recordId = getRecordId(record);
+    const oldRecord = previousById.get(recordId);
+    return !oldRecord || JSON.stringify(oldRecord) !== JSON.stringify(record);
+  });
+
+  await Promise.all([
+    ...removedIds.map((recordId) => deleteRecord(entity, recordId)),
+    ...changedRecords.map((record) => upsertRecord(entity, record))
+  ]);
+}
+
 export function getRecordId(record: { id?: string; month?: string }) {
   return record.id || record.month || crypto.randomUUID();
 }

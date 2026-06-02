@@ -55,12 +55,24 @@ import { importedRevenues } from "@/lib/importedRevenues";
 import { importedCosts } from "@/lib/importedCosts";
 import { calculateEntry, currency, monthKey, percent, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { appDataTableMissing, selectEntity, syncEntity } from "@/lib/database";
+import { appDataTableMissing, selectEntity, syncEntity, syncEntityDiff } from "@/lib/database";
 import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 
 type Tab = "Agenda" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
+type DataSnapshot = {
+  patients: Patient[];
+  professionals: Professional[];
+  procedures: Procedure[];
+  appointments: Appointment[];
+  financial_entries: FinancialEntry[];
+  revenues: RevenueEntry[];
+  fixed_costs: FixedCost[];
+  receipts: Receipt[];
+  professional_receipts: ProfessionalPaymentReceipt[];
+  monthly_goals: MonthlyGoals[];
+};
 
 const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
@@ -342,6 +354,7 @@ export default function Home() {
   const [showPassword, setShowPassword] = useState(false);
   const didHydrate = useRef(false);
   const isRemoteUpdate = useRef(false);
+  const lastSyncedSnapshot = useRef<DataSnapshot | null>(null);
   const [syncError, setSyncError] = useState(() => isSupabaseConfigured ? "" : "Supabase não configurado. Preencha NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local.");
 
   const visibleProfessionals = professionalFilter === "todos" ? professionals : professionals.filter((professional) => professional.id === professionalFilter);
@@ -361,6 +374,22 @@ export default function Home() {
     if (entity === "receipts") setReceipts((current) => applyRemoteList(current, recordId, data as Receipt, remove));
     if (entity === "professional_receipts") setProfessionalReceipts((current) => applyRemoteList(current, recordId, data as ProfessionalPaymentReceipt, remove));
     if (entity === "monthly_goals") setMonthlyGoals((current) => applyRemoteList(current, recordId, data as MonthlyGoals, remove));
+
+    const snapshot = lastSyncedSnapshot.current;
+    if (!snapshot) return;
+    lastSyncedSnapshot.current = {
+      ...snapshot,
+      patients: entity === "patients" ? applyRemoteList(snapshot.patients, recordId, data as Patient, remove) : snapshot.patients,
+      professionals: entity === "professionals" ? applyRemoteList(snapshot.professionals, recordId, data as Professional, remove) : snapshot.professionals,
+      procedures: entity === "procedures" ? applyRemoteList(snapshot.procedures, recordId, data as Procedure, remove) : snapshot.procedures,
+      appointments: entity === "appointments" ? applyRemoteList(snapshot.appointments, recordId, data as Appointment, remove) : snapshot.appointments,
+      financial_entries: entity === "financial_entries" ? applyRemoteList(snapshot.financial_entries, recordId, data as FinancialEntry, remove) : snapshot.financial_entries,
+      revenues: entity === "revenues" ? applyRemoteList(snapshot.revenues, recordId, data as RevenueEntry, remove) : snapshot.revenues,
+      fixed_costs: entity === "fixed_costs" ? applyRemoteList(snapshot.fixed_costs, recordId, data as FixedCost, remove) : snapshot.fixed_costs,
+      receipts: entity === "receipts" ? applyRemoteList(snapshot.receipts, recordId, data as Receipt, remove) : snapshot.receipts,
+      professional_receipts: entity === "professional_receipts" ? applyRemoteList(snapshot.professional_receipts, recordId, data as ProfessionalPaymentReceipt, remove) : snapshot.professional_receipts,
+      monthly_goals: entity === "monthly_goals" ? applyRemoteList(snapshot.monthly_goals, recordId, data as MonthlyGoals, remove) : snapshot.monthly_goals
+    };
   }
 
   useEffect(() => {
@@ -408,18 +437,31 @@ export default function Home() {
         const initialReceipts = seedReceipts;
         const initialGoals = [makeMonthlyGoal("2026-05", seedProfessionals)];
         const isEmptyDatabase = !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
+        const hydratedSnapshot: DataSnapshot = {
+          patients: dbPatients.length ? dbPatients : initialPatients,
+          professionals: dbProfessionals.length ? dbProfessionals : initialProfessionals,
+          procedures: dbProcedures.length ? dbProcedures : initialProcedures,
+          appointments: dbAppointments.length ? dbAppointments : initialAppointments,
+          financial_entries: dbEntries.length ? dbEntries : initialEntries,
+          revenues: dbRevenues.length ? dbRevenues : initialRevenues,
+          fixed_costs: dbCosts.length ? dbCosts : initialCosts,
+          receipts: dbReceipts.length ? dbReceipts : initialReceipts,
+          professional_receipts: dbProfessionalReceipts,
+          monthly_goals: dbGoals.length ? dbGoals : initialGoals
+        };
 
         isRemoteUpdate.current = true;
-        setPatients(dbPatients.length ? dbPatients : initialPatients);
-        setProfessionals(dbProfessionals.length ? dbProfessionals : initialProfessionals);
-        setProcedures(dbProcedures.length ? dbProcedures : initialProcedures);
-        setAppointments(dbAppointments.length ? dbAppointments : initialAppointments);
-        setEntries(dbEntries.length ? dbEntries : initialEntries);
-        setRevenues(dbRevenues.length ? dbRevenues : initialRevenues);
-        setCosts(dbCosts.length ? dbCosts : initialCosts);
-        setReceipts(dbReceipts.length ? dbReceipts : initialReceipts);
-        setProfessionalReceipts(dbProfessionalReceipts);
-        setMonthlyGoals(dbGoals.length ? dbGoals : initialGoals);
+        lastSyncedSnapshot.current = hydratedSnapshot;
+        setPatients(hydratedSnapshot.patients);
+        setProfessionals(hydratedSnapshot.professionals);
+        setProcedures(hydratedSnapshot.procedures);
+        setAppointments(hydratedSnapshot.appointments);
+        setEntries(hydratedSnapshot.financial_entries);
+        setRevenues(hydratedSnapshot.revenues);
+        setCosts(hydratedSnapshot.fixed_costs);
+        setReceipts(hydratedSnapshot.receipts);
+        setProfessionalReceipts(hydratedSnapshot.professional_receipts);
+        setMonthlyGoals(hydratedSnapshot.monthly_goals);
         window.setTimeout(() => {
           isRemoteUpdate.current = false;
           didHydrate.current = true;
@@ -470,18 +512,38 @@ export default function Home() {
   useEffect(() => {
     if (!didHydrate.current || isRemoteUpdate.current || !isSupabaseConfigured) return;
     const timeout = window.setTimeout(() => {
+      const previous = lastSyncedSnapshot.current;
+      const next: DataSnapshot = {
+        patients,
+        professionals,
+        procedures,
+        appointments,
+        financial_entries: entries,
+        revenues,
+        fixed_costs: costs,
+        receipts,
+        professional_receipts: professionalReceipts,
+        monthly_goals: monthlyGoals
+      };
+      if (!previous) {
+        lastSyncedSnapshot.current = next;
+        return;
+      }
       Promise.all([
-        syncEntity("patients", patients),
-        syncEntity("professionals", professionals),
-        syncEntity("procedures", procedures),
-        syncEntity("appointments", appointments),
-        syncEntity("financial_entries", entries),
-        syncEntity("revenues", revenues),
-        syncEntity("fixed_costs", costs),
-        syncEntity("receipts", receipts),
-        syncEntity("professional_receipts", professionalReceipts),
-        syncEntity("monthly_goals", monthlyGoals)
-      ]).then(() => setSyncError("")).catch((error) => setSyncError(`Erro ao salvar no Supabase: ${(error as Error).message}`));
+        syncEntityDiff("patients", previous.patients, next.patients),
+        syncEntityDiff("professionals", previous.professionals, next.professionals),
+        syncEntityDiff("procedures", previous.procedures, next.procedures),
+        syncEntityDiff("appointments", previous.appointments, next.appointments),
+        syncEntityDiff("financial_entries", previous.financial_entries, next.financial_entries),
+        syncEntityDiff("revenues", previous.revenues, next.revenues),
+        syncEntityDiff("fixed_costs", previous.fixed_costs, next.fixed_costs),
+        syncEntityDiff("receipts", previous.receipts, next.receipts),
+        syncEntityDiff("professional_receipts", previous.professional_receipts, next.professional_receipts),
+        syncEntityDiff("monthly_goals", previous.monthly_goals, next.monthly_goals)
+      ]).then(() => {
+        lastSyncedSnapshot.current = next;
+        setSyncError("");
+      }).catch((error) => setSyncError(`Erro ao salvar no Supabase: ${(error as Error).message}`));
     }, 500);
     return () => window.clearTimeout(timeout);
   }, [patients, professionals, procedures, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals]);
