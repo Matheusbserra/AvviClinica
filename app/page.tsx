@@ -55,7 +55,7 @@ import { importedRevenues } from "@/lib/importedRevenues";
 import { importedCosts } from "@/lib/importedCosts";
 import { calculateEntry, currency, monthKey, percent, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { appDataTableMissing, selectEntity, syncEntity, syncEntityDiff } from "@/lib/database";
+import { appDataTableMissing, selectEntityState, syncEntity, syncEntityDiff } from "@/lib/database";
 import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 
@@ -73,6 +73,9 @@ type DataSnapshot = {
   professional_receipts: ProfessionalPaymentReceipt[];
   monthly_goals: MonthlyGoals[];
 };
+type LocalSnapshot = { savedAt: string; data: DataSnapshot };
+
+const localSnapshotKey = "avvi.data.snapshot.v1";
 
 const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
@@ -196,7 +199,7 @@ function calculateCardFee(amount: number, cardBrand?: PaymentItem["cardBrand"], 
 function makeRevenueFromFinancialEntry(entry: FinancialEntry, patientName: string): RevenueEntry {
   const summary = calculateEntry(entry);
   const nonFuturePayments = entry.payments.filter((payment) => payment.method !== "Crédito Futuro");
-  const totalPaid = Math.max(0, nonFuturePayments.reduce((sum, payment) => sum + Number(payment.amount), 0) - summary.discount);
+  const totalPaid = Math.max(0, nonFuturePayments.reduce((sum, payment) => sum + Number(payment.amount), 0));
   const futureCreditUsedValue = entry.payments.filter((payment) => payment.method === "Crédito Futuro").reduce((sum, payment) => sum + Number(payment.amount), 0);
   return {
     id: `receita-entry-${entry.id}`,
@@ -319,6 +322,21 @@ function applyRemoteList<T extends { id?: string; month?: string }>(current: T[]
   return current.some(matches) ? current.map((item) => matches(item) ? record : item) : [record, ...current];
 }
 
+function readLocalSnapshot(): LocalSnapshot | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(localSnapshotKey);
+    return raw ? JSON.parse(raw) as LocalSnapshot : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalSnapshot(data: DataSnapshot) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(localSnapshotKey, JSON.stringify({ savedAt: new Date().toISOString(), data }));
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("Agenda");
   const [viewMode, setViewMode] = useState<ViewMode>("Dia");
@@ -403,29 +421,40 @@ export default function Home() {
     async function hydrateFromSupabase() {
       try {
         const [
-          dbPatients,
-          dbProfessionals,
-          dbProcedures,
-          dbAppointments,
-          dbEntries,
-          dbRevenues,
-          dbCosts,
-          dbReceipts,
-          dbProfessionalReceipts,
-          dbGoals
+          dbPatientsState,
+          dbProfessionalsState,
+          dbProceduresState,
+          dbAppointmentsState,
+          dbEntriesState,
+          dbRevenuesState,
+          dbCostsState,
+          dbReceiptsState,
+          dbProfessionalReceiptsState,
+          dbGoalsState
         ] = await Promise.all([
-          selectEntity("patients"),
-          selectEntity("professionals"),
-          selectEntity("procedures"),
-          selectEntity("appointments"),
-          selectEntity("financial_entries"),
-          selectEntity("revenues"),
-          selectEntity("fixed_costs"),
-          selectEntity("receipts"),
-          selectEntity("professional_receipts"),
-          selectEntity("monthly_goals")
+          selectEntityState("patients"),
+          selectEntityState("professionals"),
+          selectEntityState("procedures"),
+          selectEntityState("appointments"),
+          selectEntityState("financial_entries"),
+          selectEntityState("revenues"),
+          selectEntityState("fixed_costs"),
+          selectEntityState("receipts"),
+          selectEntityState("professional_receipts"),
+          selectEntityState("monthly_goals")
         ]);
         if (cancelled) return;
+
+        const dbPatients = dbPatientsState.records;
+        const dbProfessionals = dbProfessionalsState.records;
+        const dbProcedures = dbProceduresState.records;
+        const dbAppointments = dbAppointmentsState.records;
+        const dbEntries = dbEntriesState.records;
+        const dbRevenues = dbRevenuesState.records;
+        const dbCosts = dbCostsState.records;
+        const dbReceipts = dbReceiptsState.records;
+        const dbProfessionalReceipts = dbProfessionalReceiptsState.records;
+        const dbGoals = dbGoalsState.records;
 
         const initialPatients = mergePatients(seedPatients, importedClients);
         const initialProfessionals = seedProfessionals;
@@ -437,7 +466,7 @@ export default function Home() {
         const initialReceipts = seedReceipts;
         const initialGoals = [makeMonthlyGoal("2026-05", seedProfessionals)];
         const isEmptyDatabase = !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
-        const hydratedSnapshot: DataSnapshot = {
+        const remoteSnapshot: DataSnapshot = {
           patients: dbPatients.length ? dbPatients : initialPatients,
           professionals: dbProfessionals.length ? dbProfessionals : initialProfessionals,
           procedures: dbProcedures.length ? dbProcedures : initialProcedures,
@@ -449,9 +478,24 @@ export default function Home() {
           professional_receipts: dbProfessionalReceipts,
           monthly_goals: dbGoals.length ? dbGoals : initialGoals
         };
+        const latestRemoteUpdate = [
+          dbPatientsState.latestUpdatedAt,
+          dbProfessionalsState.latestUpdatedAt,
+          dbProceduresState.latestUpdatedAt,
+          dbAppointmentsState.latestUpdatedAt,
+          dbEntriesState.latestUpdatedAt,
+          dbRevenuesState.latestUpdatedAt,
+          dbCostsState.latestUpdatedAt,
+          dbReceiptsState.latestUpdatedAt,
+          dbProfessionalReceiptsState.latestUpdatedAt,
+          dbGoalsState.latestUpdatedAt
+        ].filter(Boolean).sort().at(-1) ?? "";
+        const localSnapshot = readLocalSnapshot();
+        const shouldUseLocalSnapshot = Boolean(localSnapshot?.savedAt && (!latestRemoteUpdate || localSnapshot.savedAt > latestRemoteUpdate));
+        const hydratedSnapshot = shouldUseLocalSnapshot ? localSnapshot!.data : remoteSnapshot;
 
         isRemoteUpdate.current = true;
-        lastSyncedSnapshot.current = hydratedSnapshot;
+        lastSyncedSnapshot.current = shouldUseLocalSnapshot ? remoteSnapshot : hydratedSnapshot;
         setPatients(hydratedSnapshot.patients);
         setProfessionals(hydratedSnapshot.professionals);
         setProcedures(hydratedSnapshot.procedures);
@@ -479,6 +523,20 @@ export default function Home() {
           await syncEntity("professional_receipts", []);
           await syncEntity("monthly_goals", initialGoals);
         }
+        if (shouldUseLocalSnapshot) {
+          await syncEntityDiff("patients", remoteSnapshot.patients, hydratedSnapshot.patients);
+          await syncEntityDiff("professionals", remoteSnapshot.professionals, hydratedSnapshot.professionals);
+          await syncEntityDiff("procedures", remoteSnapshot.procedures, hydratedSnapshot.procedures);
+          await syncEntityDiff("appointments", remoteSnapshot.appointments, hydratedSnapshot.appointments);
+          await syncEntityDiff("financial_entries", remoteSnapshot.financial_entries, hydratedSnapshot.financial_entries);
+          await syncEntityDiff("revenues", remoteSnapshot.revenues, hydratedSnapshot.revenues);
+          await syncEntityDiff("fixed_costs", remoteSnapshot.fixed_costs, hydratedSnapshot.fixed_costs);
+          await syncEntityDiff("receipts", remoteSnapshot.receipts, hydratedSnapshot.receipts);
+          await syncEntityDiff("professional_receipts", remoteSnapshot.professional_receipts, hydratedSnapshot.professional_receipts);
+          await syncEntityDiff("monthly_goals", remoteSnapshot.monthly_goals, hydratedSnapshot.monthly_goals);
+          lastSyncedSnapshot.current = hydratedSnapshot;
+        }
+        writeLocalSnapshot(hydratedSnapshot);
         setSyncError("");
       } catch (error) {
         didHydrate.current = true;
@@ -525,6 +583,7 @@ export default function Home() {
       };
       if (!previous) {
         lastSyncedSnapshot.current = next;
+        writeLocalSnapshot(next);
         return;
       }
       const syncedPrevious = previous;
@@ -543,8 +602,12 @@ export default function Home() {
 
       saveChanges().then(() => {
         lastSyncedSnapshot.current = next;
+        writeLocalSnapshot(next);
         setSyncError("");
-      }).catch((error) => setSyncError(`Erro ao salvar no Supabase: ${(error as Error).message}`));
+      }).catch((error) => {
+        writeLocalSnapshot(next);
+        setSyncError(`Erro ao salvar no Supabase: ${(error as Error).message}`);
+      });
     }, 500);
     return () => window.clearTimeout(timeout);
   }, [patients, professionals, procedures, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals]);
@@ -717,13 +780,14 @@ export default function Home() {
       patientId = created.id;
     }
     if (!patientId) return;
+    const legacyPaymentDiscount = source.payments.reduce((sum, payment) => sum + (Number(payment.discount) || 0), 0);
     const normalizedPayments = source.payments.map((payment) => ({
       ...payment,
       id: payment.id === "pay-new" ? id("payment") : payment.id,
       fee: payment.method === "Crédito" ? Number(payment.fee) || 0 : 0,
       cardBrand: payment.method === "Crédito" ? payment.cardBrand : undefined,
       installments: payment.method === "Crédito" ? Number(payment.installments) || 1 : 1,
-      discount: Number(payment.discount) || 0
+      discount: 0
     }));
     const created: FinancialEntry = {
       id: source.id || id("entry"),
@@ -736,7 +800,7 @@ export default function Home() {
       servicePrice: Number(source.procedureLines[0]?.servicePrice ?? source.servicePrice) || 0,
       productCost: Number(source.procedureLines[0]?.productCost ?? source.productCost) || 0,
       machineFee: 0,
-      commercialDiscount: 0,
+      commercialDiscount: (Number(source.commercialDiscount) || 0) + legacyPaymentDiscount,
       discountSplit: source.discountSplit,
       professionalPercent: Number(source.procedureLines[0]?.professionalPercent ?? source.professionalPercent) || 0,
       procedureLines: source.procedureLines.map((line) => ({
@@ -1661,7 +1725,18 @@ function FinancialView(props: {
   function updateLine(index: number, patch: Partial<ProcedureLine>) {
     const procedureLines = props.entryForm.procedureLines.map((line, lineIndex) => lineIndex === index ? { ...line, ...patch } : line);
     const gross = procedureLines.reduce((sum, line) => sum + Number(line.servicePrice) * Number(line.quantity), 0);
-    props.setEntryForm({ ...props.entryForm, procedureLines, payments: [{ ...props.entryForm.payments[0], amount: gross }, ...props.entryForm.payments.slice(1)] });
+    const paymentAmount = Math.max(0, gross - (Number(props.entryForm.commercialDiscount) || 0));
+    props.setEntryForm({ ...props.entryForm, procedureLines, payments: [{ ...props.entryForm.payments[0], amount: paymentAmount }, ...props.entryForm.payments.slice(1)] });
+  }
+
+  function updateCommercialDiscount(value: number) {
+    const gross = props.entryForm.procedureLines.reduce((sum, line) => sum + Number(line.servicePrice) * Number(line.quantity), 0);
+    const paymentAmount = Math.max(0, gross - (Number(value) || 0));
+    props.setEntryForm({
+      ...props.entryForm,
+      commercialDiscount: value,
+      payments: [{ ...props.entryForm.payments[0], amount: paymentAmount }, ...props.entryForm.payments.slice(1)]
+    });
   }
 
   function selectProcedure(index: number, procedureId: string) {
@@ -1725,6 +1800,14 @@ function FinancialView(props: {
             <p className="font-bold">Procedimentos do fechamento</p>
             <button onClick={addLine} className="text-sm font-bold text-avvi-blue"><Plus className="mr-1 inline" size={14} />Adicionar procedimento</button>
           </div>
+          <div className="mb-3 grid gap-3 md:grid-cols-3">
+            <FormField label="Desconto comercial">
+              <MoneyInput value={props.entryForm.commercialDiscount} onChange={updateCommercialDiscount} />
+            </FormField>
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-slate-600 md:col-span-2">
+              O desconto reduz o valor dos procedimentos e preenche automaticamente o valor pago.
+            </div>
+          </div>
           <div className="space-y-3">
             {props.entryForm.procedureLines.map((line, index) => (
               <div key={line.id} className="grid gap-2 rounded-md bg-slate-50 p-3 md:grid-cols-[1.5fr_0.6fr_1fr_1fr_0.8fr_auto]">
@@ -1756,10 +1839,11 @@ function FinancialView(props: {
           </div>
         </div>
         <PaymentEditor form={props.entryForm} setForm={props.setEntryForm} patients={props.patients} />
-        <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-sm md:grid-cols-6">
+        <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-sm md:grid-cols-7">
           <SummaryItem label="Custo total" value={currency(summary.productCost)} />
           <SummaryItem label="Total pago" value={currency(summary.paymentTotal)} />
           <SummaryItem label="Taxa maquininha" value={currency(summary.machineFee)} tone="red" />
+          <SummaryItem label="Desconto" value={currency(summary.discount)} tone="red" />
           <SummaryItem label="Lucro base" value={currency(summary.baseProfit)} tone="green" />
           <SummaryItem label="Valor empresa" value={currency(summary.companyValue)} tone="blue" />
           <SummaryItem label="Valor profissional" value={currency(summary.professionalValue)} tone="violet" />
@@ -1907,12 +1991,11 @@ function PaymentEditor({ form, setForm, patients }: { form: ReturnType<typeof ma
       </div>
       <div className="space-y-2">
         {form.payments.map((payment, index) => (
-          <div key={payment.id} className="grid gap-2 rounded-md bg-slate-50 p-3 md:grid-cols-[1fr_1fr_1fr_1fr_1fr_0.8fr_auto]">
+          <div key={payment.id} className="grid gap-2 rounded-md bg-slate-50 p-3 md:grid-cols-[1fr_1fr_1fr_1fr_0.8fr_auto]">
             <FormField label="Forma"><select value={payment.method} onChange={(event) => updatePayment(index, { method: event.target.value as PaymentMethod })} className="input">
                 {procedurePaymentMethods.map((method) => <option key={method}>{method}</option>)}
               </select></FormField>
             <FormField label="Valor pago"><MoneyInput value={payment.amount} onChange={(value) => updatePayment(index, { amount: value })} /></FormField>
-            <FormField label="Desconto"><MoneyInput value={payment.discount} onChange={(value) => updatePayment(index, { discount: value })} /></FormField>
             <FormField label="Taxa crédito">
               {payment.method === "Crédito" ? (
                 <MoneyInput value={payment.fee} onChange={(value) => updatePayment(index, { fee: value })} />
@@ -1939,7 +2022,7 @@ function PaymentEditor({ form, setForm, patients }: { form: ReturnType<typeof ma
               )}
             </FormField>
             {payment.method === "Crédito Futuro" && (
-              <div className="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-slate-600 md:col-span-6">
+              <div className="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-slate-600 md:col-span-5">
                 Saldo disponível do paciente: <strong className="text-avvi-blue">{currency(availableFutureCredit)}</strong>
               </div>
             )}
@@ -1968,10 +2051,11 @@ function ProcedureDetailPanel({ entry, procedures, procedureName }: { entry: Fin
         </div>
         <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{lines.length} procedimento(s)</span>
       </div>
-      <div className="grid gap-2 md:grid-cols-6">
+      <div className="grid gap-2 md:grid-cols-7">
         <SummaryItem label="Custo total" value={currency(summary.productCost)} />
         <SummaryItem label="Total pago" value={currency(summary.paymentTotal)} />
-        <SummaryItem label="Taxa/desconto" value={currency(summary.machineFee + summary.discount)} tone="red" />
+        <SummaryItem label="Taxa crédito" value={currency(summary.machineFee)} tone="red" />
+        <SummaryItem label="Desconto" value={currency(summary.discount)} tone="red" />
         <SummaryItem label="Lucro base" value={currency(summary.baseProfit)} tone="green" />
         <SummaryItem label="Valor empresa" value={currency(summary.companyValue)} tone="blue" />
         <SummaryItem label="Valor profissional" value={currency(summary.professionalValue)} tone="violet" />

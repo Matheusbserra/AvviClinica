@@ -40,16 +40,16 @@ export function calculateEntry(entry: Pick<FinancialEntry, "quantity" | "service
   const paymentDiscounts = entry.payments.reduce((sum, item) => sum + item.discount, 0);
   const machineFee = entry.machineFee + paymentFees;
   const discount = entry.commercialDiscount + paymentDiscounts;
-  const received = Math.max(0, (paymentTotal || grossRevenue) - machineFee - discount);
-  const productCost = lines.reduce((sum, line) => sum + line.productCost * line.quantity, 0);
+  const discountedGross = Math.max(0, grossRevenue - discount);
+  const received = paymentTotal || discountedGross;
+  const productCost = lines.reduce((sum, line) => sum + line.productCost * line.quantity, 0) + machineFee;
   const baseProfitBeforeSplit = received - productCost;
-  const discountImpact = splitDiscountImpact(discount, entry.discountSplit);
-  const professionalBase = Math.max(0, baseProfitBeforeSplit - discountImpact.professional);
+  const professionalBase = Math.max(0, baseProfitBeforeSplit);
   const weightedPercent = grossRevenue
     ? lines.reduce((sum, line) => sum + line.servicePrice * line.quantity * line.professionalPercent, 0) / grossRevenue
     : entry.professionalPercent;
   const professionalValue = professionalBase * (weightedPercent / 100);
-  const companyValue = baseProfitBeforeSplit - professionalValue - discountImpact.company;
+  const companyValue = baseProfitBeforeSplit - professionalValue;
 
   return {
     grossRevenue,

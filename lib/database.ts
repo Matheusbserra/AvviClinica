@@ -45,15 +45,28 @@ export function appDataTableMissing(error: unknown) {
   return String((error as { message?: string } | null)?.message ?? error).includes("avvi_records");
 }
 
+export type EntitySelectResult<T extends EntityName> = {
+  records: EntityPayloadMap[T][];
+  latestUpdatedAt: string;
+};
+
 export async function selectEntity<T extends EntityName>(entity: T): Promise<EntityPayloadMap[T][]> {
-  if (!supabase) return [];
+  const result = await selectEntityState(entity);
+  return result.records;
+}
+
+export async function selectEntityState<T extends EntityName>(entity: T): Promise<EntitySelectResult<T>> {
+  if (!supabase) return { records: [], latestUpdatedAt: "" };
   const { data, error } = await supabase
     .from("avvi_records")
     .select("record_id,data,updated_at")
     .eq("entity", entity)
     .order("updated_at", { ascending: false });
   if (error) throw error;
-  return (data ?? []).map((row) => row.data as EntityPayloadMap[T]);
+  return {
+    records: (data ?? []).map((row) => row.data as EntityPayloadMap[T]),
+    latestUpdatedAt: String(data?.[0]?.updated_at ?? "")
+  };
 }
 
 export async function upsertRecord<T extends EntityName>(entity: T, record: EntityPayloadMap[T]) {
