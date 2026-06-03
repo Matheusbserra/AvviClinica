@@ -77,6 +77,7 @@ type DataSnapshot = {
 type LocalSnapshot = { savedAt: string; data: DataSnapshot };
 
 const localSnapshotKey = "avvi.data.snapshot.v1";
+const savedLoginKey = "avvi.saved.login.v1";
 
 const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
@@ -387,11 +388,21 @@ function writeLocalSnapshot(data: DataSnapshot) {
   window.localStorage.setItem(localSnapshotKey, JSON.stringify({ savedAt: new Date().toISOString(), data }));
 }
 
+function readSavedLogin() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(savedLoginKey);
+    return raw ? JSON.parse(raw) as { login: string; password: string } : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("Agenda");
   const [viewMode, setViewMode] = useState<ViewMode>("Dia");
-  const [selectedDate, setSelectedDate] = useState("2026-05-27");
-  const [selectedMonth, setSelectedMonth] = useState("2026-05");
+  const [selectedDate, setSelectedDate] = useState(() => todayKey());
+  const [selectedMonth, setSelectedMonth] = useState(() => todayKey().slice(0, 7));
   const [professionalFilter, setProfessionalFilter] = useState("todos");
   const [reportFilter, setReportFilter] = useState("Todos");
   const [search, setSearch] = useState("");
@@ -404,7 +415,7 @@ export default function Home() {
   const [costs, setCosts] = useState<FixedCost[]>(() => mergeCosts(seedFixedCosts, importedCosts));
   const [receipts, setReceipts] = useState<Receipt[]>(seedReceipts);
   const [professionalReceipts, setProfessionalReceipts] = useState<ProfessionalPaymentReceipt[]>([]);
-  const [monthlyGoals, setMonthlyGoals] = useState<MonthlyGoals[]>(() => [makeMonthlyGoal("2026-05", seedProfessionals)]);
+  const [monthlyGoals, setMonthlyGoals] = useState<MonthlyGoals[]>(() => [makeMonthlyGoal(todayKey().slice(0, 7), seedProfessionals)]);
   const [selectedSlot, setSelectedSlot] = useState<{ hour: number; professionalId: string } | null>(null);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [appointmentForm, setAppointmentForm] = useState(makeAppointmentForm("ana", selectedDate, 8));
@@ -417,7 +428,8 @@ export default function Home() {
   const [professionalPaymentFilter, setProfessionalPaymentFilter] = useState("todos");
   const [selectedProfessionalEntryIds, setSelectedProfessionalEntryIds] = useState<string[]>([]);
   const [isAuthenticated, setIsAuthenticated] = useState(() => typeof window !== "undefined" && window.sessionStorage.getItem("avvi.session") === "active");
-  const [loginForm, setLoginForm] = useState({ login: "", password: "" });
+  const [loginForm, setLoginForm] = useState(() => readSavedLogin() ?? { login: "", password: "" });
+  const [rememberPassword, setRememberPassword] = useState(() => Boolean(readSavedLogin()));
   const [loginError, setLoginError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const didHydrate = useRef(false);
@@ -514,7 +526,7 @@ export default function Home() {
         const initialRevenues = importedRevenues;
         const initialCosts = mergeCosts(seedFixedCosts, importedCosts);
         const initialReceipts = seedReceipts;
-        const initialGoals = [makeMonthlyGoal("2026-05", seedProfessionals)];
+        const initialGoals = [makeMonthlyGoal(todayKey().slice(0, 7), seedProfessionals)];
         const isEmptyDatabase = !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
         const remoteSnapshot: DataSnapshot = {
           patients: dbPatients.length ? dbPatients : initialPatients,
@@ -687,6 +699,11 @@ export default function Home() {
     if (loginForm.login.trim().toLowerCase() === "admin" && loginForm.password === "avvi2025@") {
       setIsAuthenticated(true);
       window.sessionStorage.setItem("avvi.session", "active");
+      if (rememberPassword) {
+        window.localStorage.setItem(savedLoginKey, JSON.stringify(loginForm));
+      } else {
+        window.localStorage.removeItem(savedLoginKey);
+      }
       setLoginError("");
       return;
     }
@@ -698,6 +715,11 @@ export default function Home() {
       if (!error) {
         setIsAuthenticated(true);
         window.sessionStorage.setItem("avvi.session", "active");
+        if (rememberPassword) {
+          window.localStorage.setItem(savedLoginKey, JSON.stringify(loginForm));
+        } else {
+          window.localStorage.removeItem(savedLoginKey);
+        }
         setLoginError("");
         return;
       }
@@ -713,7 +735,7 @@ export default function Home() {
     }
     window.sessionStorage.removeItem("avvi.session");
     setIsAuthenticated(false);
-    setLoginForm({ login: "", password: "" });
+    setLoginForm(rememberPassword ? loginForm : { login: "", password: "" });
     setLoginError("");
     setActiveTab("Agenda");
   }
@@ -1155,6 +1177,20 @@ export default function Home() {
                 </button>
               </div>
             </FormField>
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-600">
+              <input
+                type="checkbox"
+                checked={rememberPassword}
+                onChange={(event) => {
+                  setRememberPassword(event.target.checked);
+                  if (!event.target.checked && typeof window !== "undefined") {
+                    window.localStorage.removeItem(savedLoginKey);
+                  }
+                }}
+                className="h-4 w-4 accent-[#b8862b]"
+              />
+              Salvar senha neste navegador
+            </label>
           </div>
           {loginError && <p className="mt-3 text-sm font-bold text-avvi-red">{loginError}</p>}
           <button onClick={handleLogin} className="mt-5 w-full rounded-lg bg-avvi-blue px-5 py-3 font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-panel">Entrar</button>
@@ -1166,7 +1202,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-transparent">
       <div className="flex w-full">
-        <aside className="fixed left-0 top-0 z-40 hidden h-screen w-80 shrink-0 border-r border-white/70 bg-white/90 p-4 shadow-panel backdrop-blur-xl lg:block">
+        <aside className="fixed left-0 top-0 z-40 hidden h-screen w-[17.5rem] shrink-0 border-r border-white/70 bg-white/90 p-4 shadow-panel backdrop-blur-xl lg:block">
           <div className="flex h-full flex-col">
             <div className="mb-4 text-center">
               <Image src="/logo-avvi.png" alt="AVVI Clínica" width={200} height={82} className="mx-auto h-16 w-auto object-contain" priority />
@@ -1233,7 +1269,7 @@ export default function Home() {
           </div>
         </aside>
 
-        <section className="min-w-0 flex-1 px-4 py-5 lg:ml-80 lg:px-7">
+        <section className="min-w-0 flex-1 px-4 py-5 lg:ml-[17.5rem] lg:px-7">
           <Header activeTab={activeTab} />
           {syncError && (
             <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-avvi-red">
@@ -1951,13 +1987,14 @@ function FinancialView(props: {
           </div>
         </div>
         <PaymentEditor form={props.entryForm} setForm={props.setEntryForm} patients={props.patients} />
-        <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-xs md:grid-cols-7">
+        <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-[11px] md:grid-cols-8">
           <SummaryItem label="Custo de produtos" value={currency(productCost)} />
           <SummaryItem label="Descontos" value={currency(summary.discount)} tone="red" />
           <SummaryItem label="Taxa maquininha" value={currency(summary.machineFee)} tone="red" />
           <SummaryItem label="Custo total" value={currency(totalCost)} />
           <SummaryItem label="Total de serviços" value={currency(totalServices)} tone="blue" />
           <SummaryItem label="Lucro" value={currency(profit)} tone="green" />
+          <SummaryItem label="Valor empresa" value={currency(summary.companyValue)} tone="blue" />
           <SummaryItem label="Valor profissional" value={currency(summary.professionalValue)} tone="violet" />
         </div>
         <div className="mt-4 flex justify-end">
@@ -3151,7 +3188,7 @@ function entryToLine(entry: FinancialEntry): ProcedureLine {
 }
 
 function makeReceiptForm(): Receipt {
-  return { id: "", patientName: "", cpf: "", procedure: "", amount: 0, paymentMethod: "Pix", date: "2026-05-27", professionalId: "ana", notes: "" };
+  return { id: "", patientName: "", cpf: "", procedure: "", amount: 0, paymentMethod: "Pix", date: todayKey(), professionalId: "ana", notes: "" };
 }
 
 function makePatientForm(): Patient {
@@ -3181,7 +3218,7 @@ function makeProfessionalForm(): Professional {
 }
 
 function makeCostForm(): FixedCost {
-  return { id: "", name: "", category: "Custos fixos", costType: "", professionalName: "", supplier: "", value: 0, dueDate: "2026-05-27", status: "Pendente", paymentMethod: "Pix", replicateMonths: 0, creditInstallments: 1, notes: "" };
+  return { id: "", name: "", category: "Custos fixos", costType: "", professionalName: "", supplier: "", value: 0, dueDate: todayKey(), status: "Pendente", paymentMethod: "Pix", replicateMonths: 0, creditInstallments: 1, notes: "" };
 }
 
 function filteredEntries(entries: FinancialEntry[], selectedMonth: string, professionalFilter: string) {
@@ -3213,8 +3250,11 @@ function previousMonth(key: string) {
 }
 
 function monthProgress(key: string) {
-  const now = key === "2026-05" ? 27 : 15;
-  return Math.min(1, now / 31);
+  const today = todayKey();
+  const currentMonth = today.slice(0, 7);
+  if (key < currentMonth) return 1;
+  if (key > currentMonth) return 0;
+  return Math.min(1, Number(today.slice(8, 10)) / getDate(endOfMonth(parseISO(`${key}-01`))));
 }
 
 function compare(current: number, previous: number) {
