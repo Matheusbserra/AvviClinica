@@ -1113,7 +1113,21 @@ export default function Home() {
   }
 
   function saveProcedure() {
-    const saved = { ...procedureForm, id: procedureForm.id || id("procedure"), price: Number(procedureForm.price), averageCost: Number(procedureForm.averageCost), professionalPercent: Number(procedureForm.professionalPercent) };
+    const price = Number(procedureForm.price) || 0;
+    const productCost = Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
+    const taxPercent = Number(procedureForm.taxPercent) || 0;
+    const clinicCost = Number(procedureForm.clinicCost) || 0;
+    const taxValue = price * (taxPercent / 100);
+    const saved = {
+      ...procedureForm,
+      id: procedureForm.id || id("procedure"),
+      price,
+      productCost,
+      taxPercent,
+      clinicCost,
+      averageCost: productCost + taxValue + clinicCost,
+      professionalPercent: Number(procedureForm.professionalPercent)
+    };
     setProcedures((current) => procedureForm.id ? current.map((procedure) => procedure.id === procedureForm.id ? saved : procedure) : [saved, ...current]);
     setProcedureForm(makeProcedureForm());
   }
@@ -1971,7 +1985,7 @@ function FinancialView(props: {
                 <FormField label="Valor do produto">
                   <MoneyInput value={line.servicePrice} onChange={(value) => updateLine(index, { servicePrice: value })} />
                 </FormField>
-                <FormField label="Custo do produto">
+                <FormField label="Custo médio">
                   <MoneyInput value={line.productCost} onChange={(value) => updateLine(index, { productCost: value })} />
                 </FormField>
                 <FormField label="% profissional">
@@ -1988,7 +2002,7 @@ function FinancialView(props: {
         </div>
         <PaymentEditor form={props.entryForm} setForm={props.setEntryForm} patients={props.patients} />
         <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-[11px] md:grid-cols-8">
-          <SummaryItem label="Custo de produtos" value={currency(productCost)} />
+          <SummaryItem label="Custo médio" value={currency(productCost)} />
           <SummaryItem label="Descontos" value={currency(summary.discount)} tone="red" />
           <SummaryItem label="Taxa maquininha" value={currency(summary.machineFee)} tone="red" />
           <SummaryItem label="Custo total" value={currency(totalCost)} />
@@ -2044,7 +2058,7 @@ function FinancialEntriesTable(props: {
   professionalName: (id?: string) => string;
   procedureName: (entry: FinancialEntry) => string;
 }) {
-  const headers = ["Data", "Profissional", "Paciente", "Procedimento", "Custo total", "Preço", "Taxa/desc", "Valor recebido", "Lucro base", "V. profissional", "Ações"];
+  const headers = ["Data", "Profissional", "Paciente", "Procedimento", "Custo médio", "Preço", "Taxa/desc", "Valor recebido", "Lucro base", "V. profissional", "Ações"];
 
   return (
     <div className="overflow-auto thin-scrollbar">
@@ -2072,7 +2086,7 @@ function FinancialEntriesTable(props: {
                   <td className="px-3 py-3 align-top">{props.professionalName(entry.professionalId)}</td>
                   <td className="px-3 py-3 align-top">{props.patientName(entry.patientId)}</td>
                   <td className="px-3 py-3 align-top">{props.procedureName(entry)}</td>
-                  <td className="px-3 py-3 align-top">{currency(item.productCost)}</td>
+                  <td className="px-3 py-3 align-top">{currency(productCostOnly(entry))}</td>
                   <td className="px-3 py-3 align-top">{currency(item.grossRevenue)}</td>
                   <td className="px-3 py-3 align-top">{currency(item.machineFee + item.discount)}</td>
                   <td className="px-3 py-3 align-top">{currency(item.received)}</td>
@@ -2217,7 +2231,7 @@ function ProcedureDetailPanel({ entry, procedures, procedureName }: { entry: Fin
           <div key={line.id} className="grid gap-2 rounded-md bg-slate-50 p-3 text-sm md:grid-cols-5">
             <div><p className="text-xs text-slate-500">Procedimento</p><p className="font-bold">{procedures.find((procedure) => procedure.id === line.procedureId)?.name || line.manualProcedure || "Procedimento"}</p></div>
             <SummaryItem label="Valor do produto" value={currency(line.servicePrice * line.quantity)} tone="blue" />
-            <SummaryItem label="Custo do produto" value={currency(line.productCost * line.quantity)} />
+            <SummaryItem label="Custo médio" value={currency(line.productCost * line.quantity)} />
             <SummaryItem label="% profissional" value={`${line.professionalPercent}%`} tone="violet" />
             <SummaryItem label="Quantidade" value={String(line.quantity)} />
           </div>
@@ -2389,6 +2403,11 @@ function ProfessionalPaymentView(props: {
 }
 
 function ProceduresView({ procedureForm, setProcedureForm, procedures, setProcedures, saveProcedure }: { procedureForm: ReturnType<typeof makeProcedureForm>; setProcedureForm: (form: ReturnType<typeof makeProcedureForm>) => void; procedures: Procedure[]; setProcedures: (items: Procedure[]) => void; saveProcedure: () => void }) {
+  const productCost = Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
+  const taxValue = (Number(procedureForm.price) || 0) * ((Number(procedureForm.taxPercent) || 0) / 100);
+  const clinicCost = Number(procedureForm.clinicCost) || 0;
+  const calculatedAverageCost = productCost + taxValue + clinicCost;
+
   return (
     <div className="space-y-4">
       <Panel>
@@ -2403,19 +2422,25 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
           <FormField label="Nome"><input className="input" value={procedureForm.name} onChange={(event) => setProcedureForm({ ...procedureForm, name: event.target.value })} /></FormField>
           <FormField label="Categoria"><input className="input" value={procedureForm.category} onChange={(event) => setProcedureForm({ ...procedureForm, category: event.target.value })} /></FormField>
           <FormField label="Preço padrão"><MoneyInput value={Number(procedureForm.price)} onChange={(value) => setProcedureForm({ ...procedureForm, price: value })} /></FormField>
-          <FormField label="Custo médio"><MoneyInput value={Number(procedureForm.averageCost)} onChange={(value) => setProcedureForm({ ...procedureForm, averageCost: value })} /></FormField>
-          <FormField label="% profissional"><input className="input" type="number" value={procedureForm.professionalPercent} onChange={(event) => setProcedureForm({ ...procedureForm, professionalPercent: Number(event.target.value) })} /></FormField>
+          <FormField label="Custo do produto"><MoneyInput value={productCost} onChange={(value) => setProcedureForm({ ...procedureForm, productCost: value })} /></FormField>
+          <FormField label="Imposto (%)"><input className="input" type="number" value={procedureForm.taxPercent ?? 0} onChange={(event) => setProcedureForm({ ...procedureForm, taxPercent: Number(event.target.value) })} /></FormField>
+          <FormField label="Custo da clínica"><MoneyInput value={clinicCost} onChange={(value) => setProcedureForm({ ...procedureForm, clinicCost: value })} /></FormField>
+          <div className="rounded-md border border-amber-200 bg-avvi-soft p-3 text-sm">
+            <p className="text-xs font-bold uppercase text-avvi-blue">Custo médio calculado</p>
+            <p className="mt-1 text-lg font-bold text-avvi-ink">{currency(calculatedAverageCost)}</p>
+            <p className="mt-1 text-xs text-slate-500">Produto + imposto ({currency(taxValue)}) + clínica</p>
+          </div>
           <FormField label="Observações"><input className="input" value={procedureForm.notes} onChange={(event) => setProcedureForm({ ...procedureForm, notes: event.target.value })} /></FormField>
         </div>
         <button onClick={saveProcedure} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white">Salvar procedimento</button>
       </Panel>
       <Panel>
         <DataTable
-          headers={["Procedimento", "Categoria", "Preço", "Custo médio", "% Prof.", "Status", "Ações"]}
-          rows={procedures.map((procedure) => [procedure.name, procedure.category, currency(procedure.price), currency(procedure.averageCost), `${procedure.professionalPercent}%`, procedure.active ? "Ativo" : "Inativo", (
+          headers={["Procedimento", "Categoria", "Preço", "Custo médio", "Ações"]}
+          rows={procedures.map((procedure) => [procedure.name, procedure.category, currency(procedure.price), currency(procedure.averageCost), (
             <div key={procedure.id} className="flex flex-wrap items-center gap-2">
               <ActionButtons
-                onEdit={() => setProcedureForm(procedure)}
+                onEdit={() => setProcedureForm({ ...procedure, productCost: procedure.productCost ?? procedure.averageCost, taxPercent: procedure.taxPercent ?? 0, clinicCost: procedure.clinicCost ?? 0 })}
                 onDelete={() => setProcedures(procedures.filter((item) => item.id !== procedure.id))}
               />
               <button onClick={() => setProcedures(procedures.map((item) => item.id === procedure.id ? { ...item, active: !item.active } : item))} className="rounded-md bg-avvi-soft px-3 py-2 text-sm font-bold text-avvi-blue">
@@ -3196,7 +3221,7 @@ function makePatientForm(): Patient {
 }
 
 function makeProcedureForm(): Procedure {
-  return { id: "", name: "", category: "", price: 0, averageCost: 0, professionalPercent: 50, notes: "", active: true };
+  return { id: "", name: "", category: "", price: 0, productCost: 0, taxPercent: 0, clinicCost: 0, averageCost: 0, professionalPercent: 50, notes: "", active: true };
 }
 
 function makeProfessionalForm(): Professional {

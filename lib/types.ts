@@ -50,6 +50,9 @@ export type Procedure = {
   name: string;
   category: string;
   price: number;
+  productCost?: number;
+  taxPercent?: number;
+  clinicCost?: number;
   averageCost: number;
   professionalPercent: number;
   notes: string;
