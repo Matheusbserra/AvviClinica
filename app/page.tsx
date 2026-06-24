@@ -247,6 +247,10 @@ function calculateCardFee(amount: number, cardBrand?: PaymentItem["cardBrand"], 
   return Number(((Number(amount) || 0) * rate / 100).toFixed(2));
 }
 
+function calculateDebitFee(amount: number) {
+  return Number(((Number(amount) || 0) * 0.76 / 100).toFixed(2));
+}
+
 function makeRevenueFromFinancialEntry(entry: FinancialEntry, patientName: string): RevenueEntry {
   const summary = calculateEntry(entry);
   const nonFuturePayments = entry.payments.filter((payment) => payment.method !== "Crédito Futuro");
@@ -866,7 +870,11 @@ export default function Home() {
     const normalizedPayments = source.payments.map((payment) => ({
       ...payment,
       id: payment.id === "pay-new" ? id("payment") : payment.id,
-      fee: payment.method === "Crédito" ? Number(payment.fee) || 0 : 0,
+      fee: payment.method === "Crédito"
+        ? calculateCardFee(Number(payment.amount), payment.cardBrand, payment.installments)
+        : payment.method === "Débito"
+          ? calculateDebitFee(Number(payment.amount))
+          : 0,
       cardBrand: payment.method === "Crédito" ? payment.cardBrand : undefined,
       installments: payment.method === "Crédito" ? Number(payment.installments) || 1 : 1,
       discount: 0
@@ -1976,7 +1984,11 @@ function FinancialView(props: {
                 <FormField label="Procedimento">
                   <select value={line.procedureId ?? ""} onChange={(event) => selectProcedure(index, event.target.value)} className="input">
                     <option value="">Procedimento do catálogo</option>
-                    {props.procedures.filter((procedure) => procedure.active).map((procedure) => <option key={procedure.id} value={procedure.id}>{procedure.name}</option>)}
+                    {props.procedures
+                      .filter((procedure) => procedure.active)
+                      .slice()
+                      .sort((first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }))
+                      .map((procedure) => <option key={procedure.id} value={procedure.id}>{procedure.name}</option>)}
                   </select>
                 </FormField>
                 <FormField label="Quantidade">
@@ -2132,11 +2144,16 @@ function PaymentEditor({ form, setForm, patients }: { form: ReturnType<typeof ma
         const nextAmount = patch.amount ?? payment.amount;
         const nextBrand = nextMethod === "Crédito" ? (patch.cardBrand ?? payment.cardBrand ?? "Mastercard") : undefined;
         const nextInstallments = nextMethod === "Crédito" ? (patch.installments ?? payment.installments ?? 1) : 1;
+        const nextFee = nextMethod === "Crédito"
+          ? calculateCardFee(nextAmount, nextBrand, nextInstallments)
+          : nextMethod === "Débito"
+            ? calculateDebitFee(nextAmount)
+            : 0;
         return {
           ...payment,
           ...patch,
           amount: nextAmount,
-          fee: nextMethod === "Crédito" ? calculateCardFee(nextAmount, nextBrand, nextInstallments) : 0,
+          fee: nextFee,
           cardBrand: nextBrand,
           installments: nextInstallments
         };
@@ -2162,11 +2179,11 @@ function PaymentEditor({ form, setForm, patients }: { form: ReturnType<typeof ma
                 {procedurePaymentMethods.map((method) => <option key={method}>{method}</option>)}
               </select></FormField>
             <FormField label="Valor pago"><MoneyInput value={payment.amount} onChange={(value) => updatePayment(index, { amount: value })} /></FormField>
-            <FormField label="Taxa crédito">
-              {payment.method === "Crédito" ? (
+            <FormField label="Taxa maquininha">
+              {payment.method === "Crédito" || payment.method === "Débito" ? (
                 <MoneyInput value={payment.fee} onChange={(value) => updatePayment(index, { fee: value })} />
               ) : (
-                <div className="rounded-md border border-avvi-line bg-white px-3 py-2 text-sm text-slate-400">Somente crédito</div>
+                <div className="rounded-md border border-avvi-line bg-white px-3 py-2 text-sm text-slate-400">Sem taxa</div>
               )}
             </FormField>
             <FormField label="Bandeira">
@@ -2220,7 +2237,7 @@ function ProcedureDetailPanel({ entry, procedures, procedureName }: { entry: Fin
       <div className="grid gap-2 md:grid-cols-7">
         <SummaryItem label="Custo total" value={currency(summary.productCost)} />
         <SummaryItem label="Total pago" value={currency(summary.paymentTotal)} />
-        <SummaryItem label="Taxa crédito" value={currency(summary.machineFee)} tone="red" />
+        <SummaryItem label="Taxa maquininha" value={currency(summary.machineFee)} tone="red" />
         <SummaryItem label="Desconto" value={currency(summary.discount)} tone="red" />
         <SummaryItem label="Lucro base" value={currency(summary.baseProfit)} tone="green" />
         <SummaryItem label="Valor empresa" value={currency(summary.companyValue)} tone="blue" />
