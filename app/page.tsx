@@ -440,7 +440,11 @@ export default function Home() {
   const didHydrate = useRef(false);
   const isRemoteUpdate = useRef(false);
   const lastSyncedSnapshot = useRef<DataSnapshot | null>(null);
+  const syncQueue = useRef(Promise.resolve());
+  const pendingSyncs = useRef(0);
   const [syncError, setSyncError] = useState(() => isSupabaseConfigured ? "" : "Supabase não configurado. Preencha NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local.");
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncRetry, setSyncRetry] = useState(0);
 
   const visibleProfessionals = professionalFilter === "todos" ? professionals : professionals.filter((professional) => professional.id === professionalFilter);
   const currentMonthSummary = useMemo(() => summarizeMonth(revenues, costs, selectedMonth), [revenues, costs, selectedMonth]);
@@ -565,7 +569,7 @@ export default function Home() {
             procedures: applyProcedureCostOverrides(savedLocalSnapshot.data.procedures)
           }
         } : null;
-        const shouldUseLocalSnapshot = Boolean(localSnapshot?.savedAt && (!latestRemoteUpdate || localSnapshot.savedAt > latestRemoteUpdate));
+        const shouldUseLocalSnapshot = Boolean(localSnapshot?.savedAt && !latestRemoteUpdate);
         const hydratedSnapshot = shouldUseLocalSnapshot ? localSnapshot!.data : remoteSnapshot;
 
         isRemoteUpdate.current = true;
@@ -644,50 +648,63 @@ export default function Home() {
 
   useEffect(() => {
     if (!didHydrate.current || isRemoteUpdate.current || !isSupabaseConfigured) return;
-    const timeout = window.setTimeout(() => {
-      const previous = lastSyncedSnapshot.current;
-      const next: DataSnapshot = {
-        patients,
-        professionals,
-        procedures,
-        appointments,
-        financial_entries: entries,
-        revenues,
-        fixed_costs: costs,
-        receipts,
-        professional_receipts: professionalReceipts,
-        monthly_goals: monthlyGoals
-      };
-      if (!previous) {
-        lastSyncedSnapshot.current = next;
-        writeLocalSnapshot(next);
-        return;
-      }
-      const syncedPrevious = previous;
-      async function saveChanges() {
-        await syncEntityDiff("patients", syncedPrevious.patients, next.patients);
-        await syncEntityDiff("professionals", syncedPrevious.professionals, next.professionals);
-        await syncEntityDiff("procedures", syncedPrevious.procedures, next.procedures);
-        await syncEntityDiff("appointments", syncedPrevious.appointments, next.appointments);
-        await syncEntityDiff("financial_entries", syncedPrevious.financial_entries, next.financial_entries);
-        await syncEntityDiff("revenues", syncedPrevious.revenues, next.revenues);
-        await syncEntityDiff("fixed_costs", syncedPrevious.fixed_costs, next.fixed_costs);
-        await syncEntityDiff("receipts", syncedPrevious.receipts, next.receipts);
-        await syncEntityDiff("professional_receipts", syncedPrevious.professional_receipts, next.professional_receipts);
-        await syncEntityDiff("monthly_goals", syncedPrevious.monthly_goals, next.monthly_goals);
-      }
+    const next: DataSnapshot = {
+      patients,
+      professionals,
+      procedures,
+      appointments,
+      financial_entries: entries,
+      revenues,
+      fixed_costs: costs,
+      receipts,
+      professional_receipts: professionalReceipts,
+      monthly_goals: monthlyGoals
+    };
+    if (!lastSyncedSnapshot.current) {
+      lastSyncedSnapshot.current = next;
+      writeLocalSnapshot(next);
+      return;
+    }
 
-      saveChanges().then(() => {
+    pendingSyncs.current += 1;
+    setIsSyncing(true);
+    syncQueue.current = syncQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        const previous = lastSyncedSnapshot.current;
+        if (!previous) return;
+        await syncEntityDiff("patients", previous.patients, next.patients);
+        await syncEntityDiff("professionals", previous.professionals, next.professionals);
+        await syncEntityDiff("procedures", previous.procedures, next.procedures);
+        await syncEntityDiff("appointments", previous.appointments, next.appointments);
+        await syncEntityDiff("financial_entries", previous.financial_entries, next.financial_entries);
+        await syncEntityDiff("revenues", previous.revenues, next.revenues);
+        await syncEntityDiff("fixed_costs", previous.fixed_costs, next.fixed_costs);
+        await syncEntityDiff("receipts", previous.receipts, next.receipts);
+        await syncEntityDiff("professional_receipts", previous.professional_receipts, next.professional_receipts);
+        await syncEntityDiff("monthly_goals", previous.monthly_goals, next.monthly_goals);
         lastSyncedSnapshot.current = next;
         writeLocalSnapshot(next);
         setSyncError("");
-      }).catch((error) => {
-        writeLocalSnapshot(next);
+      })
+      .catch((error) => {
         setSyncError(`Erro ao salvar no Supabase: ${(error as Error).message}`);
+      })
+      .finally(() => {
+        pendingSyncs.current -= 1;
+        setIsSyncing(pendingSyncs.current > 0);
       });
-    }, 500);
-    return () => window.clearTimeout(timeout);
-  }, [patients, professionals, procedures, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals]);
+  }, [patients, professionals, procedures, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry]);
+
+  useEffect(() => {
+    if (!isSyncing) return;
+    const warnBeforeClose = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeClose);
+    return () => window.removeEventListener("beforeunload", warnBeforeClose);
+  }, [isSyncing]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -1295,8 +1312,14 @@ export default function Home() {
         <section className="min-w-0 flex-1 px-4 py-5 lg:ml-[17.5rem] lg:px-7">
           <Header activeTab={activeTab} />
           {syncError && (
-            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-avvi-red">
-              {syncError}
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-avvi-red">
+              <span>{syncError}</span>
+              {isSupabaseConfigured && <button onClick={() => setSyncRetry((current) => current + 1)} disabled={isSyncing} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-bold text-avvi-red disabled:cursor-not-allowed disabled:opacity-60">Tentar novamente</button>}
+            </div>
+          )}
+          {isSyncing && (
+            <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-avvi-blue">
+              Salvando alterações no Supabase…
             </div>
           )}
           <MobileTabs activeTab={activeTab} setActiveTab={setActiveTab} />
