@@ -54,7 +54,7 @@ import { importedClients } from "@/lib/importedClients";
 import { importedRevenues } from "@/lib/importedRevenues";
 import { importedCosts } from "@/lib/importedCosts";
 import { applyProcedureCostOverrides } from "@/lib/procedureCosts";
-import { calculateEntry, currency, monthKey, percent, summarizeMonth } from "@/lib/calculations";
+import { calculateEntry, currency, monthKey, percent, splitDiscountImpact, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { appDataTableMissing, selectEntityState, syncEntity, syncEntityDiff } from "@/lib/database";
 import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, ViewMode } from "@/lib/types";
@@ -224,7 +224,8 @@ function professionalReceiptProcedureRows(entry: FinancialEntry, procedureNameFo
     const lineCost = Number(line.productCost) * Number(line.quantity);
     const received = Math.max(0, gross - lineDiscount);
     const profit = received - lineCost - lineFee;
-    const professionalValue = Math.max(0, profit) * (Number(line.professionalPercent) / 100);
+    const professionalBeforeDiscount = Math.max(0, gross - lineCost - lineFee) * (Number(line.professionalPercent) / 100);
+    const professionalValue = Math.max(0, professionalBeforeDiscount - splitDiscountImpact(lineDiscount, entry.discountSplit).professional);
 
     return {
       procedure: procedureNameForLine(line),
@@ -816,7 +817,7 @@ export default function Home() {
         procedureId: appointmentForm.procedureId,
         servicePrice: procedure?.price ?? 0,
         productCost: procedure?.averageCost ?? 0,
-        professionalPercent: procedure?.professionalPercent ?? 50,
+        professionalPercent: 70,
         patientName: patientName(patientId),
         procedureLines: [{
           id: id("line"),
@@ -825,7 +826,7 @@ export default function Home() {
           quantity: 1,
           servicePrice: procedure?.price ?? 0,
           productCost: procedure?.averageCost ?? 0,
-          professionalPercent: procedure?.professionalPercent ?? 50
+          professionalPercent: 70
         }],
         payments: [{ ...blankPayment, id: id("payment"), amount: procedure?.price ?? 0 }],
         date: appointmentForm.date
@@ -1915,7 +1916,7 @@ function FinancialView(props: {
       procedureId,
       servicePrice: procedure?.price ?? 0,
       productCost: procedure?.averageCost ?? 0,
-      professionalPercent: procedure?.professionalPercent ?? 50
+      professionalPercent: 70
     });
   }
 
@@ -1975,7 +1976,7 @@ function FinancialView(props: {
               <MoneyInput value={props.entryForm.commercialDiscount} onChange={updateCommercialDiscount} />
             </FormField>
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-slate-600 md:col-span-2">
-              O desconto reduz o valor dos procedimentos e preenche automaticamente o valor pago.
+              O desconto reduz o valor dos procedimentos e preenche automaticamente o valor pago. Em &quot;Profissional assume&quot;, ele também é abatido integralmente do valor profissional.
             </div>
           </div>
           <div className="space-y-3">
@@ -2424,6 +2425,69 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
   const taxValue = (Number(procedureForm.price) || 0) * ((Number(procedureForm.taxPercent) || 0) / 100);
   const clinicCost = Number(procedureForm.clinicCost) || 0;
   const calculatedAverageCost = productCost + taxValue + clinicCost;
+  const sortedProcedures = procedures.slice().sort((first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }));
+
+  function exportProceduresExcel() {
+    import("xlsx").then((xlsx) => {
+      const rows = sortedProcedures.map((procedure) => ({
+        Procedimento: procedure.name,
+        Categoria: procedure.category,
+        "Custo do produto": procedure.productCost ?? procedure.averageCost,
+        Imposto: procedure.price * ((procedure.taxPercent ?? 0) / 100),
+        "Custo da clínica": procedure.clinicCost ?? 0,
+        "Custo médio": procedure.averageCost,
+        "Preço padrão": procedure.price
+      }));
+      const worksheet = xlsx.utils.json_to_sheet(rows);
+      worksheet["!cols"] = [
+        { wch: 34 }, { wch: 20 }, { wch: 18 }, { wch: 16 }, { wch: 18 },
+        { wch: 16 }, { wch: 16 }
+      ];
+      const workbook = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(workbook, worksheet, "Procedimentos");
+      xlsx.writeFile(workbook, "avvi-procedimentos.xlsx");
+    });
+  }
+
+  function exportProceduresPdf() {
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const headers = ["Procedimento", "Categoria", "Custo do produto", "Imposto", "Custo da clínica", "Custo médio", "Preço"];
+    const widths = [52, 34, 37, 27, 37, 32, 27];
+    const drawHeader = (y: number) => {
+      doc.setFontSize(16);
+      doc.setTextColor(20, 55, 90);
+      doc.text("AVVI Clínica", 10, y);
+      doc.setFontSize(11);
+      doc.setTextColor(0, 0, 0);
+      doc.text("Cadastro de procedimentos", 10, y + 7);
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")} · ${sortedProcedures.length} procedimento(s)`, 10, y + 12);
+      return y + 20;
+    };
+
+    let y = drawHeader(12);
+    y += drawPdfRow(doc, headers, widths, 10, y, true);
+    sortedProcedures.forEach((procedure) => {
+      const values = [
+        procedure.name,
+        procedure.category || "-",
+        currency(procedure.productCost ?? procedure.averageCost),
+        currency(procedure.price * ((procedure.taxPercent ?? 0) / 100)),
+        currency(procedure.clinicCost ?? 0),
+        currency(procedure.averageCost),
+        currency(procedure.price),
+      ];
+      const rowHeight = Math.max(11, Math.max(...values.map((value, index) => doc.splitTextToSize(value, widths[index] - 2).slice(0, 3).length)) * 4 + 4);
+      if (y + rowHeight > 195) {
+        doc.addPage();
+        y = drawHeader(12);
+        y += drawPdfRow(doc, headers, widths, 10, y, true);
+      }
+      y += drawPdfRow(doc, values, widths, 10, y, false);
+    });
+    doc.save("avvi-procedimentos.pdf");
+  }
 
   return (
     <div className="space-y-4">
@@ -2452,9 +2516,19 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
         <button onClick={saveProcedure} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white">Salvar procedimento</button>
       </Panel>
       <Panel>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold">Procedimentos cadastrados</h3>
+            <p className="text-sm text-slate-500">Exporte a lista completa em PDF ou Excel.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={exportProceduresPdf} className="rounded-md border border-avvi-blue px-4 py-2 text-sm font-bold text-avvi-blue hover:bg-avvi-soft"><FileText className="mr-2 inline" size={16} />Exportar PDF</button>
+            <button onClick={exportProceduresExcel} className="rounded-md bg-avvi-green px-4 py-2 text-sm font-bold text-white"><Download className="mr-2 inline" size={16} />Exportar Excel</button>
+          </div>
+        </div>
         <DataTable
           headers={["Procedimento", "Categoria", "Preço", "Custo médio", "Ações"]}
-          rows={procedures.map((procedure) => [procedure.name, procedure.category, currency(procedure.price), currency(procedure.averageCost), (
+          rows={sortedProcedures.map((procedure) => [procedure.name, procedure.category, currency(procedure.price), currency(procedure.averageCost), (
             <div key={procedure.id} className="flex flex-wrap items-center gap-2">
               <ActionButtons
                 onEdit={() => setProcedureForm({ ...procedure, productCost: procedure.productCost ?? procedure.averageCost, taxPercent: procedure.taxPercent ?? 0, clinicCost: procedure.clinicCost ?? 0 })}
@@ -3238,7 +3312,7 @@ function makePatientForm(): Patient {
 }
 
 function makeProcedureForm(): Procedure {
-  return { id: "", name: "", category: "", price: 0, productCost: 0, taxPercent: 0, clinicCost: 0, averageCost: 0, professionalPercent: 50, notes: "", active: true };
+  return { id: "", name: "", category: "", price: 0, productCost: 0, taxPercent: 0, clinicCost: 0, averageCost: 0, professionalPercent: 70, notes: "", active: true };
 }
 
 function makeProfessionalForm(): Professional {
