@@ -24,9 +24,11 @@ export function safeEqual(left: string, right: string) {
 }
 export async function requireFollowUpUser(request: Request) {
   if (request.headers.get("cookie")) {
-    const { readAccess, sameOrigin } = await import("./accessServer");
-    const user = readAccess(request);
+    const { resolveAccess, sameOrigin } = await import("./accessServer");
+    const user = await resolveAccess(request);
     if (user) {
+      const { canAccessTab } = await import("./access");
+      if (!canAccessTab(user, "Follow Up")) throw new Error("Acesso ao Follow Up não autorizado.");
       if (request.method !== "GET" && !sameOrigin(request)) throw new Error("Origem não autorizada.");
       return { id: `clinic:${user.login}` };
     }

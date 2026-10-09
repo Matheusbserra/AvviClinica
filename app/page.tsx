@@ -57,7 +57,7 @@ import { applyCheckoutGifts } from "@/lib/gifts";
 import { AccountSummary } from "@/app/components/AccountSummary";
 import { AccountCheckout } from "@/app/components/AccountCheckout";
 import type { CheckoutDraft, CheckoutResult } from "@/app/components/AccountCheckout";
-import { distributeCheckoutDiscount, restoreCheckoutItems } from "@/lib/checkout";
+import { checkoutAllowsNoProducts, distributeCheckoutDiscount, restoreCheckoutItems } from "@/lib/checkout";
 import { procedureEntryFromAccount } from "@/lib/accountProcedures";
 import { applyCheckoutInventory } from "@/lib/inventory";
 import { importedServices } from "@/lib/importedServices";
@@ -75,10 +75,14 @@ import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, Fix
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 import { hasSnapshotChanges, readSnapshot, writeSnapshot, snapshotChanges, recoverPendingChanges, recordIsPending, snapshotEntities } from "@/lib/persistence";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
-import { canAccessTab } from "@/lib/access";
+import { canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey } from "@/lib/access";
+import { permittedSnapshot } from "@/lib/accessSnapshot";
+import { AccountsView } from "@/app/components/AccountsView";
+import { ReportsView } from "@/app/components/ReportsView";
+import { ProfessionalReportView } from "@/app/components/ProfessionalReportView";
 import type { AppRole, AppUser } from "@/lib/access";
 
-type Tab = "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
+type Tab = "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
 const savedLoginKey = "avvi.saved.login.v1";
 
@@ -86,6 +90,7 @@ const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
   { id: "Estoque", icon: WalletCards },
   { id: "Follow Up", icon: MessageCircle },
+  { id: "Relatórios", icon: BarChart3 },
   { id: "Dashboard", icon: LayoutDashboard },
   { id: "Receitas", icon: CircleDollarSign },
   { id: "Lançamento de Procedimentos", icon: WalletCards },
@@ -97,6 +102,7 @@ const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Cadastro de Profissionais", icon: UserPlus },
   { id: "Cadastro de Pacientes", icon: Users },
   { id: "Metas", icon: Goal },
+  { id: "Contas", icon: Users },
   { id: "Custos", icon: Settings },
 ];
 
@@ -145,18 +151,6 @@ function monthPeriod(month: string) {
   }
   const start = `${month}-01`;
   return { start, end: format(endOfMonth(parseISO(start)), "yyyy-MM-dd") };
-}
-
-function monthsInPeriod(start: string, end: string) {
-  if (!start || !end) return [];
-  const months: string[] = [];
-  let cursor = start.slice(0, 7);
-  const last = end.slice(0, 7);
-  while (cursor <= last) {
-    months.push(cursor);
-    cursor = format(addDays(endOfMonth(parseISO(`${cursor}-01`)), 1), "yyyy-MM");
-  }
-  return months;
 }
 
 function summarizePeriod(revenues: RevenueEntry[], costs: FixedCost[], start: string, end: string) {
@@ -383,10 +377,10 @@ function applyRemoteList<T extends { id?: string; month?: string }>(current: T[]
   return current.some(matches) ? current.map((item) => matches(item) ? record : item) : [record, ...current];
 }
 
-function readLocalSnapshot(role: AppRole): LocalSnapshot | null {
+function readLocalSnapshot(user: AppUser): LocalSnapshot | null {
   if (typeof window === "undefined") return null;
   try {
-    return readSnapshot(window.localStorage, role === "standard" ? "avvi.data.snapshot.standard.v1" : "avvi.data.snapshot.v1");
+    return readSnapshot(window.localStorage, userSnapshotKey(user));
   } catch {
     return null;
   }
@@ -443,6 +437,7 @@ export default function Home() {
   const [selectedProfessionalEntryIds, setSelectedProfessionalEntryIds] = useState<string[]>([]);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userRole, setUserRole] = useState<AppRole>("standard");
+  const [currentUser, setCurrentUser] = useState<AppUser>({ login: "", role: "standard", tabs: [] });
   const [loginForm, setLoginForm] = useState({ login: "", password: "" });
   const [rememberPassword, setRememberPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
@@ -520,21 +515,21 @@ export default function Home() {
 
   const persistLocalDraft = useCallback((data: DataSnapshot) => {
     try {
-      writeSnapshot(window.localStorage, data, lastSyncedSnapshot.current, userRole === "standard" ? "avvi.data.snapshot.standard.v1" : "avvi.data.snapshot.v1");
+      writeSnapshot(window.localStorage, data, lastSyncedSnapshot.current, userSnapshotKey(currentUser));
       setStorageError("");
     } catch {
       setStorageError("Não foi possível guardar a cópia neste navegador. Libere espaço ou permita o armazenamento local. Confira a confirmação na nuvem antes de sair.");
     }
-  }, [userRole]);
+  }, [currentUser]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
     function restoreLocalData() {
-      const local = readLocalSnapshot(userRole);
-      const snapshot = local?.data;
+      const local = readLocalSnapshot(currentUser);
+      const snapshot = local?.data ? permittedSnapshot(local.data, currentUser) : undefined;
       if (isSupabaseConfigured && !lastSyncedSnapshot.current) {
         // Also preserve edits made when the very first connection fails.
-        const initial = userRole === "admin" ? startupSnapshot.current : { ...startupSnapshot.current, financial_entries: [], revenues: [], receipts: [], professional_receipts: [], monthly_goals: [] };
+        const initial = permittedSnapshot(startupSnapshot.current, currentUser);
         lastSyncedSnapshot.current = local?.syncedData ?? local?.data ?? latestDraft.current ?? initial;
       }
       if (snapshot) {
@@ -625,7 +620,7 @@ export default function Home() {
         const initialCosts = mergeCosts(seedFixedCosts, importedCosts);
         const initialReceipts = seedReceipts;
         const initialGoals = [makeMonthlyGoal(todayKey().slice(0, 7), seedProfessionals)];
-        const isEmptyDatabase = !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbInventory.length && !dbGiftsState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
+        const isEmptyDatabase = userRole === "admin" && !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbInventory.length && !dbGiftsState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
         const remoteSnapshot: DataSnapshot = {
           patients: isEmptyDatabase ? initialPatients : dbPatients,
           professionals: isEmptyDatabase ? initialProfessionals : dbProfessionals,
@@ -637,14 +632,14 @@ export default function Home() {
           followup_contacts: dbFollowUpContactsState.records,
           followup_logs: dbFollowUpLogsState.records,
           appointments: isEmptyDatabase ? initialAppointments : dbAppointments,
-          financial_entries: isEmptyDatabase ? (userRole === "standard" ? [] : initialEntries) : dbEntries,
-          revenues: userRole === "standard" ? [] : isEmptyDatabase ? initialRevenues : dbRevenues,
+          financial_entries: isEmptyDatabase && hasFinancialAccess(currentUser) ? initialEntries : dbEntries,
+          revenues: canReadEntity(currentUser, "revenues") ? (isEmptyDatabase ? initialRevenues : dbRevenues) : [],
           fixed_costs: isEmptyDatabase ? initialCosts : dbCosts,
-          receipts: userRole === "standard" ? [] : isEmptyDatabase ? initialReceipts : dbReceipts,
+          receipts: canReadEntity(currentUser, "receipts") ? (isEmptyDatabase ? initialReceipts : dbReceipts) : [],
           professional_receipts: dbProfessionalReceipts,
-          monthly_goals: userRole === "standard" ? [] : isEmptyDatabase ? initialGoals : dbGoals
+          monthly_goals: canReadEntity(currentUser, "monthly_goals") ? (isEmptyDatabase ? initialGoals : dbGoals) : []
         };
-        const savedLocalSnapshot = readLocalSnapshot(userRole);
+        const savedLocalSnapshot = readLocalSnapshot(currentUser);
         const localSnapshot = savedLocalSnapshot ? {
           ...savedLocalSnapshot,
           data: {
@@ -663,7 +658,7 @@ export default function Home() {
           : isEmptyDatabase && localSnapshot ? localSnapshot.data : remoteSnapshot;
         const hydratedSnapshot: DataSnapshot = {
           ...recoveredSnapshot,
-          services: recoveredSnapshot.services.length || localSnapshot?.syncedData ? recoveredSnapshot.services : importedServices
+          services: recoveredSnapshot.services.length || localSnapshot?.syncedData || !canWriteEntity(currentUser, "services") ? recoveredSnapshot.services : importedServices
         };
 
         isRemoteUpdate.current = true;
@@ -727,7 +722,7 @@ export default function Home() {
       if (channel) supabase?.removeChannel(channel);
     };
   // Hydration reads the database again only after a failed connection.
-  }, [connectionRetry, isAuthenticated, userRole, persistLocalDraft]);
+  }, [connectionRetry, isAuthenticated, userRole, currentUser, persistLocalDraft]);
 
 
   useEffect(() => {
@@ -812,8 +807,8 @@ export default function Home() {
   }, [isSyncing, hasPendingChanges, storageError]);
 
   function acceptUser(user: AppUser) {
-    setDatabaseAccess(user.role);
-    setUserRole(user.role);
+    setDatabaseAccess(user);
+    setUserRole(user.role); setCurrentUser(user);
     setIsDataReady(false); setHasPendingChanges(false); setStorageError(""); setLastSavedAt("");
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
     setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
@@ -822,13 +817,13 @@ export default function Home() {
     setProcedures(startupSnapshot.current.procedures); setServices(startupSnapshot.current.services);
     setInventory([]); setGifts([]); setAppointments(startupSnapshot.current.appointments); setCosts(startupSnapshot.current.fixed_costs);
     setFollowUpRules([]); setFollowUpContacts([]); setFollowUpLogs([]);
-    setActiveTab("Agenda"); setIsAuthenticated(true);
+    setActiveTab((tabs.find(tab => canAccessTab(user, tab.id))?.id ?? "Agenda")); setIsAuthenticated(true);
   }
   useEffect(() => {
     let active = true;
     const timer = window.setTimeout(() => {
       const savedLogin = readSavedLogin();
-      if (savedLogin) { setLoginForm(savedLogin); setRememberPassword(true); }
+      if (savedLogin) { setLoginForm(current => current.login || current.password ? current : savedLogin); setRememberPassword(true); }
     }, 0);
     fetch("/api/access", { cache: "no-store" }).then((response) => response.json()).then((data) => {
       if (active && data.user) acceptUser(data.user);
@@ -843,7 +838,7 @@ export default function Home() {
       const data = await response.json();
       if (!response.ok || !data.user) { setLoginError(data.error ?? "Login ou senha inválidos."); return; }
       acceptUser(data.user);
-      // Only the two explicitly configured accounts receive access. Browser flags do not grant roles.
+      // Server-side accounts and permissions determine access. Browser flags do not grant roles.
       window.sessionStorage.removeItem("avvi.session");
       if (rememberPassword) window.localStorage.setItem(savedLoginKey, JSON.stringify(loginForm));
       else window.localStorage.removeItem(savedLoginKey);
@@ -855,15 +850,33 @@ export default function Home() {
     if (!response.ok) return;
     if (supabase) await supabase.auth.signOut();
     window.sessionStorage.removeItem("avvi.session");
-    setIsAuthenticated(false); setIsDataReady(false); setUserRole("standard"); setDatabaseAccess("standard");
+    setIsAuthenticated(false); setIsDataReady(false); setUserRole("standard"); setCurrentUser({ login: "", role: "standard", tabs: [] }); setDatabaseAccess("standard");
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
     setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
     setSelectedSlot(null); setSelectedAppointmentId(null); setCheckoutDraft(null); setAccountSummary(null);
     setLoginForm(rememberPassword ? loginForm : { login: "", password: "" });
     setLoginError(""); setActiveTab("Agenda");
   }
-  const availableTabs = tabs.filter((tab) => canAccessTab(userRole, tab.id));
-  function changeTab(tab: Tab) { if (canAccessTab(userRole, tab)) setActiveTab(tab); }
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let active = true;
+    const check = async () => {
+      try {
+        const response = await fetch("/api/access", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (active && !data.user) {
+          setIsAuthenticated(false); setIsDataReady(false); setCurrentUser({ login: "", role: "standard", tabs: [] }); setUserRole("standard"); setDatabaseAccess("standard");
+          setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
+          setLoginError("Seu acesso foi atualizado. Entre novamente para usar as permissões atuais.");
+        }
+      } catch { /* A temporary network failure does not discard the local pending draft. */ }
+    };
+    const timer = window.setInterval(check, 30000); window.addEventListener("focus", check);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", check); };
+  }, [isAuthenticated]);
+  const availableTabs = tabs.filter((tab) => canAccessTab(currentUser, tab.id));
+  function changeTab(tab: Tab) { if (canAccessTab(currentUser, tab)) setActiveTab(tab); }
 
   function openSlot(hour: number, professionalId: string) {
     setAppointmentError("");
@@ -1013,7 +1026,7 @@ export default function Home() {
   }
 
   function finishCheckout(result: CheckoutResult) {
-    if (!checkoutDraft || !result.products.length) return;
+    if (!checkoutDraft || (!result.products.length && !checkoutAllowsNoProducts(result.lines, services))) return;
     const currentAppointment = appointments.find((appointment) => appointment.id === checkoutDraft.appointment.id);
     if (!currentAppointment?.patientId) return;
     const previousAccount = currentAppointment.closedAccount ?? entries.find((entry) => !entry.sourceAccountId && entry.accountClosed && entry.id === checkoutDraft.entryId);
@@ -1484,21 +1497,21 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-transparent">
       <div className="flex w-full">
-        <aside className="fixed left-0 top-0 z-40 hidden h-screen w-[17.5rem] shrink-0 border-r border-white/70 bg-white/90 p-4 shadow-panel backdrop-blur-xl lg:block">
+        <aside className="avvi-sidebar fixed left-0 top-0 z-40 hidden h-dvh w-[17.5rem] shrink-0 border-r border-white/70 bg-white/90 p-3 shadow-panel backdrop-blur-xl lg:block">
           <div className="flex h-full flex-col">
-            <div className="mb-4 text-center">
-              <Image src="/logo-avvi.png" alt="AVVI Clínica" width={200} height={82} className="mx-auto h-16 w-auto object-contain" priority />
-              <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-avvi-blue">Gestão integrada</p>
+            <div className="avvi-sidebar-brand shrink-0 text-center">
+              <Image src="/logo-avvi.png" alt="AVVI Clínica" width={200} height={82} className="mx-auto w-auto object-contain" priority />
+              <p className="mt-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-avvi-blue">Gestão integrada</p>
             </div>
-            <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 thin-scrollbar">
+            <nav aria-label="Menu principal" className="avvi-sidebar-nav min-h-0 flex-1">
               <SidebarGroup label="Operação">
-                {availableTabs.filter((tab) => ["Agenda", "Estoque", "Follow Up"].includes(tab.id)).map((tab) => {
+                {availableTabs.filter((tab) => ["Agenda", "Estoque", "Follow Up", "Relatórios"].includes(tab.id)).map((tab) => {
                   const Icon = tab.icon;
                   return (
                     <button
                       key={tab.id}
                       onClick={() => changeTab(tab.id)}
-                      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
+                      className={`avvi-sidebar-link flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
                     >
                       <Icon size={15} />
                       <span>{tab.id}</span>
@@ -1507,13 +1520,13 @@ export default function Home() {
                 })}
               </SidebarGroup>
               <SidebarGroup label="Financeiro">
-                {availableTabs.filter((tab) => ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Custos"].includes(tab.id)).map((tab) => {
+                {availableTabs.filter((tab) => ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Custos"].includes(tab.id)).map((tab) => {
                   const Icon = tab.icon;
                   return (
                     <button
                       key={tab.id}
                       onClick={() => changeTab(tab.id)}
-                      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
+                      className={`avvi-sidebar-link flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
                     >
                       <Icon size={15} />
                       <span>{tab.id}</span>
@@ -1522,13 +1535,13 @@ export default function Home() {
                 })}
               </SidebarGroup>
               <SidebarGroup label="Cadastros">
-                {availableTabs.filter((tab) => ["Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas"].includes(tab.id)).map((tab) => {
+                {availableTabs.filter((tab) => ["Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"].includes(tab.id)).map((tab) => {
                 const Icon = tab.icon;
                 return (
                   <button
                     key={tab.id}
                     onClick={() => changeTab(tab.id)}
-                    className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
+                    className={`avvi-sidebar-link flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
                   >
                     <Icon size={15} />
                     <span>{tab.id}</span>
@@ -1537,13 +1550,11 @@ export default function Home() {
                 })}
               </SidebarGroup>
             </nav>
-            <div className="mt-3 space-y-2">
-              <div className="rounded-md border border-[#eadcc4] bg-avvi-soft p-2.5 text-xs text-slate-600">
-                <p className="font-semibold text-avvi-ink">Perfil atual</p>
-                <p>{userRole === "admin" ? "Administrador" : "Usuário padrão · avviclinica"}</p>
-                <p className="mt-1 text-[10px]">{userRole === "admin" ? "Acesso total a relatórios, metas, valores e cadastros." : "Agenda, estoque, Follow Up, custos e cadastros autorizados."}</p>
+            <div className="avvi-sidebar-footer shrink-0">
+              <div aria-label="Perfil do usuário" title={`${currentUser.name || currentUser.login} · ${userRole === "admin" ? "Administrador" : "Usuário padrão"}`} className="truncate rounded border border-[#eadcc4] bg-avvi-soft px-2 text-[10px] font-semibold leading-[20px] text-slate-600">
+                {currentUser.login === "admin" ? "Perfil Administrador" : `Perfil ${userRole === "admin" ? "Administrador" : "Usuário padrão"} · ${currentUser.login}`}
               </div>
-              <button onClick={handleLogout} disabled={isSyncing} className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-100 bg-white px-4 py-2.5 text-xs font-bold text-avvi-red transition hover:bg-red-50" title="Sair do sistema">
+              <button onClick={handleLogout} disabled={isSyncing} className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-100 bg-white h-[26px] px-3 text-[11px] font-bold text-avvi-red transition hover:bg-red-50" title="Sair do sistema">
                 <LogOut size={15} />
                 <span>Sair</span>
               </button>
@@ -1553,7 +1564,8 @@ export default function Home() {
 
         <section className={`min-w-0 flex-1 lg:ml-[17.5rem] ${activeTab === "Agenda" ? "flex h-dvh min-h-0 flex-col overflow-hidden px-2 py-2 lg:px-4" : "px-4 py-5 lg:px-7"}`}>
           <Header activeTab={activeTab} compact={activeTab === "Agenda"} />
-          {activeTab === "Follow Up" && <FollowUpNavigation tab={followUpTab} change={setFollowUpTab} />}
+          {!availableTabs.length && <Panel><p className="text-sm text-slate-600">Nenhuma aba foi autorizada para esta conta. Solicite o acesso ao administrador.</p></Panel>}
+          {canAccessTab(currentUser, "Follow Up") && activeTab === "Follow Up" && <FollowUpNavigation tab={followUpTab} change={setFollowUpTab} />}
           {syncError && (
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-avvi-red">
               <span>{syncError}</span>
@@ -1566,7 +1578,7 @@ export default function Home() {
           </div>
           {activeTab === "Agenda" ? <select aria-label="Navegar pelo sistema" value={activeTab} onChange={(event) => changeTab(event.target.value as Tab)} className="mb-2 shrink-0 rounded border border-avvi-line bg-white p-1.5 text-xs lg:hidden">{availableTabs.map((tab) => <option key={tab.id}>{tab.id}</option>)}</select> : <MobileTabs activeTab={activeTab} setActiveTab={changeTab} allowedTabs={availableTabs} />}
 
-          {activeTab === "Agenda" && (
+          {canAccessTab(currentUser, "Agenda") && activeTab === "Agenda" && (
             <AgendaView
               viewMode={viewMode}
               setViewMode={setViewMode}
@@ -1591,9 +1603,12 @@ export default function Home() {
 
           {activeTab === "Follow Up" && <FollowUpView tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
 
-          {activeTab === "Estoque" && <InventorySection gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={appointments} entries={entries} patients={patients} professionals={professionals} />}
+          {userRole === "admin" && activeTab === "Contas" && <AccountsView />}
+          {canAccessTab(currentUser, "Relatórios") && activeTab === "Relatórios" && <ReportsView appointments={appointments} entries={entries} professionals={professionals} procedures={procedures} services={services} revenues={revenues} />}
 
-          {userRole === "admin" && activeTab === "Lançamento de Procedimentos" && (
+          {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={appointments} entries={entries} patients={patients} professionals={professionals} />}
+
+          {canAccessTab(currentUser, "Lançamento de Procedimentos") && activeTab === "Lançamento de Procedimentos" && (
             <FinancialView
               entryForm={entryForm}
               setEntryForm={setEntryForm}
@@ -1615,7 +1630,7 @@ export default function Home() {
             />
           )}
 
-          {userRole === "admin" && activeTab === "Receitas" && (
+          {canAccessTab(currentUser, "Receitas") && activeTab === "Receitas" && (
             <RevenuesView
               revenues={revenues}
               setRevenues={setRevenues}
@@ -1626,7 +1641,7 @@ export default function Home() {
             />
           )}
 
-          {userRole === "admin" && activeTab === "Recibos de Pagamento" && (
+          {canAccessTab(currentUser, "Recibos de Pagamento") && activeTab === "Recibos de Pagamento" && (
             <ReceiptsView
               receiptForm={receiptForm}
               setReceiptForm={setReceiptForm}
@@ -1638,7 +1653,7 @@ export default function Home() {
             />
           )}
 
-          {userRole === "admin" && activeTab === "Pagamento Profissional" && (
+          {canAccessTab(currentUser, "Pagamento Profissional") && activeTab === "Pagamento Profissional" && (
             <ProfessionalPaymentView
               entries={entries}
               professionals={professionals}
@@ -1658,14 +1673,16 @@ export default function Home() {
             />
           )}
 
-          {userRole === "admin" && activeTab === "Relatório Profissional" && (
+          {canAccessTab(currentUser, "Relatório Profissional") && activeTab === "Relatório Profissional" && (
             <ProfessionalReportView
               entries={entries}
               professionals={professionals}
               selectedMonth={selectedMonth}
               setSelectedMonth={setSelectedMonth}
               monthlyGoals={monthlyGoals}
-              professionalName={professionalName}
+              appointments={appointments}
+              patients={patients}
+              services={services}
             />
           )}
 
@@ -1690,7 +1707,7 @@ export default function Home() {
               professionals={professionals}
               setProfessionals={setProfessionals}
               saveProfessional={saveProfessional}
-              allowGoals={userRole === "admin"}
+              allowGoals={canAccessTab(currentUser, "Metas")}
             />
           )}
 
@@ -1705,7 +1722,7 @@ export default function Home() {
             />
           )}
 
-          {userRole === "admin" && activeTab === "Metas" && (
+          {canAccessTab(currentUser, "Metas") && activeTab === "Metas" && (
             <GoalsView
               selectedMonth={selectedMonth}
               setSelectedMonth={setSelectedMonth}
@@ -1722,7 +1739,7 @@ export default function Home() {
             <CostsView costForm={costForm} setCostForm={setCostForm} costs={costs} setCosts={setCosts} saveCost={saveCost} />
           )}
 
-          {userRole === "admin" && activeTab === "Dashboard" && (
+          {canAccessTab(currentUser, "Dashboard") && activeTab === "Dashboard" && (
             <DashboardView
               selectedMonth={selectedMonth}
               setSelectedMonth={setSelectedMonth}
@@ -3015,70 +3032,6 @@ function PatientScheduleInfo({ patientId, appointments }: { patientId: string; a
 }
 
 
-function ProfessionalReportView({ entries, professionals, selectedMonth, setSelectedMonth, monthlyGoals, professionalName }: { entries: FinancialEntry[]; professionals: Professional[]; selectedMonth: string; setSelectedMonth: (value: string) => void; monthlyGoals: MonthlyGoals[]; professionalName: (id?: string) => string }) {
-  const initialPeriod = monthPeriod(selectedMonth);
-  const [periodStart, setPeriodStart] = useState(initialPeriod.start);
-  const [periodEnd, setPeriodEnd] = useState(initialPeriod.end);
-  function selectPeriodMonth(month: string) {
-    const period = monthPeriod(month);
-    setSelectedMonth(month);
-    setPeriodStart(period.start);
-    setPeriodEnd(period.end);
-  }
-  const activeMonths = monthsInPeriod(periodStart, periodEnd);
-
-  const report = professionals.map((professional) => {
-    const professionalEntries = entries.filter((entry) => entry.professionalId === professional.id && isDateInPeriod(entry.date, periodStart, periodEnd));
-    const goal = activeMonths.reduce((sum, month) => sum + getProfessionalGoal(monthlyGoals, month, professional), 0);
-    return professionalEntries.reduce((acc, entry) => {
-      const summary = calculateEntry(entry);
-      acc.totalPaid += summary.received;
-      acc.totalProfit += summary.baseProfit;
-      acc.companyRevenue += summary.companyValue;
-      acc.professionalValue += summary.professionalValue;
-      acc.count += 1;
-      return acc;
-    }, { professional, goal, totalPaid: 0, totalProfit: 0, companyRevenue: 0, professionalValue: 0, count: 0 });
-  }).sort((a, b) => b.totalPaid - a.totalPaid);
-
-  return (
-    <div className="space-y-4">
-      <Panel>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-xl font-bold">Relatório por Profissional</h3>
-            <p className="text-sm text-slate-500">Ranking do maior faturamento para o menor.</p>
-          </div>
-          <div className="w-full max-w-2xl">
-            <PeriodFilter start={periodStart} end={periodEnd} month={selectedMonth} onStartChange={setPeriodStart} onEndChange={setPeriodEnd} onMonthChange={selectPeriodMonth} />
-          </div>
-        </div>
-      </Panel>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {report.map((item, index) => (
-          <Panel key={item.professional.id}>
-            <div className="flex items-center justify-between">
-              <h4 className="text-xl font-bold">{index + 1}. {professionalName(item.professional.id)}</h4>
-              <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{item.count} serviço(s)</span>
-            </div>
-            <div className="mt-4 space-y-3">
-              <ReportLine label="Total Pago (Clientes):" value={currency(item.totalPaid)} />
-              <div>
-                <GoalProgress value={item.totalPaid} goal={item.goal} />
-              </div>
-              <ReportLine label="Lucro Total:" value={currency(item.totalProfit)} tone="green" />
-              <ReportLine label="Receita Empresa:" value={currency(item.companyRevenue)} tone="blue" />
-              <div className="border-t border-avvi-line pt-3">
-                <ReportLine label="Valor Recebido (Profissional):" value={currency(item.professionalValue)} strong />
-              </div>
-            </div>
-          </Panel>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function GoalsView({ selectedMonth, setSelectedMonth, professionals, entries, revenues, costs, monthlyGoals, setMonthlyGoals }: { selectedMonth: string; setSelectedMonth: (value: string) => void; professionals: Professional[]; entries: FinancialEntry[]; revenues: RevenueEntry[]; costs: FixedCost[]; monthlyGoals: MonthlyGoals[]; setMonthlyGoals: (goals: MonthlyGoals[]) => void }) {
   const goal = getMonthlyGoal(monthlyGoals, selectedMonth, professionals);
   const monthSummary = summarizeMonth(revenues, costs, selectedMonth);
@@ -3372,9 +3325,9 @@ function Panel({ children }: { children: ReactNode }) {
 
 function SidebarGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div>
-      <p className="mb-1.5 px-3 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</p>
-      <div className="space-y-1">{children}</div>
+    <div className="avvi-sidebar-group">
+      <p className="mb-0.5 px-2.5 text-[9px] font-bold uppercase leading-3 tracking-[0.14em] text-slate-400">{label}</p>
+      <div className="flex flex-col gap-0.5">{children}</div>
     </div>
   );
 }
@@ -3492,16 +3445,6 @@ function drawProfessionalReceiptFormulas(doc: jsPDF, y: number) {
 function SummaryItem({ label, value, tone = "slate" }: { label: string; value: string; tone?: "slate" | "red" | "green" | "blue" | "violet" }) {
   const colors = { slate: "text-slate-700", red: "text-avvi-red", green: "text-avvi-green", blue: "text-avvi-blue", violet: "text-avvi-violet" };
   return <div><p className="text-xs text-slate-500">{label}</p><p className={`font-bold ${colors[tone]}`}>{value}</p></div>;
-}
-
-function ReportLine({ label, value, tone = "slate", strong = false }: { label: string; value: string; tone?: "slate" | "green" | "blue"; strong?: boolean }) {
-  const colors = { slate: "text-avvi-ink", green: "text-avvi-green", blue: "text-avvi-blue" };
-  return (
-    <div className={`flex items-center justify-between gap-3 ${strong ? "font-bold" : ""}`}>
-      <span className="text-slate-600">{label}</span>
-      <span className={colors[tone]}>{value}</span>
-    </div>
-  );
 }
 
 function GoalProgress({ value, goal }: { value: number; goal: number }) {

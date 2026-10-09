@@ -1,5 +1,6 @@
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 import assert from "node:assert/strict";
+import http from "node:http";
 const password=process.env.AVVI_TEST_ADMIN_PASSWORD;
 if (!password) throw new Error("Configure AVVI_TEST_ADMIN_PASSWORD para o teste.");
 const browser=await chromium.launch({...(process.env.CHROME_PATH ? {executablePath:process.env.CHROME_PATH} : {}),headless:true});
@@ -12,7 +13,11 @@ store("procedures",{id:"procedure",name:"Consulta",averageCost:987.65,salePrice:
 store("gifts",{id:"gift",name:"Brinde QA",quantity:2});store("gifts",{id:"other",name:"Outro brinde",quantity:8});
 let failWrites=false,failReads=false,delayFirst=false;let delayedStarted=false,releaseDelayed;
 const errors=[];page.on("pageerror",error=>errors.push(error.message));
-await context.route("http://127.0.0.1:3999/**",async route=>{
+const mock=http.createServer(async(req,res)=>{
+ let incoming="";for await(const chunk of req)incoming+=chunk;
+ res.setHeader("Access-Control-Allow-Origin","*");res.setHeader("Access-Control-Allow-Headers","*");res.setHeader("Access-Control-Allow-Methods","*");
+ if(req.method==="OPTIONS"){res.end();return;}
+ const route={request:()=>({url:()=>"http://127.0.0.1:3999"+req.url,method:()=>req.method,postDataJSON:()=>JSON.parse(incoming)}),fulfill:({status=200,json,body})=>{res.statusCode=status;if(json!==undefined){res.setHeader("Content-Type","application/json");res.end(JSON.stringify(json));}else res.end(body??"");}};
  const request=route.request(),url=new URL(request.url());if(!url.pathname.startsWith("/rest/v1/avvi_records"))return route.fulfill({status:200,json:{}});
  const entity=url.searchParams.get("entity")?.replace(/^eq\./,"");
  if(request.method()==="GET"){
@@ -33,6 +38,7 @@ await context.route("http://127.0.0.1:3999/**",async route=>{
  }
  return route.fulfill({status:200,json:{}});
 });
+await new Promise(resolve=>mock.listen(3999,"127.0.0.1",resolve));
 const status=()=>page.getByRole("status",{name:"Status do salvamento",exact:true});
 async function login(){if(await page.getByRole("button",{name:"Entrar",exact:true}).isVisible()){await page.getByLabel("Login",{exact:true}).fill("admin");await page.getByLabel("Senha",{exact:true}).fill(password);await page.getByRole("button",{name:"Entrar",exact:true}).click();}}
 async function inventory(){await page.getByRole("button",{name:"Estoque",exact:true}).filter({visible:true}).first().click();await page.getByRole("tab",{name:"Brindes",exact:true}).click();}
@@ -61,4 +67,4 @@ try{
  await page.evaluate(()=>localStorage.removeItem("avvi.data.snapshot.v1"));failReads=true;await page.reload();await page.waitForTimeout(600);await login();await inventory();await page.getByRole("button",{name:"Adicionar brinde",exact:true}).click();await page.getByLabel("Nome do brinde",{exact:true}).fill("Brinde durante primeira falha");await page.getByLabel("Quantidade inicial do brinde",{exact:true}).fill("4");await page.getByRole("button",{name:"Salvar brinde",exact:true}).click();await waitFor(async()=>(await cache())?.data?.gifts?.some(item=>item.name==="Brinde durante primeira falha"));failReads=false;await page.getByRole("button",{name:"Tentar novamente",exact:true}).click();await saved();assert.equal([...records.values()].some(row=>row.entity==="gifts"&&row.data.name==="Brinde durante primeira falha"),true);assert.equal(records.get("gifts:gift").data.quantity,13);
  assert.deepEqual(errors,[]);
  console.log("PASS: Failed cloud writes survive reload, unrelated cloud changes are preserved, manual retry confirms saving, newer drafts survive old request completion, failed reads reconnect, local quota failures are visible and do not prevent cloud saving.");
-}finally{await browser.close();}
+}finally{await browser.close();await new Promise(resolve=>mock.close(resolve));}

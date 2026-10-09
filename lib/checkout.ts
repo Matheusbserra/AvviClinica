@@ -15,6 +15,15 @@ export function moneyRound(value: number) { return Math.round((value + Number.EP
 export function paymentChoiceKey(payment: PaymentItem) {
   return payment.method === "Crédito" && payment.cardBrand ? `Crédito-${payment.cardBrand}` : payment.method;
 }
+// Only service names grant the evaluation/return exception; products do not.
+export function checkoutAllowsNoProducts(lines: Pick<ProcedureLine, "serviceId" | "procedureId" | "manualProcedure" | "quantity">[], services: Pick<Service, "id" | "name">[]) {
+  return lines.some(line => {
+    if (line.quantity <= 0 || (line.procedureId && !line.serviceId)) return false;
+    const name = line.manualProcedure || services.find(service => service.id === line.serviceId)?.name || "";
+    const normalized = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+    return normalized.includes("avaliacao") || normalized.includes("retorno");
+  });
+}
 export function checkoutTotals(lines: ProcedureLine[], payments: PaymentItem[]) {
   const gross = moneyRound(lines.reduce((sum, line) => sum + moneyRound(line.servicePrice * line.quantity), 0));
   const discount = moneyRound(lines.reduce((sum, line) => sum + (line.discount ?? 0), 0));

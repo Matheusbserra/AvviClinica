@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, UserRound, X } from "lucide-react";
 import { currency } from "@/lib/calculations";
-import { checkoutTotals, moneyRound, paymentChoiceKey, paymentChoices, toggleCheckoutPayment } from "@/lib/checkout";
+import { checkoutTotals, checkoutAllowsNoProducts, moneyRound, paymentChoiceKey, paymentChoices, toggleCheckoutPayment } from "@/lib/checkout";
 import type { Appointment, DiscountSplit, Patient, PaymentItem, Procedure, ProcedureLine, Professional, ProductUsage, Service, GiftStockItem, GiftUsage } from "@/lib/types";
 
 export type CheckoutDraft = {
@@ -36,6 +36,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
     ...(!draft.payments.some((payment) => payment.method === "Crédito Futuro") ? ["Pré-pago"] : [])
   ]);
   const totals = checkoutTotals(lines, payments);
+  const allowsNoProducts = checkoutAllowsNoProducts(lines, services);
   const visits = appointments.filter((appointment) => appointment.patientId === client.id && appointment.status === "Finalizado");
   const lastVisit = visits.map((appointment) => appointment.startsAt.slice(0, 10)).sort().at(-1);
   const displayDate = (date?: string) => date ? date.slice(0, 10).split("-").reverse().join("/") : "-";
@@ -88,7 +89,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
       || !Number.isFinite(line.discount ?? 0) || (line.discount ?? 0) < 0 || (line.discount ?? 0) > moneyRound(line.quantity * line.servicePrice))) {
       setError("Confira as quantidades, os preços e os descontos dos itens."); return;
     }
-    if (!products.length) { setError("Adicione ao menos um produto utilizado antes de fechar a conta."); return; }
+    if (!products.length && !allowsNoProducts) { setError("Adicione ao menos um produto utilizado antes de fechar a conta."); return; }
     if (products.some((product) => !Number.isInteger(product.quantity) || product.quantity <= 0 || !Number.isFinite(product.unitCost) || product.unitCost < 0)) { setError("Confira as quantidades dos produtos utilizados."); return; }
     if (selectedGifts.some((gift) => !Number.isSafeInteger(gift.quantity) || gift.quantity <= 0)) { setError("Confira as quantidades dos brindes."); return; }
     if (payments.some((payment) => !Number.isFinite(payment.amount) || payment.amount < 0)) { setError("Confira os valores pagos."); return; }
@@ -155,7 +156,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
           <div className="rounded-md bg-white p-3 text-sm shadow-panel"><div className="flex justify-between border-b py-2"><span>Total</span><strong data-testid="checkout-total">{currency(totals.total)}</strong></div><div className="flex justify-between border-b py-2"><span>Recebido</span><strong data-testid="checkout-received" className="text-emerald-600">{currency(totals.received)}</strong></div><div className="flex justify-between py-2"><span>Falta</span><strong data-testid="checkout-remaining" className="text-red-500">{currency(totals.remaining)}</strong></div>{totals.change > 0 && <div className="flex justify-between py-2"><span>Troco</span><strong>{currency(totals.change)}</strong></div>}<label className="mt-3 flex items-start gap-2 text-xs text-slate-500"><input type="checkbox" checked={allowDebt} onChange={(event) => setAllowDebt(event.target.checked)} className="mt-0.5" />Deixar o que falta como dívida</label></div>
         </aside>
       </div>
-      <footer className="shrink-0 border-t border-avvi-line px-5 py-4">{error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}<div className="flex justify-end gap-3"><button type="button" onClick={onCancel} className="rounded border border-orange-500 px-4 py-2 text-sm font-semibold text-orange-600">Cancelar</button>{onDelete && <button type="button" aria-label="Excluir conta fechada" title="Excluir conta fechada" onClick={onDelete} className="rounded-md border border-red-200 p-2 text-red-600 hover:bg-red-50"><Trash2 size={18} /></button>}<button type="submit" className="rounded bg-orange-500 px-5 py-2 text-sm font-bold text-white hover:bg-orange-600">Fechar Conta</button></div></footer>
+      <footer className="shrink-0 border-t border-avvi-line px-5 py-4">{allowsNoProducts && <p className="mb-2 text-xs text-slate-500">Avaliação ou retorno: produtos são opcionais. Para fechar sem cobrança, deixe o valor a pagar em R$ 0,00. Sem produtos, não será gerado um lançamento de procedimentos.</p>}{error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}<div className="flex justify-end gap-3"><button type="button" onClick={onCancel} className="rounded border border-orange-500 px-4 py-2 text-sm font-semibold text-orange-600">Cancelar</button>{onDelete && <button type="button" aria-label="Excluir conta fechada" title="Excluir conta fechada" onClick={onDelete} className="rounded-md border border-red-200 p-2 text-red-600 hover:bg-red-50"><Trash2 size={18} /></button>}<button type="submit" className="rounded bg-orange-500 px-5 py-2 text-sm font-bold text-white hover:bg-orange-600">Fechar Conta</button></div></footer>
     </form>
   </div>;
 }

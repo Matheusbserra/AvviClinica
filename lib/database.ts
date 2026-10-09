@@ -1,9 +1,10 @@
 import { supabase } from "./supabase";
-import type { AppRole } from "./access";
+import type { AppRole, AppUser } from "./access";
 import { canReadEntity } from "./access";
-let accessRole: AppRole = "admin";
+let accessUser: AppRole | AppUser = "admin";
+const usesGateway = () => typeof accessUser === "object" || accessUser === "standard" || isProtectedDatabase;
 export const isProtectedDatabase = process.env.NEXT_PUBLIC_AVVI_PROTECTED_DATABASE === "true";
-export function setDatabaseAccess(role: AppRole) { accessRole = role; }
+export function setDatabaseAccess(user: AppRole | AppUser) { accessUser = user; }
 async function accessRequest(url: string, init?: RequestInit) {
   const response = await fetch(url, { ...init, cache: "no-store", signal: AbortSignal.timeout(25000) });
   const data = await response.json();
@@ -87,8 +88,8 @@ export async function selectEntity<T extends EntityName>(entity: T): Promise<Ent
 
 export async function selectEntityState<T extends EntityName>(entity: T): Promise<EntitySelectResult<T>> {
   if (!supabase) return { records: [], latestUpdatedAt: "" };
-  if (!canReadEntity(accessRole, entity)) return { records: [], latestUpdatedAt: "" };
-  if (accessRole === "standard" || isProtectedDatabase) return accessRequest(`/api/access/data?entity=${entity}`);
+  if (!canReadEntity(accessUser, entity)) return { records: [], latestUpdatedAt: "" };
+  if (usesGateway()) return accessRequest(`/api/access/data?entity=${entity}`);
   const records: EntityPayloadMap[T][] = [];
   let latestUpdatedAt = "";
   const pageSize = 500;
@@ -191,7 +192,7 @@ export async function syncEntityDiffs(changes: EntityChange[]) {
       }
     }
   }
-  if (accessRole === "standard" || isProtectedDatabase) {
+  if (usesGateway()) {
     if (upserts.length || removed.length) await accessRequest("/api/access/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ upserts, removed }) });
     return;
   }

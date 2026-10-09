@@ -1,0 +1,72 @@
+import { chromium } from 'file:///C:/Users/mathe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs';
+import assert from 'node:assert/strict';
+const password=process.env.AVVI_TEST_ADMIN_PASSWORD;if(!password)throw Error('Configure a senha administrativa de teste.');
+const browser=await chromium.launch({headless:true,executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe'});
+const page=await browser.newPage({viewport:{width:1440,height:1100}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
+const tab=name=>page.getByRole('button',{name,exact:true}).filter({visible:true}).first();
+const root='C:/Users/mathe/.codex/visualizations/2026/10/08/01a11cce-4e90-7ed3-9fab-934e7f183230/';
+try {
+ await page.goto('http://127.0.0.1:3107/?previa=relatorio-profissional');
+ await page.getByLabel('Login',{exact:true}).fill('admin');await page.getByLabel('Senha',{exact:true}).fill(password);await tab('Entrar').click();await tab('Sair').waitFor();
+ await page.getByRole('status',{name:'Status do salvamento',exact:true}).filter({hasText:'Prévia local'}).waitFor();
+ await page.evaluate(()=>{
+  const key='avvi.data.snapshot.v1',cached=JSON.parse(localStorage.getItem(key)),data=cached.data;
+  const ana={...data.professionals[0],id:'qa-ana',name:'Ana Oliveira',monthlyGoal:5000},bia={...data.professionals[1],id:'qa-bia',name:'Beatriz Santos',monthlyGoal:3000};
+  data.professionals=[ana,bia];data.patients=[{...data.patients[0],id:'qa-patient',name:'Camila Ribeiro'}];
+  data.services=[{id:'qa-service',name:'Preenchimento com ácido hialurônico',price:600,priceType:'fixed',durationMinutes:60,active:true}];
+  const ledger=(id,prof,amount)=>({id,patientId:'qa-patient',professionalId:prof,appointmentId:'appt-'+id,date:'2026-10-08',quantity:1,servicePrice:amount,productCost:100,machineFee:0,commercialDiscount:0,professionalPercent:30,discountSplit:'Empresa assume',payments:[{id:'pay-'+id,amount,fee:0,discount:0,method:'Pix'}],procedureLines:[{id:'line-'+id,procedureId:'product',quantity:1,servicePrice:amount,productCost:100,professionalPercent:30}]});
+  data.financial_entries=[ledger('qa-1','qa-ana',1200),ledger('qa-2','qa-bia',500)];
+  data.appointments=data.financial_entries.map(e=>({id:e.appointmentId,professionalId:e.professionalId,patientId:e.patientId,startsAt:'2026-10-08T10:00:00',endsAt:'2026-10-08T11:00:00',status:'Finalizado',accountClosed:true,financialEntryId:e.id,closedAccount:{...e,id:'bill-'+e.id,accountClosed:true,generatedEntryId:e.id,products:[{procedureId:'product',quantity:1}],procedureLines:[{id:'service-'+e.id,serviceId:'qa-service',quantity:2,servicePrice:e.servicePrice/2,productCost:0,professionalPercent:30,manualProcedure:data.services[0].name}]}}));
+  data.monthly_goals=[];cached.syncedData=null;localStorage.setItem(key,JSON.stringify(cached));
+ });
+ await page.reload();await tab('Relatório Profissional').click();
+ for(const height of [900,768,640,560,480]){
+  await page.setViewportSize({width:1366,height});
+  const menu=page.getByRole('navigation',{name:'Menu principal',exact:true});assert.equal(await menu.getByRole('button').count(),17);
+  const layout=await menu.evaluate(menu=>({height:menu.clientHeight,scroll:menu.scrollHeight,top:menu.getBoundingClientRect().top,bottom:menu.getBoundingClientRect().bottom,last:Array.from(menu.querySelectorAll('button')).at(-1)?.getBoundingClientRect().bottom,viewport:innerHeight}));
+  assert.ok(layout.scroll<=layout.height+1,JSON.stringify({height,layout}));assert.ok(layout.last<=layout.bottom+1);
+  const footer=page.getByLabel('Perfil do usuário',{exact:true});assert.ok((await footer.boundingBox()).y+(await footer.boundingBox()).height<=height);
+  assert.equal(await page.getByText('Perfil atual',{exact:true}).count(),0);
+ }
+ await page.setViewportSize({width:1366,height:640});await page.screenshot({path:root+'barra-lateral-compacta.png',fullPage:false});await page.setViewportSize({width:1440,height:1100});
+ await tab('Cadastro de Profissionais').click();
+ const photo=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9WQAAAAASUVORK5CYII=","base64"),photoUrl='data:image/png;base64,'+photo.toString('base64');
+ await page.getByLabel('Foto de Ana Oliveira',{exact:true}).setInputFiles({name:'foto-qa.png',mimeType:'image/png',buffer:photo});
+ await page.getByRole('img',{name:'Ana Oliveira',exact:true}).waitFor();
+ await page.waitForFunction(expected=>JSON.parse(localStorage.getItem('avvi.data.snapshot.v1')).data.professionals.find(p=>p.id==='qa-ana').avatarDataUrl===expected,photoUrl);
+ await page.reload();await tab('Relatórios').click();await page.getByRole('heading',{name:'Rankings da clínica',exact:true}).waitFor();
+ const clinicPhotos=page.getByRole('img',{name:'Foto de Ana Oliveira',exact:true});assert.equal(await clinicPhotos.count(),4);for(const image of await clinicPhotos.all()){assert.equal(await image.getAttribute('src'),photoUrl);await image.evaluate(image=>image.decode());}
+ await page.screenshot({path:root+'rankings-fotos-previa.png',fullPage:false});
+ await tab('Relatório Profissional').click();await page.getByRole('heading',{name:'Relatório por Profissional',exact:true}).waitFor();await page.getByLabel('Mês do relatório profissional',{exact:true}).fill('2026-10');
+ const financials=page.getByRole('region',{name:/^Valores financeiros de/}),rankings=page.getByRole('region',{name:/^Rankings individuais de/});
+ assert.equal(await financials.count(),0);assert.equal(await rankings.count(),0);
+ const ana=page.getByRole('region',{name:'Relatório de Ana Oliveira',exact:true}),bia=page.getByRole('region',{name:'Relatório de Beatriz Santos',exact:true});
+ assert.equal(await ana.getByRole('img',{name:'Foto de Ana Oliveira',exact:true}).getAttribute('src'),photoUrl);
+ assert.ok((await ana.innerText()).includes('1.200,00'));assert.ok((await ana.innerText()).includes('2 serviços realizados'));
+ await page.screenshot({path:root+'relatorio-profissional-previa.png',fullPage:false});
+ await ana.getByRole('button',{name:'Ver valores financeiros',exact:true}).click();assert.equal(await financials.count(),1);assert.equal(await rankings.count(),0);assert.ok((await financials.innerText()).includes('1.100,00'));
+ assert.ok((await financials.innerText()).includes('Ticket médio'));assert.ok((await financials.innerText()).includes('1 paciente com conta fechada'));
+ await page.screenshot({path:root+'relatorio-profissional-cores.png',fullPage:false});
+ await ana.getByRole('button',{name:'Ocultar valores financeiros',exact:true}).click();await tab('Mostrar valores de todos').click();assert.equal(await financials.count(),2);assert.equal(await rankings.count(),0);
+ await tab('Ocultar valores de todos').click();assert.equal(await financials.count(),0);
+ await ana.getByRole('button',{name:'Rankings de Ana Oliveira',exact:true}).click();assert.equal(await rankings.count(),1);assert.equal(await financials.count(),0);
+ assert.equal(await ana.getByText('Top 5',{exact:true}).count(),4);
+ const services=ana.getByRole('region',{name:'Serviços mais realizados',exact:true}),patients=ana.getByRole('region',{name:'Pacientes por serviços realizados',exact:true});
+ assert.ok((await services.innerText()).includes('Preenchimento com ácido hialurônico'));assert.ok((await patients.innerText()).includes('Camila Ribeiro'));
+ await page.screenshot({path:root+'relatorio-profissional-rankings.png',fullPage:false});
+ await tab('Mostrar valores de todos').click();assert.equal(await financials.count(),2);assert.equal(await rankings.count(),1);
+ await tab('Ocultar valores de todos').click();assert.equal(await financials.count(),0);assert.equal(await rankings.count(),1);
+ await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+ await ana.scrollIntoViewIfNeeded();await page.screenshot({path:root+'relatorio-profissional-celular.png',fullPage:false});
+ await page.setViewportSize({width:1440,height:1100});
+ await page.getByLabel('Tipo de período do relatório profissional',{exact:true}).selectOption('range');
+ await page.getByLabel('Data inicial do relatório profissional',{exact:true}).fill('2026-10-09');await page.getByLabel('Data final do relatório profissional',{exact:true}).fill('2026-10-09');
+ assert.ok((await ana.innerText()).includes('0 serviços realizados'));assert.equal(await ana.getByText('Nenhum registro neste período.',{exact:true}).count(),4);
+ await page.getByLabel('Data final do relatório profissional',{exact:true}).fill('2026-10-01');await page.getByRole('alert').filter({hasText:'Informe um período válido'}).waitFor();
+ await page.getByLabel('Tipo de período do relatório profissional',{exact:true}).selectOption('month');await page.getByLabel('Mês do relatório profissional',{exact:true}).fill('2026-10');
+ await bia.getByRole('button',{name:'Rankings de Beatriz Santos',exact:true}).click();assert.equal(await rankings.count(),2);
+ await ana.getByRole('button',{name:'Ocultar rankings individuais',exact:true}).click();assert.equal(await rankings.count(),1);
+ const loginResponse=await page.request.post('http://127.0.0.1:3107/api/access',{headers:{Origin:'http://127.0.0.1:3107'},data:{login:'avviclinica',password:'avviclinica2026'}});assert.equal(loginResponse.status(),200);
+ await page.reload();await page.getByRole('navigation',{name:'Menu principal',exact:true}).waitFor();assert.equal(await page.getByRole('navigation',{name:'Menu principal',exact:true}).getByRole('button').count(),8);assert.equal(await page.getByLabel('Perfil do usuário',{exact:true}).innerText(),'Perfil Usuário padrão · avviclinica');
+ assert.deepEqual(errors,[]);console.log('PASS: All 17 sidebar options fit without scroll at 480–900px heights, compact admin/standard identity; closed-patient ticket average; registration photo persists after reload and appears identically in both reports; professional report default privacy, individual and global financial toggles independent of rankings, four Top 5 panels, financial values preserved, service quantities, month/range/invalid period, independent cards and mobile fit. Browser-only fixtures; cloud data unchanged.');
+}finally{await browser.close();}
