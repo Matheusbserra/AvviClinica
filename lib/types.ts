@@ -253,3 +253,6 @@ export type LeadStage = "entry" | "warm" | "cold" | "scheduled" | "aftercare";
 export type FollowUpLead = { id: string; name: string; phone: string; patientId?: string; firstContactAt: string; lastContactAt: string; lastMessage: string; lastMessageId: string; manualStage?: LeadStage };
 
 export type FollowUpMessage = { id: string; leadId: string; direction: "incoming" | "outgoing"; text: string; at: string; status?: FollowUpLog["status"] };
+
+export type UltraformerUsage = { registeredBy?: { id: string; login: string; name: string }; id: string; date: string; quantity: number; patientId: string; patientName: string; professionalId: string; professionalName: string; createdAt: string };
+export type UltraformerTip = { id: string; name: string; depth: string; kind: "linear" | "booster"; color: string; initialShots: number; usages: UltraformerUsage[] };

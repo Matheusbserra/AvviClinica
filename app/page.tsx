@@ -52,6 +52,7 @@ import { appointments as seedAppointments, financialEntries as seedFinancialEntr
 import { catalogProcedures } from "@/lib/catalogProcedures";
 import { FollowUpView, FollowUpNavigation } from "@/app/components/FollowUpView";
 import { AgendaView } from "@/app/components/AgendaView";
+import { UltraformerView } from "@/app/components/UltraformerView";
 import { InventorySection } from "@/app/components/GiftInventoryView";
 import { applyCheckoutGifts } from "@/lib/gifts";
 import { AccountSummary } from "@/app/components/AccountSummary";
@@ -71,7 +72,7 @@ import { applyProcedureCostOverrides } from "@/lib/procedureCosts";
 import { calculateEntry, currency, monthKey, percent, splitDiscountImpact, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { appDataTableMissing, selectEntityState, syncEntityDiffs, setDatabaseAccess, isProtectedDatabase } from "@/lib/database";
-import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, ViewMode } from "@/lib/types";
+import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 import { hasSnapshotChanges, readSnapshot, writeSnapshot, snapshotChanges, recoverPendingChanges, recordIsPending, snapshotEntities } from "@/lib/persistence";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
@@ -82,7 +83,7 @@ import { ReportsView } from "@/app/components/ReportsView";
 import { ProfessionalReportView } from "@/app/components/ProfessionalReportView";
 import type { AppRole, AppUser } from "@/lib/access";
 
-type Tab = "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
+type Tab = "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
 const savedLoginKey = "avvi.saved.login.v1";
 
@@ -90,6 +91,7 @@ const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
   { id: "Estoque", icon: WalletCards },
   { id: "Follow Up", icon: MessageCircle },
+  { id: "Ultraformer MPT", icon: Activity },
   { id: "Relatórios", icon: BarChart3 },
   { id: "Dashboard", icon: LayoutDashboard },
   { id: "Receitas", icon: CircleDollarSign },
@@ -410,6 +412,7 @@ export default function Home() {
   const [services, setServices] = useState<Service[]>(importedServices);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [gifts, setGifts] = useState<GiftStockItem[]>([]);
+  const [ultraformerTips, setUltraformerTips] = useState<UltraformerTip[]>([]);
   const [followUpTab, setFollowUpTab] = useState("Conversas");
   const [followUpRules, setFollowUpRules] = useState<FollowUpRule[]>([]);
   const [followUpContacts, setFollowUpContacts] = useState<FollowUpContact[]>([]);
@@ -449,7 +452,7 @@ export default function Home() {
   const pendingSyncs = useRef(0);
   const latestDraft = useRef<DataSnapshot | null>(null);
   const startupSnapshot = useRef<DataSnapshot>({
-    patients, professionals, procedures, services, inventory, gifts,
+    patients, professionals, procedures, services, inventory, gifts, ultraformer_tips: ultraformerTips,
     followup_rules: followUpRules, followup_contacts: followUpContacts, followup_logs: followUpLogs,
     appointments, financial_entries: entries, revenues, fixed_costs: costs, receipts,
     professional_receipts: professionalReceipts, monthly_goals: monthlyGoals
@@ -478,6 +481,7 @@ export default function Home() {
     if (entity === "procedures") setProcedures((current) => applyRemoteList(current, recordId, data as Procedure, remove));
     if (entity === "services") setServices((current) => applyRemoteList(current, recordId, data as Service, remove));
     if (entity === "gifts") setGifts((current) => applyRemoteList(current, recordId, data as GiftStockItem, remove));
+    if (entity === "ultraformer_tips") setUltraformerTips((current) => applyRemoteList(current, recordId, data as UltraformerTip, remove));
     if (entity === "inventory") setInventory((current) => applyRemoteList(current, recordId, data as InventoryItem, remove));
     if (entity === "followup_rules") setFollowUpRules((current) => applyRemoteList(current, recordId, data as FollowUpRule, remove));
     if (entity === "followup_contacts") setFollowUpContacts((current) => applyRemoteList(current, recordId, data as FollowUpContact, remove));
@@ -499,6 +503,7 @@ export default function Home() {
       procedures: entity === "procedures" ? applyRemoteList(snapshot.procedures, recordId, data as Procedure, remove) : snapshot.procedures,
       services: entity === "services" ? applyRemoteList(snapshot.services, recordId, data as Service, remove) : snapshot.services,
       gifts: entity === "gifts" ? applyRemoteList(snapshot.gifts ?? [], recordId, data as GiftStockItem, remove) : snapshot.gifts,
+      ultraformer_tips: entity === "ultraformer_tips" ? applyRemoteList(snapshot.ultraformer_tips, recordId, data as UltraformerTip, remove) : snapshot.ultraformer_tips,
       inventory: entity === "inventory" ? applyRemoteList(snapshot.inventory, recordId, data as InventoryItem, remove) : snapshot.inventory,
       followup_rules: entity === "followup_rules" ? applyRemoteList(snapshot.followup_rules ?? [], recordId, data as FollowUpRule, remove) : snapshot.followup_rules,
       followup_contacts: entity === "followup_contacts" ? applyRemoteList(snapshot.followup_contacts ?? [], recordId, data as FollowUpContact, remove) : snapshot.followup_contacts,
@@ -547,6 +552,7 @@ export default function Home() {
       setServices(snapshot?.services ?? importedServices);
       setInventory(snapshot?.inventory ?? []);
       setGifts(snapshot?.gifts ?? []);
+      setUltraformerTips(snapshot?.ultraformer_tips ?? []);
       setFollowUpRules(snapshot?.followup_rules ?? []);
       setFollowUpContacts(snapshot?.followup_contacts ?? []);
       setFollowUpLogs(snapshot?.followup_logs ?? []);
@@ -568,6 +574,7 @@ export default function Home() {
           dbServicesState,
           dbInventoryState,
           dbGiftsState,
+          dbUltraformerState,
           dbFollowUpRulesState,
           dbFollowUpContactsState,
           dbFollowUpLogsState,
@@ -585,6 +592,7 @@ export default function Home() {
           selectEntityState("services"),
           selectEntityState("inventory"),
           selectEntityState("gifts"),
+          selectEntityState("ultraformer_tips"),
           selectEntityState("followup_rules"),
           selectEntityState("followup_contacts"),
           selectEntityState("followup_logs"),
@@ -620,7 +628,7 @@ export default function Home() {
         const initialCosts = mergeCosts(seedFixedCosts, importedCosts);
         const initialReceipts = seedReceipts;
         const initialGoals = [makeMonthlyGoal(todayKey().slice(0, 7), seedProfessionals)];
-        const isEmptyDatabase = userRole === "admin" && !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbInventory.length && !dbGiftsState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
+        const isEmptyDatabase = userRole === "admin" && !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbInventory.length && !dbGiftsState.records.length && !dbUltraformerState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
         const remoteSnapshot: DataSnapshot = {
           patients: isEmptyDatabase ? initialPatients : dbPatients,
           professionals: isEmptyDatabase ? initialProfessionals : dbProfessionals,
@@ -628,6 +636,7 @@ export default function Home() {
           services: dbServices,
           inventory: dbInventory,
           gifts: dbGiftsState.records,
+          ultraformer_tips: dbUltraformerState.records,
           followup_rules: dbFollowUpRulesState.records,
           followup_contacts: dbFollowUpContactsState.records,
           followup_logs: dbFollowUpLogsState.records,
@@ -648,6 +657,7 @@ export default function Home() {
             services: savedLocalSnapshot.data.services ?? importedServices,
             inventory: savedLocalSnapshot.data.inventory ?? [],
             gifts: savedLocalSnapshot.data.gifts ?? [],
+            ultraformer_tips: savedLocalSnapshot.data.ultraformer_tips ?? [],
             followup_rules: savedLocalSnapshot.data.followup_rules ?? [],
             followup_contacts: savedLocalSnapshot.data.followup_contacts ?? [],
             followup_logs: savedLocalSnapshot.data.followup_logs ?? []
@@ -666,7 +676,7 @@ export default function Home() {
         // Compare against actual stored rows, including genuinely empty categories.
         lastSyncedSnapshot.current = {
           patients: dbPatients, professionals: dbProfessionals, procedures: dbProceduresState.records,
-          services: dbServices, inventory: dbInventory, gifts: dbGiftsState.records,
+          services: dbServices, inventory: dbInventory, gifts: dbGiftsState.records, ultraformer_tips: dbUltraformerState.records,
           followup_rules: dbFollowUpRulesState.records, followup_contacts: dbFollowUpContactsState.records,
           followup_logs: dbFollowUpLogsState.records, appointments: dbAppointments,
           financial_entries: dbEntries, revenues: dbRevenues, fixed_costs: dbCosts,
@@ -679,6 +689,7 @@ export default function Home() {
         setServices(hydratedSnapshot.services);
         setInventory(hydratedSnapshot.inventory);
         setGifts(hydratedSnapshot.gifts ?? []);
+        setUltraformerTips(hydratedSnapshot.ultraformer_tips ?? []);
         setFollowUpRules(hydratedSnapshot.followup_rules);
         setFollowUpContacts(hydratedSnapshot.followup_contacts);
         setFollowUpLogs(hydratedSnapshot.followup_logs);
@@ -734,6 +745,7 @@ export default function Home() {
       services,
       inventory,
       gifts,
+      ultraformer_tips: ultraformerTips,
       followup_rules: followUpRules,
       followup_contacts: followUpContacts,
       followup_logs: followUpLogs,
@@ -779,7 +791,7 @@ export default function Home() {
         pendingSyncs.current -= 1;
         setIsSyncing(pendingSyncs.current > 0);
       });
-  }, [patients, professionals, procedures, services, inventory, gifts, followUpRules, followUpContacts, followUpLogs, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
+  }, [patients, professionals, procedures, services, inventory, gifts, ultraformerTips, followUpRules, followUpContacts, followUpLogs, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
 
   function retrySaving() {
     if (cloudLoaded.current) setSyncRetry((current) => current + 1);
@@ -1505,7 +1517,7 @@ export default function Home() {
             </div>
             <nav aria-label="Menu principal" className="avvi-sidebar-nav min-h-0 flex-1">
               <SidebarGroup label="Operação">
-                {availableTabs.filter((tab) => ["Agenda", "Estoque", "Follow Up", "Relatórios"].includes(tab.id)).map((tab) => {
+                {availableTabs.filter((tab) => ["Agenda", "Estoque", "Follow Up", "Ultraformer MPT", "Relatórios"].includes(tab.id)).map((tab) => {
                   const Icon = tab.icon;
                   return (
                     <button
@@ -1562,8 +1574,8 @@ export default function Home() {
           </div>
         </aside>
 
-        <section className={`min-w-0 flex-1 lg:ml-[17.5rem] ${activeTab === "Agenda" ? "flex h-dvh min-h-0 flex-col overflow-hidden px-2 py-2 lg:px-4" : "px-4 py-5 lg:px-7"}`}>
-          <Header activeTab={activeTab} compact={activeTab === "Agenda"} />
+        <section className={`min-w-0 flex-1 lg:ml-[17.5rem] ${["Agenda", "Ultraformer MPT"].includes(activeTab) ? "flex h-dvh min-h-0 flex-col overflow-hidden px-2 py-2 lg:px-4" : "px-4 py-5 lg:px-7"}`}>
+          <Header activeTab={activeTab} compact={["Agenda", "Ultraformer MPT"].includes(activeTab)} />
           {!availableTabs.length && <Panel><p className="text-sm text-slate-600">Nenhuma aba foi autorizada para esta conta. Solicite o acesso ao administrador.</p></Panel>}
           {canAccessTab(currentUser, "Follow Up") && activeTab === "Follow Up" && <FollowUpNavigation tab={followUpTab} change={setFollowUpTab} />}
           {syncError && (
@@ -1606,6 +1618,7 @@ export default function Home() {
           {userRole === "admin" && activeTab === "Contas" && <AccountsView />}
           {canAccessTab(currentUser, "Relatórios") && activeTab === "Relatórios" && <ReportsView appointments={appointments} entries={entries} professionals={professionals} procedures={procedures} services={services} revenues={revenues} />}
 
+          {canAccessTab(currentUser, "Ultraformer MPT") && activeTab === "Ultraformer MPT" && <UltraformerView user={currentUser} tips={ultraformerTips} setTips={setUltraformerTips} patients={patients} professionals={professionals} />}
           {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={appointments} entries={entries} patients={patients} professionals={professionals} />}
 
           {canAccessTab(currentUser, "Lançamento de Procedimentos") && activeTab === "Lançamento de Procedimentos" && (

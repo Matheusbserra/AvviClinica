@@ -42,5 +42,25 @@ try {
  globalThis.fetch=async()=>new Response("[]",{status:200,headers:{"Content-Type":"application/json"}});
  process.env.SUPABASE_SERVICE_ROLE_KEY=jwt({role:"service_role",ref:"project"});assert.equal((await accounts.listAccounts()).editable,true);
  process.env.SUPABASE_SERVICE_ROLE_KEY="sb_secret_server-test-key";assert.equal((await accounts.listAccounts()).editable,true);
- console.log("PASS: Immutable primary admin, existing user, private encrypted passwords, new users, exact custom tabs and API permissions, duplicate login, rename/password/role editing, promotion, stale edit rejection, session revocation and cloud failure closed; specific safe diagnostics for API keys, project mismatch, schema permissions and missing columns; legacy and modern private keys. Isolated files and mocked network only.");
+ // Use the real SDK with a strict fake REST endpoint to reproduce PGRST125 for duplicated paths.
+ for(const suffix of ["", "/", "/rest/v1", "/rest/v1/", "/auth/v1", "/auth/v1/", "/REST/v1///"]){
+  process.env.NEXT_PUBLIC_SUPABASE_URL="https://project.supabase.co"+suffix;
+  globalThis.fetch=async input=>{const url=new URL(input);assert.equal(url.pathname,"/rest/v1/avvi_user_accounts");assert.equal(url.searchParams.get("order"),"login.asc");return new Response("[]",{status:200,headers:{"Content-Type":"application/json"}});};
+  assert.equal((await accounts.listAccounts()).editable,true);assert.equal((await accounts.authenticateManaged("avviclinica","avviclinica2026")).role,"standard");
+ }
+ process.env.NEXT_PUBLIC_SUPABASE_URL="https://project.supabase.co/rest/v1/";
+ const cloudRows=new Map();
+ globalThis.fetch=async(input,init)=>{
+  const url=new URL(input);assert.equal(url.pathname,"/rest/v1/avvi_user_accounts");const method=init?.method??"GET";
+  if(method==="GET")return new Response(JSON.stringify([...cloudRows.values()]),{status:200,headers:{"Content-Type":"application/json"}});
+  const body=JSON.parse(init.body),row=Array.isArray(body)?body[0]:body;
+  if(method==="PATCH"){assert.equal(url.searchParams.get("id"),"eq."+row.id);assert.equal(url.searchParams.get("version"),"eq."+cloudRows.get(row.id).version);}
+  cloudRows.set(row.id,row);return new Response(JSON.stringify([{id:row.id}]),{status:200,headers:{"Content-Type":"application/json"}});
+ };
+ const cloudUser=await accounts.saveAccount({name:"Conta de teste na nuvem",login:"cloud-user",password:"cloud-password-2026",role:"standard",tabs:["Agenda"]});
+ assert.equal((await accounts.authenticateManaged("cloud-user","cloud-password-2026")).id,cloudUser.id);
+ const cloudEdited=await accounts.saveAccount({id:cloudUser.id,revision:cloudUser.revision,name:"Conta editada",login:"cloud-user",password:"changed-cloud-password-2026",role:"standard",tabs:["Estoque"]});
+ assert.equal(await accounts.authenticateManaged("cloud-user","cloud-password-2026"),null);assert.equal((await accounts.authenticateManaged("cloud-user","changed-cloud-password-2026")).revision,cloudEdited.revision);
+ assert.equal((await accounts.listAccounts()).accounts.find(a=>a.id===cloudUser.id).password,"changed-cloud-password-2026");
+ console.log("PASS: Immutable primary admin, existing user, private encrypted passwords, new users, exact custom tabs and API permissions, duplicate login, rename/password/role editing, promotion, stale edit rejection, session revocation and cloud failure closed; specific safe diagnostics for API keys, project mismatch, schema permissions and missing columns; legacy and modern private keys; root/REST/auth URLs yield the exact REST path for listing, creation, editing and login. Isolated files and mocked network only.");
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

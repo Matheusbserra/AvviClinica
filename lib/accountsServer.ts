@@ -21,7 +21,7 @@ function decrypt(value: string) { const [iv, encrypted, tag] = value.split(".").
 export function accountStorageMode() { return !process.env.VERCEL && !process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ? "local" : "cloud"; }
 const localFile = () => path.join(process.env.AVVI_LOCAL_ACCOUNTS_DIRECTORY ?? path.join(process.cwd(), ".avvi-local"), "accounts.json");
 function cloud() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/\/+$/, ""), key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/\/+$/, "").replace(/\/(rest|auth)\/v1$/i, ""), key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!url || !key) throw new AccountError("Para gerenciar usuários na nuvem, configure SUPABASE_SERVICE_ROLE_KEY no servidor e execute supabase/accounts.sql no mesmo projeto Supabase.", 503);
   if (key.startsWith("sb_publishable_")) throw new AccountError("SUPABASE_SERVICE_ROLE_KEY contém uma chave pública. Use a chave privada service_role ou Secret key do mesmo projeto Supabase, no Vercel Production.", 503);
   if (key.split(".").length === 3) {

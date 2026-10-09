@@ -89,10 +89,17 @@ button {
   .account-summary-dialog th { print-color-adjust: exact; }
 }
 
-/* Fit all 17 navigation options into the desktop viewport. */
+/* Fit all 18 navigation options into the desktop viewport. */
 .avvi-sidebar-brand { margin-bottom: 6px; }
 .avvi-sidebar-brand img { height: clamp(28px, 6vh, 48px); }
-.avvi-sidebar-nav { display: flex; flex-direction: column; gap: 4px; }
-.avvi-sidebar-link { height: clamp(15px, calc((100dvh - 232px) / 17), 32px); font-size: clamp(10px, 1.5vh, 12px); line-height: 1.2; }
+.avvi-sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
+.avvi-sidebar-link { height: clamp(15px, calc((100dvh - 232px) / 18), 32px); font-size: clamp(10px, 1.5vh, 12px); line-height: 1.2; }
 .avvi-sidebar-link svg { flex-shrink: 0; }
 .avvi-sidebar-footer { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+
+/* Let the ten Ultraformer rows share the available screen height. */
+.ultraformer-rows .ultraformer-icon-wrap { height: min(100%, 48px); max-height: 100%; width: clamp(24px, 4dvh, 48px); flex-shrink: 0; }
+.ultraformer-rows .ultraformer-icon { width: 100%; height: 100%; }
+.ultraformer-name { font-size: clamp(11px, 1.7dvh, 14px); line-height: 1.2; }
+.ultraformer-balance { font-size: clamp(14px, 2.5dvh, 20px); line-height: 1.2; }
+.ultraformer-rows button { max-height: 100%; padding-top: clamp(2px, .7dvh, 8px); padding-bottom: clamp(2px, .7dvh, 8px); }

@@ -22,7 +22,7 @@ try {
  await page.reload();await tab('Relatório Profissional').click();
  for(const height of [900,768,640,560,480]){
   await page.setViewportSize({width:1366,height});
-  const menu=page.getByRole('navigation',{name:'Menu principal',exact:true});assert.equal(await menu.getByRole('button').count(),17);
+  const menu=page.getByRole('navigation',{name:'Menu principal',exact:true});assert.equal(await menu.getByRole('button').count(),18);
   const layout=await menu.evaluate(menu=>({height:menu.clientHeight,scroll:menu.scrollHeight,top:menu.getBoundingClientRect().top,bottom:menu.getBoundingClientRect().bottom,last:Array.from(menu.querySelectorAll('button')).at(-1)?.getBoundingClientRect().bottom,viewport:innerHeight}));
   assert.ok(layout.scroll<=layout.height+1,JSON.stringify({height,layout}));assert.ok(layout.last<=layout.bottom+1);
   const footer=page.getByLabel('Perfil do usuário',{exact:true});assert.ok((await footer.boundingBox()).y+(await footer.boundingBox()).height<=height);
@@ -68,5 +68,5 @@ try {
  await ana.getByRole('button',{name:'Ocultar rankings individuais',exact:true}).click();assert.equal(await rankings.count(),1);
  const loginResponse=await page.request.post('http://127.0.0.1:3107/api/access',{headers:{Origin:'http://127.0.0.1:3107'},data:{login:'avviclinica',password:'avviclinica2026'}});assert.equal(loginResponse.status(),200);
  await page.reload();await page.getByRole('navigation',{name:'Menu principal',exact:true}).waitFor();assert.equal(await page.getByRole('navigation',{name:'Menu principal',exact:true}).getByRole('button').count(),8);assert.equal(await page.getByLabel('Perfil do usuário',{exact:true}).innerText(),'Perfil Usuário padrão · avviclinica');
- assert.deepEqual(errors,[]);console.log('PASS: All 17 sidebar options fit without scroll at 480–900px heights, compact admin/standard identity; closed-patient ticket average; registration photo persists after reload and appears identically in both reports; professional report default privacy, individual and global financial toggles independent of rankings, four Top 5 panels, financial values preserved, service quantities, month/range/invalid period, independent cards and mobile fit. Browser-only fixtures; cloud data unchanged.');
+ assert.deepEqual(errors,[]);console.log('PASS: All 18 sidebar options fit without scroll at 480–900px heights, compact admin/standard identity; closed-patient ticket average; registration photo persists after reload and appears identically in both reports; professional report default privacy, individual and global financial toggles independent of rankings, four Top 5 panels, financial values preserved, service quantities, month/range/invalid period, independent cards and mobile fit. Browser-only fixtures; cloud data unchanged.');
 }finally{await browser.close();}

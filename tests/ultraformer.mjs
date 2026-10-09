@@ -1,0 +1,27 @@
+import fs from "node:fs";
+import assert from "node:assert/strict";
+import ts from "typescript";
+async function load(file) { const code=ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText; return import("data:text/javascript;base64,"+Buffer.from(code).toString("base64")); }
+const {ultraformerCatalog,availableUltraformerTips,remainingShots,recordUltraformerUsage,isUltraformerTip}=await load("lib/ultraformer.ts");
+const access=await load("lib/access.ts");
+assert.equal(ultraformerCatalog.length,10);assert.equal(ultraformerCatalog.filter(tip=>tip.kind==="booster").length,3);
+assert.equal(new Set(ultraformerCatalog.map(tip=>tip.id)).size,10);assert.ok(ultraformerCatalog.every(tip=>isUltraformerTip(tip)&&remainingShots(tip)===0));
+const tip={...ultraformerCatalog[0],initialShots:1200};
+const usage={id:"use-1",date:"2026-10-09",quantity:200,patientId:"patient",patientName:"Paciente de teste",professionalId:"professional",professionalName:"Profissional de teste",createdAt:"2026-10-09T13:00:00Z"};
+const used=recordUltraformerUsage(tip,usage);assert.equal(remainingShots(used),1000);assert.equal(tip.usages.length,0);assert.equal(used.usages[0].patientName,usage.patientName);
+assert.equal(recordUltraformerUsage(used,usage),used);assert.equal(remainingShots(recordUltraformerUsage(used,{...usage,id:"use-2",quantity:1100})),-100);
+for(const quantity of [0,-1,1.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>recordUltraformerUsage(tip,{...usage,quantity}));
+for(const change of [{date:"2026-02-30"},{patientName:""},{professionalId:""},{createdAt:"bad"}])assert.throws(()=>recordUltraformerUsage(tip,{...usage,...change}));
+assert.equal(isUltraformerTip({...used,usages:[usage,usage]}),false);
+const renamed=availableUltraformerTips([{...used,name:"DERMA 1,5 mm"}])[0];assert.equal(renamed.name,"1,5 mm");assert.equal(remainingShots(renamed),1000);assert.deepEqual(renamed.usages,used.usages);
+const reset={...used,initialShots:700+used.usages.reduce((sum,row)=>sum+row.quantity,0)};assert.equal(remainingShots(reset),700);assert.equal(reset.usages.length,1);
+const merged=availableUltraformerTips([used,{...tip,id:"custom-tip",name:"Ponteira extra"}]);assert.equal(merged.length,11);assert.equal(merged[0],used);assert.equal(remainingShots(merged[1]),0);
+assert.equal(access.canAccessTab("admin","Ultraformer MPT"),true);assert.equal(access.canAccessTab("standard","Ultraformer MPT"),false);
+const permitted={login:"user",role:"standard",tabs:["Ultraformer MPT"]};for(const entity of ["ultraformer_tips","patients","professionals"])assert.equal(access.canReadEntity(permitted,entity),true);
+assert.equal(access.canWriteEntity(permitted,"ultraformer_tips"),true);assert.equal(access.canWriteEntity(permitted,"patients"),false);assert.equal(access.canReadEntity(permitted,"financial_entries"),false);
+const denied={...permitted,tabs:[]};assert.equal(access.canReadEntity(denied,"ultraformer_tips"),false);assert.equal(access.canWriteEntity(denied,"ultraformer_tips"),false);
+const persistence=await load("lib/persistence.ts");const baseline=persistence.normalizeSnapshot({patients:[{id:"preserved"}]});assert.deepEqual(baseline.ultraformer_tips,[]);
+const draft={...baseline,ultraformer_tips:[used]};const store=new Map();persistence.writeSnapshot({setItem:(key,value)=>store.set(key,value)},draft,baseline);
+const restored=persistence.readSnapshot({getItem:key=>store.get(key)??null});assert.equal(remainingShots(restored.data.ultraformer_tips[0]),1000);assert.equal(restored.data.ultraformer_tips[0].usages.length,1);
+const recovered=persistence.recoverPendingChanges(baseline,restored.syncedData,restored.data);assert.deepEqual(recovered.patients,[{id:"preserved"}]);assert.deepEqual(recovered.ultraformer_tips,[used]);
+console.log("PASS: Ten official-reference tips, independent shot balances, valid usage and history, duplicate prevention, balance adjustment preserves history, old-cache migration, pending recovery and explicit tab permissions.");

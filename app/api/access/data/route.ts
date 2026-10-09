@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
 import { canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { stockHistoryEntry } from "@/lib/accessSnapshot";
+import { isUltraformerTip } from "@/lib/ultraformer";
 import { entityNames } from "@/lib/database";
 import type { EntityName } from "@/lib/database";
 import type { Appointment, FinancialEntry } from "@/lib/types";
@@ -59,6 +60,18 @@ export async function POST(request: Request) {
     const receiptSources = new Set<string>(canWriteEntity(user, "professional_receipts") ? upserts.filter(row => row.entity === "professional_receipts").map(row => row.record_id) : []);
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
+      if (row.entity === "ultraformer_tips" && !isUltraformerTip(row.data)) return Response.json({ error: "Dados de ponteira ou utilização inválidos." }, { status: 400, headers });
+      if (row.entity === "ultraformer_tips" && !canWriteEntity(user, "ultraformer_tips")) return Response.json({ error: "Acesso ao Ultraformer MPT não autorizado." }, { status: 403, headers });
+      if (row.entity === "ultraformer_tips") {
+        const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "ultraformer_tips").eq("record_id", row.record_id).maybeSingle();
+        if (error) throw error;
+        const prior = new Map((previous?.data?.usages ?? []).map((usage: { id: string; registeredBy?: unknown }) => [usage.id, usage]));
+        // Stamp new usages from the signed session; preserve the original author on retries and edits.
+        row.data.usages = row.data.usages.map((usage: { id: string; registeredBy?: unknown }) => {
+          const original = prior.get(usage.id) as { registeredBy?: unknown } | undefined;
+          return { ...usage, registeredBy: original ? original.registeredBy : { id: user.id ?? (user.login === "admin" ? "primary-admin" : user.login), login: user.login, name: user.name?.trim() || user.login } };
+        });
+      }
       if (user.role !== "standard") continue;
       if (canWriteEntity(user, row.entity)) {
         if (row.entity === "professionals" && !canAccessTab(user, "Metas")) {
