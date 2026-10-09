@@ -1,0 +1,30 @@
+import fs from "node:fs";
+import assert from "node:assert/strict";
+import ts from "typescript";
+const source=ts.transpileModule(fs.readFileSync("lib/persistence.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText;
+const {normalizeSnapshot,snapshotEntities,snapshotChanges,hasSnapshotChanges,recoverPendingChanges,recordIsPending,readSnapshot,writeSnapshot,snapshotKey}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+const baseline=normalizeSnapshot(Object.fromEntries(snapshotEntities.map(entity=>[entity,[{id:entity+"-old",value:10},{id:entity+"-deleted",value:10},{id:entity+"-untouched",value:10}]])));
+const draft=normalizeSnapshot(Object.fromEntries(snapshotEntities.map(entity=>[entity,[{id:entity+"-old",value:20},{id:entity+"-untouched",value:10},{id:entity+"-new",value:30}]])));
+const remote=normalizeSnapshot(Object.fromEntries(snapshotEntities.map(entity=>[entity,[{id:entity+"-old",value:10},{id:entity+"-deleted",value:10},{id:entity+"-untouched",value:99},{id:entity+"-other-browser",value:80}]])));
+const recovered=recoverPendingChanges(remote,baseline,draft);
+for(const entity of snapshotEntities){
+ assert.deepEqual(recovered[entity].find(item=>item.id===entity+"-old"),{id:entity+"-old",value:20});
+ assert.equal(recovered[entity].some(item=>item.id===entity+"-deleted"),false);
+ assert.equal(recovered[entity].find(item=>item.id===entity+"-untouched").value,99);
+ assert.equal(recovered[entity].find(item=>item.id===entity+"-other-browser").value,80);
+ assert.equal(recovered[entity].find(item=>item.id===entity+"-new").value,30);
+ assert.equal(recordIsPending(baseline,draft,entity,entity+"-old"),true);
+ assert.equal(recordIsPending(baseline,draft,entity,entity+"-untouched"),false);
+}
+assert.equal(hasSnapshotChanges(baseline,draft),true);
+assert.equal(hasSnapshotChanges(draft,structuredClone(draft)),false);
+assert.equal(hasSnapshotChanges(draft,normalizeSnapshot(Object.fromEntries(snapshotEntities.map(entity=>[entity,[...draft[entity]].reverse()])))),false);
+assert.deepEqual(snapshotChanges(baseline,draft).map(change=>change.entity),snapshotEntities);
+const values=new Map();const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
+writeSnapshot(storage,draft,baseline);const saved=readSnapshot(storage);
+assert.deepEqual(saved.data,draft);assert.deepEqual(saved.syncedData,baseline);
+writeSnapshot(storage,draft,draft);assert.equal(hasSnapshotChanges(readSnapshot(storage).syncedData,readSnapshot(storage).data),false);
+values.set(snapshotKey,JSON.stringify({data:{patients:[{id:"legacy"}]}}));assert.deepEqual(readSnapshot(storage).data.gifts,[]);
+values.set(snapshotKey,"invalid");assert.throws(()=>readSnapshot(storage));
+assert.throws(()=>writeSnapshot({setItem(){throw new Error("QuotaExceededError");}},draft,baseline));
+console.log("PASS: All 16 entity types recover pending edits, insertions and deletions; preserve other-browser records; ignore record ordering; retain acknowledged baseline; support old local copies and report invalid/full storage.");

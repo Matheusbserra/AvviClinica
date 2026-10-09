@@ -1,0 +1,17 @@
+import fs from "node:fs";import assert from "node:assert/strict";import ts from "typescript";
+let offset=0,limit=500,readFailure=false,deleteFailure=false;let requests=[];
+const rows=Array.from({length:1201},(_,index)=>({record_id:"record-"+index,data:{id:"record-"+index},updated_at:"2026-10-08T18:00:00Z"}));
+const client={from(){const query={select(){return query;},eq(){return query;},order(){return query;},range(first,last){offset=first;limit=last-first+1;return Promise.resolve(readFailure&&first>=500?{error:{message:"failed second page"}}:{data:rows.slice(offset,offset+limit),error:null});},upsert(batch){requests.push({kind:"upsert",batch});return Promise.resolve({error:null});},delete(){return {eq(){return this;},in(_column,ids){requests.push({kind:"delete",ids});return Promise.resolve({error:deleteFailure?{message:"failed deletion"}:null});}};}};return query;}};
+globalThis.__testDatabase=client;
+const accessCode=ts.transpileModule(fs.readFileSync("lib/access.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.ES2022}}).outputText;
+const accessUrl="data:text/javascript;base64,"+Buffer.from(accessCode).toString("base64");
+const code=ts.transpileModule(fs.readFileSync("lib/database.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText.replaceAll('"./access"',JSON.stringify(accessUrl)).replace(/import \{ supabase \} from [^;]+;/,"const supabase=globalThis.__testDatabase;");
+const {selectEntityState,syncEntityDiffs,getRecordId,appDataTableMissing}=await import("data:text/javascript;base64,"+Buffer.from(code).toString("base64"));
+let loaded=await selectEntityState("patients");assert.equal(loaded.records.length,1201);assert.equal(new Set(loaded.records.map(record=>record.id)).size,1201);assert.equal(loaded.latestUpdatedAt,"2026-10-08T18:00:00Z");
+readFailure=true;await assert.rejects(()=>selectEntityState("patients"),error=>error.message==="failed second page");
+assert.throws(()=>getRecordId({}),/identificador/);assert.equal(getRecordId({month:"2026-10"}),"2026-10");
+const changes=[{entity:"gifts",previous:[{id:"gone",quantity:2}],next:[{id:"kept",quantity:4}]},{entity:"appointments",previous:[],next:[{id:"account",accountClosed:true}]}];
+deleteFailure=true;await assert.rejects(()=>syncEntityDiffs(changes),error=>error.message==="failed deletion");assert.equal(requests[0].batch.length,2);assert.equal(requests[1].kind,"delete");
+deleteFailure=false;requests=[];await syncEntityDiffs(changes);assert.equal(requests.length,2);assert.deepEqual(requests[1].ids,["gone"]);
+assert.equal(appDataTableMissing({code:"PGRST205"}),true);assert.equal(appDataTableMissing({message:"permission denied for avvi_records"}),false);
+console.log("PASS: Reads all 1201 records, reports failed pagination without accepting a partial list, refuses missing IDs, retries partial upsert/deletion safely, and distinguishes missing tables from denied access.");

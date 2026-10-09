@@ -8,10 +8,18 @@ const cleanSupabaseUrl = supabaseUrl
   .replace(/\/auth\/v1\/?$/i, "")
   .replace(/\/+$/g, "");
 
-export const isSupabaseConfigured = Boolean(cleanSupabaseUrl && supabaseAnonKey);
+export const isSupabaseConfigured = Boolean(cleanSupabaseUrl && supabaseAnonKey?.trim());
 
 export const supabase = isSupabaseConfigured
   ? createClient(cleanSupabaseUrl!, supabaseAnonKey!.trim(), {
+      global: {
+        fetch: (input, init) => fetch(input, {
+          ...init,
+          signal: init?.signal
+            ? AbortSignal.any([init.signal, AbortSignal.timeout(25000)])
+            : AbortSignal.timeout(25000)
+        })
+      },
       auth: {
         persistSession: true,
         autoRefreshToken: true,

@@ -1,5 +1,16 @@
 import { supabase } from "./supabase";
-import type { Appointment, FinancialEntry, FixedCost, Patient, Procedure, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry } from "./types";
+import type { AppRole } from "./access";
+import { canReadEntity } from "./access";
+let accessRole: AppRole = "admin";
+export const isProtectedDatabase = process.env.NEXT_PUBLIC_AVVI_PROTECTED_DATABASE === "true";
+export function setDatabaseAccess(role: AppRole) { accessRole = role; }
+async function accessRequest(url: string, init?: RequestInit) {
+  const response = await fetch(url, { ...init, cache: "no-store", signal: AbortSignal.timeout(25000) });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error ?? "Acesso não autorizado.");
+  return data;
+}
+import type { Appointment, FinancialEntry, FixedCost, Patient, Procedure, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem } from "./types";
 
 export type MonthlyGoals = { month: string; companyGoal: number; professionalGoals: Record<string, number> };
 
@@ -7,6 +18,12 @@ export type EntityName =
   | "patients"
   | "professionals"
   | "procedures"
+  | "services"
+  | "inventory"
+  | "gifts"
+  | "followup_rules"
+  | "followup_contacts"
+  | "followup_logs"
   | "appointments"
   | "financial_entries"
   | "revenues"
@@ -19,6 +36,12 @@ export type EntityPayloadMap = {
   patients: Patient;
   professionals: Professional;
   procedures: Procedure;
+  services: Service;
+  inventory: InventoryItem;
+  gifts: GiftStockItem;
+  followup_rules: FollowUpRule;
+  followup_contacts: FollowUpContact;
+  followup_logs: FollowUpLog;
   appointments: Appointment;
   financial_entries: FinancialEntry;
   revenues: RevenueEntry;
@@ -32,6 +55,12 @@ export const entityNames: EntityName[] = [
   "patients",
   "professionals",
   "procedures",
+  "services",
+  "inventory",
+  "gifts",
+  "followup_rules",
+  "followup_contacts",
+  "followup_logs",
   "appointments",
   "financial_entries",
   "revenues",
@@ -42,7 +71,8 @@ export const entityNames: EntityName[] = [
 ];
 
 export function appDataTableMissing(error: unknown) {
-  return String((error as { message?: string } | null)?.message ?? error).includes("avvi_records");
+  const detail = error as { code?: string; message?: string } | null;
+  return detail?.code === "42P01" || detail?.code === "PGRST205" || /(?:could not find|does not exist).*avvi_records/i.test(String(detail?.message ?? error));
 }
 
 export type EntitySelectResult<T extends EntityName> = {
@@ -57,16 +87,25 @@ export async function selectEntity<T extends EntityName>(entity: T): Promise<Ent
 
 export async function selectEntityState<T extends EntityName>(entity: T): Promise<EntitySelectResult<T>> {
   if (!supabase) return { records: [], latestUpdatedAt: "" };
-  const { data, error } = await supabase
-    .from("avvi_records")
-    .select("record_id,data,updated_at")
-    .eq("entity", entity)
-    .order("updated_at", { ascending: false });
-  if (error) throw error;
-  return {
-    records: (data ?? []).map((row) => row.data as EntityPayloadMap[T]),
-    latestUpdatedAt: String(data?.[0]?.updated_at ?? "")
-  };
+  if (!canReadEntity(accessRole, entity)) return { records: [], latestUpdatedAt: "" };
+  if (accessRole === "standard" || isProtectedDatabase) return accessRequest(`/api/access/data?entity=${entity}`);
+  const records: EntityPayloadMap[T][] = [];
+  let latestUpdatedAt = "";
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("avvi_records")
+      .select("record_id,data,updated_at")
+      .eq("entity", entity)
+      .order("updated_at", { ascending: false })
+      .order("record_id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    if (!offset) latestUpdatedAt = String(data?.[0]?.updated_at ?? "");
+    records.push(...(data ?? []).map((row) => row.data as EntityPayloadMap[T]));
+    if (!data || data.length < pageSize) break;
+  }
+  return { records, latestUpdatedAt };
 }
 
 export async function upsertRecord<T extends EntityName>(entity: T, record: EntityPayloadMap[T]) {
@@ -129,43 +168,50 @@ export async function syncEntity<T extends EntityName>(entity: T, records: Entit
   }
 }
 
+type EntityChange = { entity: EntityName; previous: EntityPayloadMap[EntityName][]; next: EntityPayloadMap[EntityName][] };
+
 export async function syncEntityDiff<T extends EntityName>(entity: T, previous: EntityPayloadMap[T][], next: EntityPayloadMap[T][]) {
-  const previousById = new Map(previous.map((record) => [getRecordId(record), record]));
-  const nextById = new Map(next.map((record) => [getRecordId(record), record]));
+  return syncEntityDiffs([{ entity, previous, next }]);
+}
 
-  const removedIds = [...previousById.keys()].filter((recordId) => !nextById.has(recordId));
-  const changedRecords = next.filter((record) => {
-    const recordId = getRecordId(record);
-    const oldRecord = previousById.get(recordId);
-    return !oldRecord || JSON.stringify(oldRecord) !== JSON.stringify(record);
-  });
-
-  for (const ids of chunkArray(removedIds, 50)) {
-    if (!supabase || !ids.length) continue;
-    const { error } = await supabase
-      .from("avvi_records")
-      .delete()
-      .eq("entity", entity)
-      .in("record_id", ids);
+export async function syncEntityDiffs(changes: EntityChange[]) {
+  if (!supabase) return;
+  const upserts: { entity: EntityName; record_id: string; data: EntityPayloadMap[EntityName]; updated_at: string }[] = [];
+  const removed: { entity: EntityName; ids: string[] }[] = [];
+  const updatedAt = new Date().toISOString();
+  for (const { entity, previous, next } of changes) {
+    const previousById = new Map(previous.map((record) => [getRecordId(record), record]));
+    const nextIds = new Set(next.map(getRecordId));
+    const ids = [...previousById.keys()].filter((recordId) => !nextIds.has(recordId));
+    if (ids.length) removed.push({ entity, ids });
+    for (const record of next) {
+      const recordId = getRecordId(record);
+      if (JSON.stringify(previousById.get(recordId)) !== JSON.stringify(record)) {
+        upserts.push({ entity, record_id: recordId, data: record, updated_at: updatedAt });
+      }
+    }
+  }
+  if (accessRole === "standard" || isProtectedDatabase) {
+    if (upserts.length || removed.length) await accessRequest("/api/access/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ upserts, removed }) });
+    return;
+  }
+  // Upserts share one request. Deletions are separate, and a failed batch remains pending for idempotent retry.
+  if (upserts.length) {
+    const { error } = await supabase.from("avvi_records").upsert(upserts, { onConflict: "entity,record_id" });
     if (error) throw error;
   }
-
-  for (const batch of chunkArray(changedRecords, 25)) {
-    if (!supabase || !batch.length) continue;
-    const { error } = await supabase
-      .from("avvi_records")
-      .upsert(batch.map((record) => ({
-        entity,
-        record_id: getRecordId(record),
-        data: record,
-        updated_at: new Date().toISOString()
-      })), { onConflict: "entity,record_id" });
-    if (error) throw error;
+  for (const { entity, ids } of removed) {
+    for (const batch of chunkArray(ids, 50)) {
+      const { error } = await supabase.from("avvi_records").delete().eq("entity", entity).in("record_id", batch);
+      if (error) throw error;
+    }
   }
 }
 
 export function getRecordId(record: { id?: string; month?: string }) {
-  return record.id || record.month || crypto.randomUUID();
+  const recordId = record.id || record.month;
+  if (!recordId) throw new Error("Registro sem identificador: o salvamento foi interrompido para evitar duplicação.");
+  return recordId;
 }
 
 function chunkArray<T>(items: T[], size: number) {

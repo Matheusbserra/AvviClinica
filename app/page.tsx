@@ -1,8 +1,8 @@
 ﻿"use client";
 
 import { Fragment } from "react";
-import type { ElementType, ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, ElementType, ReactNode, SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   Area,
@@ -15,7 +15,7 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import { addDays, eachDayOfInterval, endOfMonth, format, getDate, isSameDay, parseISO, startOfMonth } from "date-fns";
+import { addMinutes, addDays, endOfMonth, format, getDate, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
   Activity,
@@ -37,7 +37,6 @@ import {
   HandCoins,
   ReceiptText,
   Save,
-  Search,
   Settings,
   Stethoscope,
   Pencil,
@@ -45,42 +44,48 @@ import {
   UserPlus,
   Users,
   WalletCards,
+  MessageCircle,
   X
 } from "lucide-react";
 import jsPDF from "jspdf";
 import { appointments as seedAppointments, financialEntries as seedFinancialEntries, fixedCosts as seedFixedCosts, patients as seedPatients, procedures as seedProcedures, professionals as seedProfessionals, receipts as seedReceipts } from "@/lib/seed";
 import { catalogProcedures } from "@/lib/catalogProcedures";
+import { FollowUpView, FollowUpNavigation } from "@/app/components/FollowUpView";
+import { AgendaView } from "@/app/components/AgendaView";
+import { InventorySection } from "@/app/components/GiftInventoryView";
+import { applyCheckoutGifts } from "@/lib/gifts";
+import { AccountSummary } from "@/app/components/AccountSummary";
+import { AccountCheckout } from "@/app/components/AccountCheckout";
+import type { CheckoutDraft, CheckoutResult } from "@/app/components/AccountCheckout";
+import { distributeCheckoutDiscount, restoreCheckoutItems } from "@/lib/checkout";
+import { procedureEntryFromAccount } from "@/lib/accountProcedures";
+import { applyCheckoutInventory } from "@/lib/inventory";
+import { importedServices } from "@/lib/importedServices";
+import { appointmentServices } from "@/lib/appointmentServices";
+import type { AppointmentService } from "@/lib/types";
+import { serviceKey } from "@/lib/services";
 import { importedClients } from "@/lib/importedClients";
 import { importedRevenues } from "@/lib/importedRevenues";
 import { importedCosts } from "@/lib/importedCosts";
 import { applyProcedureCostOverrides } from "@/lib/procedureCosts";
 import { calculateEntry, currency, monthKey, percent, splitDiscountImpact, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { appDataTableMissing, selectEntityState, syncEntity, syncEntityDiff } from "@/lib/database";
-import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, ViewMode } from "@/lib/types";
+import { appDataTableMissing, selectEntityState, syncEntityDiffs, setDatabaseAccess, isProtectedDatabase } from "@/lib/database";
+import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
+import { hasSnapshotChanges, readSnapshot, writeSnapshot, snapshotChanges, recoverPendingChanges, recordIsPending, snapshotEntities } from "@/lib/persistence";
+import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
+import { canAccessTab } from "@/lib/access";
+import type { AppRole, AppUser } from "@/lib/access";
 
-type Tab = "Agenda" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
+type Tab = "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
-type DataSnapshot = {
-  patients: Patient[];
-  professionals: Professional[];
-  procedures: Procedure[];
-  appointments: Appointment[];
-  financial_entries: FinancialEntry[];
-  revenues: RevenueEntry[];
-  fixed_costs: FixedCost[];
-  receipts: Receipt[];
-  professional_receipts: ProfessionalPaymentReceipt[];
-  monthly_goals: MonthlyGoals[];
-};
-type LocalSnapshot = { savedAt: string; data: DataSnapshot };
-
-const localSnapshotKey = "avvi.data.snapshot.v1";
 const savedLoginKey = "avvi.saved.login.v1";
 
 const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
+  { id: "Estoque", icon: WalletCards },
+  { id: "Follow Up", icon: MessageCircle },
   { id: "Dashboard", icon: LayoutDashboard },
   { id: "Receitas", icon: CircleDollarSign },
   { id: "Lançamento de Procedimentos", icon: WalletCards },
@@ -88,6 +93,7 @@ const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Relatório Profissional", icon: BarChart3 },
   { id: "Recibos de Pagamento", icon: ReceiptText },
   { id: "Cadastro de Procedimentos", icon: Stethoscope },
+  { id: "Cadastro de Serviços", icon: CircleDollarSign },
   { id: "Cadastro de Profissionais", icon: UserPlus },
   { id: "Cadastro de Pacientes", icon: Users },
   { id: "Metas", icon: Goal },
@@ -98,7 +104,6 @@ const statuses: AppointmentStatus[] = ["Agendado", "Confirmado", "Compareceu", "
 const paymentMethods: PaymentMethod[] = ["Pix", "Débito", "Crédito", "Dinheiro"];
 const discountSplits: DiscountSplit[] = ["Empresa assume", "Profissional assume", "Empresa e profissional dividem"];
 const eventOptions = ["Novo Agendamento", "Registrar Ausência", "Registrar Liberação de Horário", "Venda de Produto", "Pré-venda de Produto", "Venda e Consumo de Pacote", "Registro de Crédito de Cliente"];
-const hours = Array.from({ length: 13 }, (_, index) => index + 8);
 const cardBrands: NonNullable<PaymentItem["cardBrand"]>[] = ["Mastercard", "Visa", "Elo"];
 const paymentTerms = Array.from({ length: 12 }, (_, index) => index + 1);
 const cardFeeRates: Record<NonNullable<PaymentItem["cardBrand"]>, number[]> = {
@@ -183,12 +188,12 @@ function futureCreditUsed(entry?: Pick<FinancialEntry, "payments">) {
   return entry?.payments.reduce((sum, payment) => payment.method === "Crédito Futuro" ? sum + Number(payment.amount) : sum, 0) ?? 0;
 }
 
-function productCostOnly(entry: Pick<FinancialEntry, "quantity" | "productCost" | "procedureLines">) {
+function productCostOnly(entry: Pick<FinancialEntry, "quantity" | "productCost" | "procedureLines" | "products">) {
   const lines = entry.procedureLines?.length ? entry.procedureLines : [{
     quantity: entry.quantity,
     productCost: entry.productCost
   }];
-  return lines.reduce((sum, line) => sum + Number(line.productCost) * Number(line.quantity), 0);
+  return lines.reduce((sum, line) => sum + Number(line.productCost) * Number(line.quantity), 0) + (entry.products ?? []).reduce((sum, product) => sum + product.unitCost * product.quantity, 0);
 }
 
 function servicesTotal(entry: Pick<FinancialEntry, "quantity" | "servicePrice" | "procedureLines">) {
@@ -221,7 +226,7 @@ function professionalReceiptProcedureRows(entry: FinancialEntry, procedureNameFo
     const ratio = grossTotal ? gross / grossTotal : 0;
     const lineDiscount = discount * ratio;
     const lineFee = machineFee * ratio;
-    const lineCost = Number(line.productCost) * Number(line.quantity);
+    const lineCost = Number(line.productCost) * Number(line.quantity) + (entry.products ?? []).reduce((sum, product) => sum + product.unitCost * product.quantity, 0) * ratio;
     const received = Math.max(0, gross - lineDiscount);
     const profit = received - lineCost - lineFee;
     const professionalBeforeDiscount = Math.max(0, gross - lineCost - lineFee) * (Number(line.professionalPercent) / 100);
@@ -378,20 +383,15 @@ function applyRemoteList<T extends { id?: string; month?: string }>(current: T[]
   return current.some(matches) ? current.map((item) => matches(item) ? record : item) : [record, ...current];
 }
 
-function readLocalSnapshot(): LocalSnapshot | null {
+function readLocalSnapshot(role: AppRole): LocalSnapshot | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(localSnapshotKey);
-    return raw ? JSON.parse(raw) as LocalSnapshot : null;
+    return readSnapshot(window.localStorage, role === "standard" ? "avvi.data.snapshot.standard.v1" : "avvi.data.snapshot.v1");
   } catch {
     return null;
   }
 }
 
-function writeLocalSnapshot(data: DataSnapshot) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(localSnapshotKey, JSON.stringify({ savedAt: new Date().toISOString(), data }));
-}
 
 function readSavedLogin() {
   if (typeof window === "undefined") return null;
@@ -410,10 +410,19 @@ export default function Home() {
   const [selectedMonth, setSelectedMonth] = useState(() => todayKey().slice(0, 7));
   const [professionalFilter, setProfessionalFilter] = useState("todos");
   const [reportFilter, setReportFilter] = useState("Todos");
-  const [search, setSearch] = useState("");
   const [patients, setPatients] = useState<Patient[]>(() => mergePatients(seedPatients, importedClients));
   const [professionals, setProfessionals] = useState<Professional[]>(seedProfessionals);
   const [procedures, setProcedures] = useState<Procedure[]>(() => mergeProcedures(seedProcedures, catalogProcedures));
+  const [services, setServices] = useState<Service[]>(importedServices);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [gifts, setGifts] = useState<GiftStockItem[]>([]);
+  const [followUpTab, setFollowUpTab] = useState("Conversas");
+  const [followUpRules, setFollowUpRules] = useState<FollowUpRule[]>([]);
+  const [followUpContacts, setFollowUpContacts] = useState<FollowUpContact[]>([]);
+  const [followUpLogs, setFollowUpLogs] = useState<FollowUpLog[]>([]);
+  const [checkoutDraft, setCheckoutDraft] = useState<CheckoutDraft | null>(null);
+  const [accountSummary, setAccountSummary] = useState<{ draft: CheckoutDraft; closedAt?: string; change: number } | null>(null);
+  const [appointmentError, setAppointmentError] = useState("");
   const [appointments, setAppointments] = useState<Appointment[]>(seedAppointments);
   const [entries, setEntries] = useState<FinancialEntry[]>(seedFinancialEntries);
   const [revenues, setRevenues] = useState<RevenueEntry[]>(importedRevenues);
@@ -432,16 +441,29 @@ export default function Home() {
   const [costForm, setCostForm] = useState(makeCostForm());
   const [professionalPaymentFilter, setProfessionalPaymentFilter] = useState("todos");
   const [selectedProfessionalEntryIds, setSelectedProfessionalEntryIds] = useState<string[]>([]);
-  const [isAuthenticated, setIsAuthenticated] = useState(() => typeof window !== "undefined" && window.sessionStorage.getItem("avvi.session") === "active");
-  const [loginForm, setLoginForm] = useState(() => readSavedLogin() ?? { login: "", password: "" });
-  const [rememberPassword, setRememberPassword] = useState(() => Boolean(readSavedLogin()));
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [userRole, setUserRole] = useState<AppRole>("standard");
+  const [loginForm, setLoginForm] = useState({ login: "", password: "" });
+  const [rememberPassword, setRememberPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const didHydrate = useRef(false);
+  const [isDataReady, setIsDataReady] = useState(false);
   const isRemoteUpdate = useRef(false);
   const lastSyncedSnapshot = useRef<DataSnapshot | null>(null);
   const syncQueue = useRef(Promise.resolve());
   const pendingSyncs = useRef(0);
+  const latestDraft = useRef<DataSnapshot | null>(null);
+  const startupSnapshot = useRef<DataSnapshot>({
+    patients, professionals, procedures, services, inventory, gifts,
+    followup_rules: followUpRules, followup_contacts: followUpContacts, followup_logs: followUpLogs,
+    appointments, financial_entries: entries, revenues, fixed_costs: costs, receipts,
+    professional_receipts: professionalReceipts, monthly_goals: monthlyGoals
+  });
+  const cloudLoaded = useRef(false);
+  const [connectionRetry, setConnectionRetry] = useState(0);
+  const [storageError, setStorageError] = useState("");
+  const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState("");
   const [syncError, setSyncError] = useState(() => isSupabaseConfigured ? "" : "Supabase não configurado. Preencha NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local.");
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncRetry, setSyncRetry] = useState(0);
@@ -452,10 +474,19 @@ export default function Home() {
   const previousSummary = useMemo(() => summarizeMonth(revenues, costs, previousMonthKey), [revenues, costs, previousMonthKey]);
 
   function applyRemoteRecord(entity: string, eventType: string, recordId: string, data: unknown) {
+    if (!cloudLoaded.current || !snapshotEntities.includes(entity as typeof snapshotEntities[number])) return;
+    // A realtime echo or another browser must not erase an edit still waiting to be saved.
+    if (lastSyncedSnapshot.current && latestDraft.current && recordIsPending(lastSyncedSnapshot.current, latestDraft.current, entity as typeof snapshotEntities[number], recordId)) return;
     const remove = eventType === "DELETE";
     if (entity === "patients") setPatients((current) => applyRemoteList(current, recordId, data as Patient, remove));
     if (entity === "professionals") setProfessionals((current) => applyRemoteList(current, recordId, data as Professional, remove));
     if (entity === "procedures") setProcedures((current) => applyRemoteList(current, recordId, data as Procedure, remove));
+    if (entity === "services") setServices((current) => applyRemoteList(current, recordId, data as Service, remove));
+    if (entity === "gifts") setGifts((current) => applyRemoteList(current, recordId, data as GiftStockItem, remove));
+    if (entity === "inventory") setInventory((current) => applyRemoteList(current, recordId, data as InventoryItem, remove));
+    if (entity === "followup_rules") setFollowUpRules((current) => applyRemoteList(current, recordId, data as FollowUpRule, remove));
+    if (entity === "followup_contacts") setFollowUpContacts((current) => applyRemoteList(current, recordId, data as FollowUpContact, remove));
+    if (entity === "followup_logs") setFollowUpLogs((current) => applyRemoteList(current, recordId, data as FollowUpLog, remove));
     if (entity === "appointments") setAppointments((current) => applyRemoteList(current, recordId, data as Appointment, remove));
     if (entity === "financial_entries") setEntries((current) => applyRemoteList(current, recordId, data as FinancialEntry, remove));
     if (entity === "revenues") setRevenues((current) => applyRemoteList(current, recordId, data as RevenueEntry, remove));
@@ -471,6 +502,12 @@ export default function Home() {
       patients: entity === "patients" ? applyRemoteList(snapshot.patients, recordId, data as Patient, remove) : snapshot.patients,
       professionals: entity === "professionals" ? applyRemoteList(snapshot.professionals, recordId, data as Professional, remove) : snapshot.professionals,
       procedures: entity === "procedures" ? applyRemoteList(snapshot.procedures, recordId, data as Procedure, remove) : snapshot.procedures,
+      services: entity === "services" ? applyRemoteList(snapshot.services, recordId, data as Service, remove) : snapshot.services,
+      gifts: entity === "gifts" ? applyRemoteList(snapshot.gifts ?? [], recordId, data as GiftStockItem, remove) : snapshot.gifts,
+      inventory: entity === "inventory" ? applyRemoteList(snapshot.inventory, recordId, data as InventoryItem, remove) : snapshot.inventory,
+      followup_rules: entity === "followup_rules" ? applyRemoteList(snapshot.followup_rules ?? [], recordId, data as FollowUpRule, remove) : snapshot.followup_rules,
+      followup_contacts: entity === "followup_contacts" ? applyRemoteList(snapshot.followup_contacts ?? [], recordId, data as FollowUpContact, remove) : snapshot.followup_contacts,
+      followup_logs: entity === "followup_logs" ? applyRemoteList(snapshot.followup_logs ?? [], recordId, data as FollowUpLog, remove) : snapshot.followup_logs,
       appointments: entity === "appointments" ? applyRemoteList(snapshot.appointments, recordId, data as Appointment, remove) : snapshot.appointments,
       financial_entries: entity === "financial_entries" ? applyRemoteList(snapshot.financial_entries, recordId, data as FinancialEntry, remove) : snapshot.financial_entries,
       revenues: entity === "revenues" ? applyRemoteList(snapshot.revenues, recordId, data as RevenueEntry, remove) : snapshot.revenues,
@@ -481,9 +518,47 @@ export default function Home() {
     };
   }
 
+  const persistLocalDraft = useCallback((data: DataSnapshot) => {
+    try {
+      writeSnapshot(window.localStorage, data, lastSyncedSnapshot.current, userRole === "standard" ? "avvi.data.snapshot.standard.v1" : "avvi.data.snapshot.v1");
+      setStorageError("");
+    } catch {
+      setStorageError("Não foi possível guardar a cópia neste navegador. Libere espaço ou permita o armazenamento local. Confira a confirmação na nuvem antes de sair.");
+    }
+  }, [userRole]);
+
   useEffect(() => {
+    if (!isAuthenticated) return;
+    function restoreLocalData() {
+      const local = readLocalSnapshot(userRole);
+      const snapshot = local?.data;
+      if (isSupabaseConfigured && !lastSyncedSnapshot.current) {
+        // Also preserve edits made when the very first connection fails.
+        const initial = userRole === "admin" ? startupSnapshot.current : { ...startupSnapshot.current, financial_entries: [], revenues: [], receipts: [], professional_receipts: [], monthly_goals: [] };
+        lastSyncedSnapshot.current = local?.syncedData ?? local?.data ?? latestDraft.current ?? initial;
+      }
+      if (snapshot) {
+        setPatients(snapshot.patients);
+        setProfessionals(snapshot.professionals);
+        setProcedures(snapshot.procedures);
+        setAppointments(snapshot.appointments);
+        setEntries(snapshot.financial_entries);
+        setRevenues(snapshot.revenues);
+        setCosts(snapshot.fixed_costs);
+        setReceipts(snapshot.receipts);
+        setProfessionalReceipts(snapshot.professional_receipts);
+        setMonthlyGoals(snapshot.monthly_goals);
+      }
+      setServices(snapshot?.services ?? importedServices);
+      setInventory(snapshot?.inventory ?? []);
+      setGifts(snapshot?.gifts ?? []);
+      setFollowUpRules(snapshot?.followup_rules ?? []);
+      setFollowUpContacts(snapshot?.followup_contacts ?? []);
+      setFollowUpLogs(snapshot?.followup_logs ?? []);
+      setIsDataReady(true);
+    }
     if (!isSupabaseConfigured) {
-      didHydrate.current = true;
+      restoreLocalData();
       return;
     }
 
@@ -495,6 +570,12 @@ export default function Home() {
           dbPatientsState,
           dbProfessionalsState,
           dbProceduresState,
+          dbServicesState,
+          dbInventoryState,
+          dbGiftsState,
+          dbFollowUpRulesState,
+          dbFollowUpContactsState,
+          dbFollowUpLogsState,
           dbAppointmentsState,
           dbEntriesState,
           dbRevenuesState,
@@ -506,6 +587,12 @@ export default function Home() {
           selectEntityState("patients"),
           selectEntityState("professionals"),
           selectEntityState("procedures"),
+          selectEntityState("services"),
+          selectEntityState("inventory"),
+          selectEntityState("gifts"),
+          selectEntityState("followup_rules"),
+          selectEntityState("followup_contacts"),
+          selectEntityState("followup_logs"),
           selectEntityState("appointments"),
           selectEntityState("financial_entries"),
           selectEntityState("revenues"),
@@ -518,7 +605,9 @@ export default function Home() {
 
         const dbPatients = dbPatientsState.records;
         const dbProfessionals = dbProfessionalsState.records;
-        const dbProcedures = applyProcedureCostOverrides(dbProceduresState.records);
+        const dbProcedures = dbProceduresState.records;
+        const dbServices = dbServicesState.records;
+        const dbInventory = dbInventoryState.records;
         const dbAppointments = dbAppointmentsState.records;
         const dbEntries = dbEntriesState.records;
         const dbRevenues = dbRevenuesState.records;
@@ -536,47 +625,68 @@ export default function Home() {
         const initialCosts = mergeCosts(seedFixedCosts, importedCosts);
         const initialReceipts = seedReceipts;
         const initialGoals = [makeMonthlyGoal(todayKey().slice(0, 7), seedProfessionals)];
-        const isEmptyDatabase = !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
+        const isEmptyDatabase = !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbInventory.length && !dbGiftsState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
         const remoteSnapshot: DataSnapshot = {
-          patients: dbPatients.length ? dbPatients : initialPatients,
-          professionals: dbProfessionals.length ? dbProfessionals : initialProfessionals,
-          procedures: dbProceduresState.records.length ? dbProcedures : initialProcedures,
-          appointments: dbAppointments.length ? dbAppointments : initialAppointments,
-          financial_entries: dbEntries.length ? dbEntries : initialEntries,
-          revenues: dbRevenues.length ? dbRevenues : initialRevenues,
-          fixed_costs: dbCosts.length ? dbCosts : initialCosts,
-          receipts: dbReceipts.length ? dbReceipts : initialReceipts,
+          patients: isEmptyDatabase ? initialPatients : dbPatients,
+          professionals: isEmptyDatabase ? initialProfessionals : dbProfessionals,
+          procedures: isEmptyDatabase ? initialProcedures : dbProcedures,
+          services: dbServices,
+          inventory: dbInventory,
+          gifts: dbGiftsState.records,
+          followup_rules: dbFollowUpRulesState.records,
+          followup_contacts: dbFollowUpContactsState.records,
+          followup_logs: dbFollowUpLogsState.records,
+          appointments: isEmptyDatabase ? initialAppointments : dbAppointments,
+          financial_entries: isEmptyDatabase ? (userRole === "standard" ? [] : initialEntries) : dbEntries,
+          revenues: userRole === "standard" ? [] : isEmptyDatabase ? initialRevenues : dbRevenues,
+          fixed_costs: isEmptyDatabase ? initialCosts : dbCosts,
+          receipts: userRole === "standard" ? [] : isEmptyDatabase ? initialReceipts : dbReceipts,
           professional_receipts: dbProfessionalReceipts,
-          monthly_goals: dbGoals.length ? dbGoals : initialGoals
+          monthly_goals: userRole === "standard" ? [] : isEmptyDatabase ? initialGoals : dbGoals
         };
-        const latestRemoteUpdate = [
-          dbPatientsState.latestUpdatedAt,
-          dbProfessionalsState.latestUpdatedAt,
-          dbProceduresState.latestUpdatedAt,
-          dbAppointmentsState.latestUpdatedAt,
-          dbEntriesState.latestUpdatedAt,
-          dbRevenuesState.latestUpdatedAt,
-          dbCostsState.latestUpdatedAt,
-          dbReceiptsState.latestUpdatedAt,
-          dbProfessionalReceiptsState.latestUpdatedAt,
-          dbGoalsState.latestUpdatedAt
-        ].filter(Boolean).sort().at(-1) ?? "";
-        const savedLocalSnapshot = readLocalSnapshot();
+        const savedLocalSnapshot = readLocalSnapshot(userRole);
         const localSnapshot = savedLocalSnapshot ? {
           ...savedLocalSnapshot,
           data: {
             ...savedLocalSnapshot.data,
-            procedures: applyProcedureCostOverrides(savedLocalSnapshot.data.procedures)
+            procedures: savedLocalSnapshot.data.procedures,
+            services: savedLocalSnapshot.data.services ?? importedServices,
+            inventory: savedLocalSnapshot.data.inventory ?? [],
+            gifts: savedLocalSnapshot.data.gifts ?? [],
+            followup_rules: savedLocalSnapshot.data.followup_rules ?? [],
+            followup_contacts: savedLocalSnapshot.data.followup_contacts ?? [],
+            followup_logs: savedLocalSnapshot.data.followup_logs ?? []
           }
         } : null;
-        const shouldUseLocalSnapshot = Boolean(localSnapshot?.savedAt && !latestRemoteUpdate);
-        const hydratedSnapshot = shouldUseLocalSnapshot ? localSnapshot!.data : remoteSnapshot;
+        const recoveredSnapshot = localSnapshot?.syncedData
+          ? recoverPendingChanges(remoteSnapshot, localSnapshot.syncedData, localSnapshot.data)
+          : isEmptyDatabase && localSnapshot ? localSnapshot.data : remoteSnapshot;
+        const hydratedSnapshot: DataSnapshot = {
+          ...recoveredSnapshot,
+          services: recoveredSnapshot.services.length || localSnapshot?.syncedData ? recoveredSnapshot.services : importedServices
+        };
 
         isRemoteUpdate.current = true;
-        lastSyncedSnapshot.current = shouldUseLocalSnapshot ? remoteSnapshot : hydratedSnapshot;
+        cloudLoaded.current = true;
+        // Compare against actual stored rows, including genuinely empty categories.
+        lastSyncedSnapshot.current = {
+          patients: dbPatients, professionals: dbProfessionals, procedures: dbProceduresState.records,
+          services: dbServices, inventory: dbInventory, gifts: dbGiftsState.records,
+          followup_rules: dbFollowUpRulesState.records, followup_contacts: dbFollowUpContactsState.records,
+          followup_logs: dbFollowUpLogsState.records, appointments: dbAppointments,
+          financial_entries: dbEntries, revenues: dbRevenues, fixed_costs: dbCosts,
+          receipts: dbReceipts, professional_receipts: dbProfessionalReceipts, monthly_goals: dbGoals
+        };
+        latestDraft.current = hydratedSnapshot;
         setPatients(hydratedSnapshot.patients);
         setProfessionals(hydratedSnapshot.professionals);
         setProcedures(hydratedSnapshot.procedures);
+        setServices(hydratedSnapshot.services);
+        setInventory(hydratedSnapshot.inventory);
+        setGifts(hydratedSnapshot.gifts ?? []);
+        setFollowUpRules(hydratedSnapshot.followup_rules);
+        setFollowUpContacts(hydratedSnapshot.followup_contacts);
+        setFollowUpLogs(hydratedSnapshot.followup_logs);
         setAppointments(hydratedSnapshot.appointments);
         setEntries(hydratedSnapshot.financial_entries);
         setRevenues(hydratedSnapshot.revenues);
@@ -584,43 +694,17 @@ export default function Home() {
         setReceipts(hydratedSnapshot.receipts);
         setProfessionalReceipts(hydratedSnapshot.professional_receipts);
         setMonthlyGoals(hydratedSnapshot.monthly_goals);
-        window.setTimeout(() => {
-          isRemoteUpdate.current = false;
-          didHydrate.current = true;
-        }, 0);
 
-        if (isEmptyDatabase) {
-          await syncEntity("patients", initialPatients);
-          await syncEntity("professionals", initialProfessionals);
-          await syncEntity("procedures", initialProcedures);
-          await syncEntity("appointments", initialAppointments);
-          await syncEntity("financial_entries", initialEntries);
-          await syncEntity("revenues", initialRevenues);
-          await syncEntity("fixed_costs", initialCosts);
-          await syncEntity("receipts", initialReceipts);
-          await syncEntity("professional_receipts", []);
-          await syncEntity("monthly_goals", initialGoals);
-        }
-        if (dbProceduresState.records.length) {
-          await syncEntityDiff("procedures", dbProceduresState.records, dbProcedures);
-        }
-        if (shouldUseLocalSnapshot) {
-          await syncEntityDiff("patients", remoteSnapshot.patients, hydratedSnapshot.patients);
-          await syncEntityDiff("professionals", remoteSnapshot.professionals, hydratedSnapshot.professionals);
-          await syncEntityDiff("procedures", remoteSnapshot.procedures, hydratedSnapshot.procedures);
-          await syncEntityDiff("appointments", remoteSnapshot.appointments, hydratedSnapshot.appointments);
-          await syncEntityDiff("financial_entries", remoteSnapshot.financial_entries, hydratedSnapshot.financial_entries);
-          await syncEntityDiff("revenues", remoteSnapshot.revenues, hydratedSnapshot.revenues);
-          await syncEntityDiff("fixed_costs", remoteSnapshot.fixed_costs, hydratedSnapshot.fixed_costs);
-          await syncEntityDiff("receipts", remoteSnapshot.receipts, hydratedSnapshot.receipts);
-          await syncEntityDiff("professional_receipts", remoteSnapshot.professional_receipts, hydratedSnapshot.professional_receipts);
-          await syncEntityDiff("monthly_goals", remoteSnapshot.monthly_goals, hydratedSnapshot.monthly_goals);
-          lastSyncedSnapshot.current = hydratedSnapshot;
-        }
-        writeLocalSnapshot(hydratedSnapshot);
+        if (cancelled) return;
+        persistLocalDraft(hydratedSnapshot);
+        isRemoteUpdate.current = false;
+        setIsDataReady(true);
         setSyncError("");
       } catch (error) {
-        didHydrate.current = true;
+        if (cancelled) return;
+        cloudLoaded.current = false;
+        isRemoteUpdate.current = false;
+        restoreLocalData();
         const message = appDataTableMissing(error)
           ? "Tabela avvi_records não encontrada no Supabase. Execute supabase/schema.sql no SQL Editor."
           : `Erro ao conectar ao Supabase: ${(error as Error).message}`;
@@ -630,28 +714,34 @@ export default function Home() {
 
     hydrateFromSupabase();
 
-    const channel = supabase?.channel("avvi-records-sync")
+    const channel = userRole === "admin" && !isProtectedDatabase ? supabase?.channel("avvi-records-sync")
       .on("postgres_changes", { event: "*", schema: "public", table: "avvi_records" }, (payload) => {
         const row = (payload.eventType === "DELETE" ? payload.old : payload.new) as { entity?: string; record_id?: string; data?: unknown };
         if (!row?.entity) return;
-        isRemoteUpdate.current = true;
         applyRemoteRecord(row.entity, payload.eventType, String(row.record_id), row.data);
-        window.setTimeout(() => { isRemoteUpdate.current = false; }, 0);
       })
-      .subscribe();
+      .subscribe() : undefined;
 
     return () => {
       cancelled = true;
       if (channel) supabase?.removeChannel(channel);
     };
-  }, []);
+  // Hydration reads the database again only after a failed connection.
+  }, [connectionRetry, isAuthenticated, userRole, persistLocalDraft]);
+
 
   useEffect(() => {
-    if (!didHydrate.current || isRemoteUpdate.current || !isSupabaseConfigured) return;
+    if (!isAuthenticated || !isDataReady || isRemoteUpdate.current) return;
     const next: DataSnapshot = {
       patients,
       professionals,
       procedures,
+      services,
+      inventory,
+      gifts,
+      followup_rules: followUpRules,
+      followup_contacts: followUpContacts,
+      followup_logs: followUpLogs,
       appointments,
       financial_entries: entries,
       revenues,
@@ -660,115 +750,130 @@ export default function Home() {
       professional_receipts: professionalReceipts,
       monthly_goals: monthlyGoals
     };
-    if (!lastSyncedSnapshot.current) {
-      lastSyncedSnapshot.current = next;
-      writeLocalSnapshot(next);
-      return;
-    }
+    latestDraft.current = next;
+    persistLocalDraft(next);
+    if (!isSupabaseConfigured) return;
+    const previous = lastSyncedSnapshot.current;
+    const pending = !previous || hasSnapshotChanges(previous, next);
+    setHasPendingChanges(pending);
+    if (!cloudLoaded.current || !previous || !pending) return;
 
     pendingSyncs.current += 1;
     setIsSyncing(true);
     syncQueue.current = syncQueue.current
       .catch(() => undefined)
       .then(async () => {
-        const previous = lastSyncedSnapshot.current;
-        if (!previous) return;
-        await syncEntityDiff("patients", previous.patients, next.patients);
-        await syncEntityDiff("professionals", previous.professionals, next.professionals);
-        await syncEntityDiff("procedures", previous.procedures, next.procedures);
-        await syncEntityDiff("appointments", previous.appointments, next.appointments);
-        await syncEntityDiff("financial_entries", previous.financial_entries, next.financial_entries);
-        await syncEntityDiff("revenues", previous.revenues, next.revenues);
-        await syncEntityDiff("fixed_costs", previous.fixed_costs, next.fixed_costs);
-        await syncEntityDiff("receipts", previous.receipts, next.receipts);
-        await syncEntityDiff("professional_receipts", previous.professional_receipts, next.professional_receipts);
-        await syncEntityDiff("monthly_goals", previous.monthly_goals, next.monthly_goals);
-        lastSyncedSnapshot.current = next;
-        writeLocalSnapshot(next);
+        const baseline = lastSyncedSnapshot.current;
+        const draft = latestDraft.current;
+        if (!baseline || !draft) return;
+        if (hasSnapshotChanges(baseline, draft)) {
+          await syncEntityDiffs(snapshotChanges(baseline, draft));
+          lastSyncedSnapshot.current = draft;
+          setLastSavedAt(new Date().toISOString());
+        }
+        const latest = latestDraft.current ?? draft;
+        persistLocalDraft(latest);
+        setHasPendingChanges(hasSnapshotChanges(lastSyncedSnapshot.current!, latest));
         setSyncError("");
       })
       .catch((error) => {
-        setSyncError(`Erro ao salvar no Supabase: ${(error as Error).message}`);
+        setHasPendingChanges(true);
+        setSyncError(`Alterações pendentes: não foi possível salvar no Supabase. ${(error as Error).message}`);
       })
       .finally(() => {
         pendingSyncs.current -= 1;
         setIsSyncing(pendingSyncs.current > 0);
       });
-  }, [patients, professionals, procedures, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry]);
+  }, [patients, professionals, procedures, services, inventory, gifts, followUpRules, followUpContacts, followUpLogs, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
+
+  function retrySaving() {
+    if (cloudLoaded.current) setSyncRetry((current) => current + 1);
+    else setConnectionRetry((current) => current + 1);
+  }
+  useEffect(() => {
+    if (!isSupabaseConfigured || isSyncing || (!syncError && !hasPendingChanges)) return;
+    const retry = () => {
+      if (cloudLoaded.current) setSyncRetry((current) => current + 1);
+      else setConnectionRetry((current) => current + 1);
+    };
+    const timer = window.setTimeout(retry, 15000);
+    window.addEventListener("online", retry);
+    return () => { window.clearTimeout(timer); window.removeEventListener("online", retry); };
+  }, [syncError, hasPendingChanges, isSyncing, syncRetry, connectionRetry]);
 
   useEffect(() => {
-    if (!isSyncing) return;
+    if (!isSyncing && !hasPendingChanges && !storageError) return;
     const warnBeforeClose = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", warnBeforeClose);
     return () => window.removeEventListener("beforeunload", warnBeforeClose);
-  }, [isSyncing]);
+  }, [isSyncing, hasPendingChanges, storageError]);
 
+  function acceptUser(user: AppUser) {
+    setDatabaseAccess(user.role);
+    setUserRole(user.role);
+    setIsDataReady(false); setHasPendingChanges(false); setStorageError(""); setLastSavedAt("");
+    lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
+    setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
+    setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
+    setPatients(startupSnapshot.current.patients); setProfessionals(startupSnapshot.current.professionals);
+    setProcedures(startupSnapshot.current.procedures); setServices(startupSnapshot.current.services);
+    setInventory([]); setGifts([]); setAppointments(startupSnapshot.current.appointments); setCosts(startupSnapshot.current.fixed_costs);
+    setFollowUpRules([]); setFollowUpContacts([]); setFollowUpLogs([]);
+    setActiveTab("Agenda"); setIsAuthenticated(true);
+  }
   useEffect(() => {
-    if (!supabase) return;
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setIsAuthenticated(true);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      setIsAuthenticated(Boolean(session));
-    });
-    return () => data.subscription.unsubscribe();
+    let active = true;
+    const timer = window.setTimeout(() => {
+      const savedLogin = readSavedLogin();
+      if (savedLogin) { setLoginForm(savedLogin); setRememberPassword(true); }
+    }, 0);
+    fetch("/api/access", { cache: "no-store" }).then((response) => response.json()).then((data) => {
+      if (active && data.user) acceptUser(data.user);
+    }).catch(() => undefined);
+    return () => { active = false; window.clearTimeout(timer); };
   }, []);
 
   async function handleLogin() {
-    if (loginForm.login.trim().toLowerCase() === "admin" && loginForm.password === "avvi2025@") {
-      setIsAuthenticated(true);
-      window.sessionStorage.setItem("avvi.session", "active");
-      if (rememberPassword) {
-        window.localStorage.setItem(savedLoginKey, JSON.stringify(loginForm));
-      } else {
-        window.localStorage.removeItem(savedLoginKey);
-      }
-      setLoginError("");
-      return;
-    }
-    if (supabase) {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: loginForm.login.trim(),
-        password: loginForm.password
-      });
-      if (!error) {
-        setIsAuthenticated(true);
-        window.sessionStorage.setItem("avvi.session", "active");
-        if (rememberPassword) {
-          window.localStorage.setItem(savedLoginKey, JSON.stringify(loginForm));
-        } else {
-          window.localStorage.removeItem(savedLoginKey);
-        }
-        setLoginError("");
-        return;
-      }
-      setLoginError(error.message);
-      return;
-    }
-    setLoginError("Login ou senha inválidos.");
-  }
-
-  async function handleLogout() {
-    if (supabase) {
-      await supabase.auth.signOut();
-    }
-    window.sessionStorage.removeItem("avvi.session");
-    setIsAuthenticated(false);
-    setLoginForm(rememberPassword ? loginForm : { login: "", password: "" });
     setLoginError("");
-    setActiveTab("Agenda");
+    try {
+      const response = await fetch("/api/access", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(loginForm) });
+      const data = await response.json();
+      if (!response.ok || !data.user) { setLoginError(data.error ?? "Login ou senha inválidos."); return; }
+      acceptUser(data.user);
+      // Only the two explicitly configured accounts receive access. Browser flags do not grant roles.
+      window.sessionStorage.removeItem("avvi.session");
+      if (rememberPassword) window.localStorage.setItem(savedLoginKey, JSON.stringify(loginForm));
+      else window.localStorage.removeItem(savedLoginKey);
+    } catch { setLoginError("Não foi possível acessar o servidor. Tente novamente."); }
   }
+  async function handleLogout() {
+    if (isSyncing) return;
+    const response = await fetch("/api/access", { method: "DELETE" });
+    if (!response.ok) return;
+    if (supabase) await supabase.auth.signOut();
+    window.sessionStorage.removeItem("avvi.session");
+    setIsAuthenticated(false); setIsDataReady(false); setUserRole("standard"); setDatabaseAccess("standard");
+    lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
+    setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
+    setSelectedSlot(null); setSelectedAppointmentId(null); setCheckoutDraft(null); setAccountSummary(null);
+    setLoginForm(rememberPassword ? loginForm : { login: "", password: "" });
+    setLoginError(""); setActiveTab("Agenda");
+  }
+  const availableTabs = tabs.filter((tab) => canAccessTab(userRole, tab.id));
+  function changeTab(tab: Tab) { if (canAccessTab(userRole, tab)) setActiveTab(tab); }
 
   function openSlot(hour: number, professionalId: string) {
+    setAppointmentError("");
     setSelectedAppointmentId(null);
     setSelectedSlot({ hour, professionalId });
     setAppointmentForm(makeAppointmentForm(professionalId, selectedDate, hour));
   }
 
   function openAppointment(appointmentId: string) {
+    setAppointmentError("");
     const appointment = appointments.find((item) => item.id === appointmentId);
     if (!appointment) return;
     const startsAt = parseISO(appointment.startsAt);
@@ -784,6 +889,12 @@ export default function Home() {
       birthDate: patient?.birthDate ?? "",
       patientNotes: patient?.notes ?? "",
       procedureId: appointment.procedureId ?? "",
+      serviceId: appointmentServices(appointment, services)[0]?.serviceId ?? "",
+      servicePrice: appointmentServices(appointment, services)[0]?.price,
+      servicePriceType: appointmentServices(appointment, services)[0]?.priceType,
+      additionalServices: appointmentServices(appointment, services).slice(1),
+      minute: format(startsAt, "mm"),
+      durationMinutes: Math.max(1, Math.round((parseISO(appointment.endsAt).getTime() - startsAt.getTime()) / 60000)) || 60,
       status: appointment.status,
       eventType: appointment.eventType,
       notes: appointment.notes
@@ -791,6 +902,14 @@ export default function Home() {
   }
 
   function saveAppointment() {
+    if (!appointmentForm.professionalId || !appointmentForm.date || !Number.isInteger(appointmentForm.durationMinutes) || appointmentForm.durationMinutes <= 0) return;
+    const selectedService = services.find((service) => service.id === appointmentForm.serviceId);
+    if (appointmentForm.serviceId && !selectedService) return;
+    if (appointmentForm.additionalServices.some((item) => item.serviceId && !services.some((service) => service.id === item.serviceId))) return;
+    const scheduledServices: AppointmentService[] = [
+      ...(selectedService ? [{ id: appointments.find((item) => item.id === selectedAppointmentId)?.services?.[0]?.id ?? (selectedAppointmentId ? `scheduled-${selectedAppointmentId}` : id("scheduled-service")), serviceId: selectedService.id, name: selectedService.name, price: appointmentForm.servicePrice ?? selectedService.price, priceType: appointmentForm.servicePriceType ?? selectedService.priceType, durationMinutes: selectedService.durationMinutes }] : []),
+      ...appointmentForm.additionalServices.filter((item) => item.serviceId).map((item) => ({ ...item, name: services.find((service) => service.id === item.serviceId)!.name }))
+    ];
     let patientId = appointmentForm.patientId;
     if (!patientId && appointmentForm.patientName.trim()) {
       const created: Patient = {
@@ -810,13 +929,22 @@ export default function Home() {
       setPatients((current) => [...current, created]);
       patientId = created.id;
     }
-    const startsAt = `${appointmentForm.date}T${appointmentForm.hour.padStart(2, "0")}:00:00`;
-    const endsAt = `${appointmentForm.date}T${String(Number(appointmentForm.hour) + 1).padStart(2, "0")}:00:00`;
+    const startsAt = `${appointmentForm.date}T${appointmentForm.hour.padStart(2, "0")}:${appointmentForm.minute}:00`;
+    const endsAt = format(addMinutes(parseISO(startsAt), appointmentForm.durationMinutes), "yyyy-MM-dd'T'HH:mm:ss");
     const created: Appointment = {
       id: selectedAppointmentId || id("appointment"),
       patientId,
       professionalId: appointmentForm.professionalId,
-      procedureId: appointmentForm.procedureId || undefined,
+      procedureId: scheduledServices.length ? undefined : appointmentForm.procedureId || undefined,
+      services: scheduledServices,
+      serviceId: scheduledServices[0]?.serviceId,
+      servicePrice: scheduledServices[0]?.price,
+      servicePriceType: scheduledServices[0]?.priceType,
+      financialEntryId: appointments.find((appointment) => appointment.id === selectedAppointmentId)?.financialEntryId,
+      closedAccount: appointments.find((appointment) => appointment.id === selectedAppointmentId)?.closedAccount,
+      accountClosed: appointments.find((appointment) => appointment.id === selectedAppointmentId)?.accountClosed,
+      stockConsumption: appointments.find((appointment) => appointment.id === selectedAppointmentId)?.stockConsumption,
+      giftConsumption: appointments.find((appointment) => appointment.id === selectedAppointmentId)?.giftConsumption,
       startsAt,
       endsAt,
       status: appointmentForm.status,
@@ -824,35 +952,141 @@ export default function Home() {
       notes: appointmentForm.notes
     };
     setAppointments((current) => selectedAppointmentId ? current.map((appointment) => appointment.id === selectedAppointmentId ? created : appointment) : [...current, created]);
-    if (appointmentForm.status === "Finalizado") {
-      const procedure = procedures.find((item) => item.id === appointmentForm.procedureId);
-      const financial = {
-        ...makeEntryForm(),
-        appointmentId: created.id,
-        patientId: patientId || "",
-        professionalId: appointmentForm.professionalId,
-        procedureId: appointmentForm.procedureId,
-        servicePrice: procedure?.price ?? 0,
-        productCost: procedure?.averageCost ?? 0,
-        professionalPercent: 70,
-        patientName: patientName(patientId),
-        procedureLines: [{
-          id: id("line"),
-          procedureId: appointmentForm.procedureId,
-          manualProcedure: "",
-          quantity: 1,
-          servicePrice: procedure?.price ?? 0,
-          productCost: procedure?.averageCost ?? 0,
-          professionalPercent: 70
-        }],
-        payments: [{ ...blankPayment, id: id("payment"), amount: procedure?.price ?? 0 }],
-        date: appointmentForm.date
-      };
-      setEntryForm(financial);
-      setActiveTab("Lançamento de Procedimentos");
+    setSelectedSlot(null);
+    setSelectedAppointmentId(null);
+    return created;
+  }
+
+  function openCheckout() {
+    if (!appointmentForm.patientId && !appointmentForm.patientName.trim()) {
+      setAppointmentError("Selecione um paciente ou informe o nome antes de fechar a conta.");
+      return;
+    }
+    const appointment = saveAppointment();
+    if (!appointment) return;
+    setCheckoutDraft(makeCheckoutDraft(appointment, true));
+  }
+
+  function makeCheckoutDraft(appointment: Appointment, useAppointmentForm = false): CheckoutDraft {
+    const service = services.find((item) => item.id === appointment.serviceId);
+    const procedure = procedures.find((item) => item.id === appointment.procedureId || (service && serviceKey(item.name) === serviceKey(service.name)));
+    const existing = appointment.closedAccount ?? entries.find((entry) => !entry.sourceAccountId && entry.accountClosed && (entry.id === appointment.financialEntryId || entry.appointmentId === appointment.id));
+    const patient = patients.find((item) => item.id === appointment.patientId);
+    const client: Patient = patient ?? { id: appointment.patientId ?? "", name: useAppointmentForm ? appointmentForm.patientName : "Paciente não encontrado", phone: useAppointmentForm ? appointmentForm.phone : "", cpf: useAppointmentForm ? appointmentForm.cpf : "", birthDate: useAppointmentForm ? appointmentForm.birthDate : "", registrationDate: todayKey(), notes: useAppointmentForm ? appointmentForm.patientNotes : "" };
+    const scheduledServices = appointmentServices(appointment, services);
+    const percent = professionals.find((item) => item.id === appointment.professionalId)?.commissionPercent ?? 0;
+    const initialLines: ProcedureLine[] = scheduledServices.length ? scheduledServices.map((item) => ({ id: id("line"), serviceId: item.serviceId, manualProcedure: item.name, quantity: 1, servicePrice: item.price, productCost: 0, professionalPercent: percent, discount: 0 })) : service || procedure ? [{ id: id("line"), serviceId: service?.id,
+      manualProcedure: service?.name ?? procedure?.name ?? "", quantity: 1,
+      servicePrice: appointment.servicePrice ?? procedure?.price ?? 0, productCost: 0,
+      professionalPercent: professionals.find((item) => item.id === appointment.professionalId)?.commissionPercent ?? 0, discount: 0 }] : [];
+    const existingLines = existing?.procedureLines?.length ? existing.procedureLines : existing ? [entryToLine(existing)] : initialLines;
+    const restoredItems = existing ? restoreCheckoutItems(existingLines, existing.products, procedures, services) : { lines: initialLines, products: [] };
+    return { appointment, client: { ...client }, professional: professionals.find((item) => item.id === appointment.professionalId),
+      lines: distributeCheckoutDiscount(restoredItems.lines, existing?.commercialDiscount ?? 0), products: restoredItems.products, gifts: appointment.closedAccount?.gifts?.map((gift) => ({ ...gift })) ?? [],
+      payments: existing?.payments.map((payment) => ({ ...payment })) ?? [], entryId: existing?.id,
+      discountSplit: existing?.discountSplit ?? "Empresa e profissional dividem", notes: existing?.notes ?? appointment.notes,
+      previousFutureCredit: futureCreditUsed(existing) };
+  }
+
+  function openAccountFromAgenda(appointmentId: string) {
+    const appointment = appointments.find((item) => item.id === appointmentId);
+    if (!appointment) return;
+    if (!appointment.patientId) {
+      openAppointment(appointmentId);
+      setAppointmentError("Selecione um paciente antes de fechar a conta.");
+      return;
     }
     setSelectedSlot(null);
     setSelectedAppointmentId(null);
+    setCheckoutDraft(makeCheckoutDraft(appointment));
+  }
+
+  function viewClosedAccount(appointmentId: string) {
+    const appointment = appointments.find((item) => item.id === appointmentId);
+    if (!appointment) return;
+    setAccountSummary({ draft: makeCheckoutDraft(appointment), closedAt: appointment.closedAccount?.closedAt,
+      change: appointment.closedAccount?.change ?? 0 });
+  }
+
+  function updateAgendaStatus(appointmentId: string, status: "Confirmado" | "Cancelado") {
+    setAppointments((current) => current.map((appointment) => appointment.id === appointmentId ? { ...appointment, status } : appointment));
+  }
+
+  function finishCheckout(result: CheckoutResult) {
+    if (!checkoutDraft || !result.products.length) return;
+    const currentAppointment = appointments.find((appointment) => appointment.id === checkoutDraft.appointment.id);
+    if (!currentAppointment?.patientId) return;
+    const previousAccount = currentAppointment.closedAccount ?? entries.find((entry) => !entry.sourceAccountId && entry.accountClosed && entry.id === checkoutDraft.entryId);
+    const accountId = previousAccount?.id ?? id("account");
+    const professional = professionals.find((item) => item.id === currentAppointment.professionalId);
+    const first = result.lines[0];
+    const account: ClosedAccount = {
+      id: accountId, appointmentId: currentAppointment.id, patientId: currentAppointment.patientId,
+      professionalId: currentAppointment.professionalId, accountClosed: true, balanceDue: result.balanceDue,
+      closedAt: new Date().toISOString(), change: result.change,
+      procedureLines: result.lines.map((line) => ({ ...line })), products: result.products.map((product) => ({ ...product })), gifts: result.gifts.map((gift) => ({ ...gift })),
+      procedureId: undefined, manualProcedure: first?.manualProcedure, quantity: first?.quantity ?? 1,
+      servicePrice: first?.servicePrice ?? 0, productCost: 0, machineFee: 0,
+      commercialDiscount: result.discount, discountSplit: checkoutDraft.discountSplit,
+      professionalPercent: professional?.commissionPercent ?? 0,
+      date: currentAppointment.startsAt.slice(0, 10), notes: checkoutDraft.notes,
+      payments: result.payments.map((payment) => ({ ...payment, discount: 0,
+        fee: payment.method === "Crédito" ? calculateCardFee(payment.amount, payment.cardBrand, payment.installments)
+          : payment.method === "Débito" ? calculateDebitFee(payment.amount) : 0 }))
+    };
+    // Generate once. Editing either record afterward never overwrites the other.
+    const generated = entries.find((entry) => entry.sourceAccountId === accountId);
+    const procedureEntry = generated ?? procedureEntryFromAccount(account, procedures, professional);
+    account.generatedEntryId = procedureEntry?.id;
+    const legacyEntryId = !currentAppointment.closedAccount ? previousAccount?.id : undefined;
+    setEntries((current) => {
+      const preserved = current.filter((entry) => entry.id !== legacyEntryId);
+      return procedureEntry && !preserved.some((entry) => entry.id === procedureEntry.id) ? [procedureEntry, ...preserved] : preserved;
+    });
+    const stockUpdate = applyCheckoutInventory(inventory, currentAppointment.stockConsumption, result.products);
+    setInventory(stockUpdate.inventory);
+    const giftUpdate = applyCheckoutGifts(gifts, currentAppointment.giftConsumption ?? currentAppointment.closedAccount?.gifts, result.gifts);
+    setGifts(giftUpdate.gifts);
+    const creditAdjustments = new Map<string, number>();
+    if (previousAccount) creditAdjustments.set(previousAccount.patientId, futureCreditUsed(previousAccount));
+    creditAdjustments.set(account.patientId, (creditAdjustments.get(account.patientId) ?? 0) - futureCreditUsed(account));
+    setPatients((current) => current.map((patient) => {
+      const adjustment = creditAdjustments.get(patient.id) ?? 0;
+      if (patient.id !== account.patientId && !adjustment) return patient;
+      return { ...patient,
+        ...(patient.id === account.patientId ? { name: result.client.name.trim(), phone: result.client.phone, email: result.client.email } : {}),
+        futureCredit: Math.max(0, (Number(patient.futureCredit) || 0) + adjustment) };
+    }));
+    const revenue = makeRevenueFromFinancialEntry(account, result.client.name);
+    const fee = makeMachineFeeCost(account, result.client.name);
+    setRevenues((current) => [revenue, ...current.filter((item) => item.sourceFinancialEntryId !== accountId)]);
+    setCosts((current) => { const preserved = current.filter((item) => item.sourceFinancialEntryId !== accountId); return fee ? [fee, ...preserved] : preserved; });
+    setAppointments((current) => current.map((appointment) => appointment.id === currentAppointment.id
+      ? { ...appointment, status: "Finalizado", financialEntryId: procedureEntry?.id, closedAccount: account,
+        accountClosed: true, stockConsumption: stockUpdate.consumption, giftConsumption: giftUpdate.consumption } : appointment));
+    setCheckoutDraft(null);
+    setActiveTab("Agenda");
+  }
+
+  function deleteClosedAccount(appointmentId: string) {
+    const appointment = appointments.find((item) => item.id === appointmentId);
+    if (!appointment?.accountClosed) return;
+    const account = appointment.closedAccount ?? entries.find((entry) => entry.accountClosed && entry.id === appointment.financialEntryId);
+    const linked = entries.filter((entry) => account ? entry.sourceAccountId === account.id || entry.id === account.id || entry.id === appointment.closedAccount?.generatedEntryId : entry.id === appointment.financialEntryId);
+    const removedIds = new Set(linked.map((entry) => entry.id));
+    if (account) removedIds.add(account.id);
+    setEntries((current) => current.filter((entry) => !removedIds.has(entry.id)));
+    setRevenues((current) => current.filter((revenue) => !removedIds.has(revenue.sourceFinancialEntryId ?? "")));
+    setCosts((current) => current.filter((cost) => !removedIds.has(cost.sourceFinancialEntryId ?? "")));
+    const consumed = appointment.stockConsumption ?? account?.products ?? [];
+    setInventory(applyCheckoutInventory(inventory, consumed, []).inventory);
+    setGifts(applyCheckoutGifts(gifts, appointment.giftConsumption ?? appointment.closedAccount?.gifts, []).gifts);
+    const credit = futureCreditUsed(account) + linked.filter((entry) => !entry.sourceAccountId && entry.id !== account?.id).reduce((sum, entry) => sum + futureCreditUsed(entry), 0);
+    if (credit) setPatients((current) => current.map((patient) => patient.id === (account?.patientId ?? appointment.patientId) ? { ...patient, futureCredit: (Number(patient.futureCredit) || 0) + credit } : patient));
+    setAppointments((current) => current.map((item) => item.id === appointment.id
+      ? { ...item, status: "Agendado", accountClosed: false, closedAccount: undefined, financialEntryId: undefined, stockConsumption: [], giftConsumption: [] } : item));
+    setAppointmentForm((current) => ({ ...current, status: "Agendado" }));
+    setCheckoutDraft(null);
   }
 
   function deleteSelectedAppointment() {
@@ -900,6 +1134,10 @@ export default function Home() {
     const created: FinancialEntry = {
       id: source.id || id("entry"),
       appointmentId: source.appointmentId,
+      sourceAccountId: source.sourceAccountId,
+      accountClosed: source.accountClosed,
+      products: source.products?.map((product) => ({ ...product })),
+      balanceDue: source.accountClosed ? Math.max(0, Math.round((calculateEntry(source).grossRevenue - (Number(source.commercialDiscount) || 0) - legacyPaymentDiscount - normalizedPayments.reduce((sum, payment) => sum + payment.amount, 0)) * 100) / 100) : source.balanceDue,
       patientId,
       professionalId: source.professionalId,
       procedureId: source.procedureLines[0]?.procedureId || source.procedureId || undefined,
@@ -921,33 +1159,35 @@ export default function Home() {
       })),
       date: source.date,
       notes: source.notes,
-      payments: normalizedPayments.length ? normalizedPayments : [{ ...blankPayment, id: id("payment"), amount: Number(source.servicePrice) || 0 }]
+      payments: source.accountClosed ? normalizedPayments : normalizedPayments.length ? normalizedPayments : [{ ...blankPayment, id: id("payment"), amount: Number(source.servicePrice) || 0 }]
     };
     const previousEntry = entries.find((entry) => entry.id === source.id);
     const adjustments = new Map<string, number>();
-    if (previousEntry) adjustments.set(previousEntry.patientId, futureCreditUsed(previousEntry));
-    adjustments.set(patientId, (adjustments.get(patientId) ?? 0) - futureCreditUsed(created));
+    if (previousEntry && !previousEntry.sourceAccountId) adjustments.set(previousEntry.patientId, futureCreditUsed(previousEntry));
+    if (!created.sourceAccountId) adjustments.set(patientId, (adjustments.get(patientId) ?? 0) - futureCreditUsed(created));
     if (adjustments.size) {
       setPatients((current) => current.map((patient) => {
         const adjustment = adjustments.get(patient.id) ?? 0;
         return adjustment ? { ...patient, futureCredit: Math.max(0, Number(patient.futureCredit) + adjustment) } : patient;
       }));
     }
-    const resolvedPatientName = patients.find((patient) => patient.id === patientId)?.name ?? source.patientName;
+    const resolvedPatientName = source.patientName.trim() || patients.find((patient) => patient.id === patientId)?.name || "";
     const linkedRevenue = makeRevenueFromFinancialEntry(created, resolvedPatientName);
     const linkedMachineFeeCost = makeMachineFeeCost(created, resolvedPatientName);
-    setRevenues((current) => [linkedRevenue, ...current.filter((revenue) => revenue.sourceFinancialEntryId !== created.id)]);
+    // The account already records the actual payment; its procedure ledger must not duplicate it.
+    if (!created.sourceAccountId) setRevenues((current) => [linkedRevenue, ...current.filter((revenue) => revenue.sourceFinancialEntryId !== created.id)]);
     setCosts((current) => {
       const withoutCurrentFee = current.filter((cost) => cost.sourceFinancialEntryId !== created.id);
-      return linkedMachineFeeCost ? [linkedMachineFeeCost, ...withoutCurrentFee] : withoutCurrentFee;
+      return !created.sourceAccountId && linkedMachineFeeCost ? [linkedMachineFeeCost, ...withoutCurrentFee] : withoutCurrentFee;
     });
     setEntries((current) => source.id ? current.map((entry) => entry.id === source.id ? created : entry) : [created, ...current]);
     setEntryForm(makeEntryForm());
+    return created;
   }
 
   function deleteEntry(entryId: string) {
     const entry = entries.find((item) => item.id === entryId);
-    if (entry) {
+    if (entry && !entry.sourceAccountId) {
       const used = futureCreditUsed(entry);
       if (used) {
         setPatients((current) => current.map((patient) => patient.id === entry.patientId ? { ...patient, futureCredit: (Number(patient.futureCredit) || 0) + used } : patient));
@@ -1165,7 +1405,7 @@ export default function Home() {
       commissionPercent: Number(professionalForm.commissionPercent) || 0,
       monthlyGoal: Number(professionalForm.monthlyGoal) || 0
     };
-    setProfessionals((current) => professionalForm.id ? current.map((professional) => professional.id === professionalForm.id ? saved : professional) : [saved, ...current]);
+    setProfessionals((current) => professionalForm.id ? current.map((professional) => professional.id === professionalForm.id ? { ...saved, avatarDataUrl: professional.avatarDataUrl } : professional) : [saved, ...current]);
     setProfessionalForm(makeProfessionalForm());
   }
 
@@ -1239,6 +1479,8 @@ export default function Home() {
     );
   }
 
+  if (!isDataReady) return <main className="grid min-h-screen place-items-center bg-[#f5f6f8] p-6"><div role="status" className="rounded-2xl bg-white p-6 text-center shadow-panel"><p className="font-bold text-avvi-blue">Carregando os dados da clínica…</p><p className="mt-2 text-sm text-slate-600">Aguarde a consulta à nuvem antes de editar.</p></div></main>;
+
   return (
     <main className="min-h-screen bg-transparent">
       <div className="flex w-full">
@@ -1250,12 +1492,12 @@ export default function Home() {
             </div>
             <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 thin-scrollbar">
               <SidebarGroup label="Operação">
-                {tabs.filter((tab) => ["Agenda"].includes(tab.id)).map((tab) => {
+                {availableTabs.filter((tab) => ["Agenda", "Estoque", "Follow Up"].includes(tab.id)).map((tab) => {
                   const Icon = tab.icon;
                   return (
                     <button
                       key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
+                      onClick={() => changeTab(tab.id)}
                       className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
                     >
                       <Icon size={15} />
@@ -1265,12 +1507,12 @@ export default function Home() {
                 })}
               </SidebarGroup>
               <SidebarGroup label="Financeiro">
-                {tabs.filter((tab) => ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Custos"].includes(tab.id)).map((tab) => {
+                {availableTabs.filter((tab) => ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Custos"].includes(tab.id)).map((tab) => {
                   const Icon = tab.icon;
                   return (
                     <button
                       key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
+                      onClick={() => changeTab(tab.id)}
                       className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
                     >
                       <Icon size={15} />
@@ -1280,12 +1522,12 @@ export default function Home() {
                 })}
               </SidebarGroup>
               <SidebarGroup label="Cadastros">
-                {tabs.filter((tab) => ["Cadastro de Procedimentos", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas"].includes(tab.id)).map((tab) => {
+                {availableTabs.filter((tab) => ["Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas"].includes(tab.id)).map((tab) => {
                 const Icon = tab.icon;
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => changeTab(tab.id)}
                     className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
                   >
                     <Icon size={15} />
@@ -1298,10 +1540,10 @@ export default function Home() {
             <div className="mt-3 space-y-2">
               <div className="rounded-md border border-[#eadcc4] bg-avvi-soft p-2.5 text-xs text-slate-600">
                 <p className="font-semibold text-avvi-ink">Perfil atual</p>
-                <p>Administrador</p>
-                <p className="mt-1 text-[10px]">Acesso total a relatórios, metas, valores e cadastros.</p>
+                <p>{userRole === "admin" ? "Administrador" : "Usuário padrão · avviclinica"}</p>
+                <p className="mt-1 text-[10px]">{userRole === "admin" ? "Acesso total a relatórios, metas, valores e cadastros." : "Agenda, estoque, Follow Up, custos e cadastros autorizados."}</p>
               </div>
-              <button onClick={handleLogout} className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-100 bg-white px-4 py-2.5 text-xs font-bold text-avvi-red transition hover:bg-red-50" title="Sair do sistema">
+              <button onClick={handleLogout} disabled={isSyncing} className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-100 bg-white px-4 py-2.5 text-xs font-bold text-avvi-red transition hover:bg-red-50" title="Sair do sistema">
                 <LogOut size={15} />
                 <span>Sair</span>
               </button>
@@ -1309,20 +1551,20 @@ export default function Home() {
           </div>
         </aside>
 
-        <section className="min-w-0 flex-1 px-4 py-5 lg:ml-[17.5rem] lg:px-7">
-          <Header activeTab={activeTab} />
+        <section className={`min-w-0 flex-1 lg:ml-[17.5rem] ${activeTab === "Agenda" ? "flex h-dvh min-h-0 flex-col overflow-hidden px-2 py-2 lg:px-4" : "px-4 py-5 lg:px-7"}`}>
+          <Header activeTab={activeTab} compact={activeTab === "Agenda"} />
+          {activeTab === "Follow Up" && <FollowUpNavigation tab={followUpTab} change={setFollowUpTab} />}
           {syncError && (
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-avvi-red">
               <span>{syncError}</span>
-              {isSupabaseConfigured && <button onClick={() => setSyncRetry((current) => current + 1)} disabled={isSyncing} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-bold text-avvi-red disabled:cursor-not-allowed disabled:opacity-60">Tentar novamente</button>}
+              {isSupabaseConfigured && <button onClick={retrySaving} disabled={isSyncing} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-bold text-avvi-red disabled:cursor-not-allowed disabled:opacity-60">Tentar novamente</button>}
             </div>
           )}
-          {isSyncing && (
-            <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-avvi-blue">
-              Salvando alterações no Supabase…
-            </div>
-          )}
-          <MobileTabs activeTab={activeTab} setActiveTab={setActiveTab} />
+          {storageError && <div role="alert" className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-avvi-red">{storageError}</div>}
+          <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
+            {!isDataReady ? "Carregando dados…" : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : hasPendingChanges || syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
+          </div>
+          {activeTab === "Agenda" ? <select aria-label="Navegar pelo sistema" value={activeTab} onChange={(event) => changeTab(event.target.value as Tab)} className="mb-2 shrink-0 rounded border border-avvi-line bg-white p-1.5 text-xs lg:hidden">{availableTabs.map((tab) => <option key={tab.id}>{tab.id}</option>)}</select> : <MobileTabs activeTab={activeTab} setActiveTab={changeTab} allowedTabs={availableTabs} />}
 
           {activeTab === "Agenda" && (
             <AgendaView
@@ -1332,19 +1574,26 @@ export default function Home() {
               setSelectedDate={setSelectedDate}
               professionalFilter={professionalFilter}
               setProfessionalFilter={setProfessionalFilter}
-              search={search}
-              setSearch={setSearch}
               appointments={appointments}
+              entries={entries}
               patients={patients}
               procedures={procedures}
+              services={services}
               professionals={professionals}
               visibleProfessionals={visibleProfessionals}
               openSlot={openSlot}
               openAppointment={openAppointment}
+              updateStatus={updateAgendaStatus}
+              openAccount={openAccountFromAgenda}
+              viewAccount={viewClosedAccount}
             />
           )}
 
-          {activeTab === "Lançamento de Procedimentos" && (
+          {activeTab === "Follow Up" && <FollowUpView tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
+
+          {activeTab === "Estoque" && <InventorySection gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={appointments} entries={entries} patients={patients} professionals={professionals} />}
+
+          {userRole === "admin" && activeTab === "Lançamento de Procedimentos" && (
             <FinancialView
               entryForm={entryForm}
               setEntryForm={setEntryForm}
@@ -1366,7 +1615,7 @@ export default function Home() {
             />
           )}
 
-          {activeTab === "Receitas" && (
+          {userRole === "admin" && activeTab === "Receitas" && (
             <RevenuesView
               revenues={revenues}
               setRevenues={setRevenues}
@@ -1377,7 +1626,7 @@ export default function Home() {
             />
           )}
 
-          {activeTab === "Recibos de Pagamento" && (
+          {userRole === "admin" && activeTab === "Recibos de Pagamento" && (
             <ReceiptsView
               receiptForm={receiptForm}
               setReceiptForm={setReceiptForm}
@@ -1389,7 +1638,7 @@ export default function Home() {
             />
           )}
 
-          {activeTab === "Pagamento Profissional" && (
+          {userRole === "admin" && activeTab === "Pagamento Profissional" && (
             <ProfessionalPaymentView
               entries={entries}
               professionals={professionals}
@@ -1409,7 +1658,7 @@ export default function Home() {
             />
           )}
 
-          {activeTab === "Relatório Profissional" && (
+          {userRole === "admin" && activeTab === "Relatório Profissional" && (
             <ProfessionalReportView
               entries={entries}
               professionals={professionals}
@@ -1430,6 +1679,10 @@ export default function Home() {
             />
           )}
 
+          {activeTab === "Cadastro de Serviços" && (
+            <ServicesView services={services} setServices={setServices} />
+          )}
+
           {activeTab === "Cadastro de Profissionais" && (
             <ProfessionalsView
               professionalForm={professionalForm}
@@ -1437,6 +1690,7 @@ export default function Home() {
               professionals={professionals}
               setProfessionals={setProfessionals}
               saveProfessional={saveProfessional}
+              allowGoals={userRole === "admin"}
             />
           )}
 
@@ -1451,7 +1705,7 @@ export default function Home() {
             />
           )}
 
-          {activeTab === "Metas" && (
+          {userRole === "admin" && activeTab === "Metas" && (
             <GoalsView
               selectedMonth={selectedMonth}
               setSelectedMonth={setSelectedMonth}
@@ -1468,7 +1722,7 @@ export default function Home() {
             <CostsView costForm={costForm} setCostForm={setCostForm} costs={costs} setCosts={setCosts} saveCost={saveCost} />
           )}
 
-          {activeTab === "Dashboard" && (
+          {userRole === "admin" && activeTab === "Dashboard" && (
             <DashboardView
               selectedMonth={selectedMonth}
               setSelectedMonth={setSelectedMonth}
@@ -1489,9 +1743,17 @@ export default function Home() {
         </section>
       </div>
 
+      {accountSummary && <AccountSummary draft={accountSummary.draft} closedAt={accountSummary.closedAt} change={accountSummary.change} procedures={procedures} onClose={() => setAccountSummary(null)} />}
+
+      {checkoutDraft && <AccountCheckout key={`${checkoutDraft.appointment.id}-${checkoutDraft.entryId ?? "new"}`}
+        draft={checkoutDraft} gifts={gifts} procedures={procedures} services={services} appointments={appointments}
+        onCancel={() => { const appointmentId = checkoutDraft.appointment.id; setCheckoutDraft(null); openAppointment(appointmentId); }}
+        onDelete={checkoutDraft.appointment.accountClosed ? () => deleteClosedAccount(checkoutDraft.appointment.id) : undefined}
+        onConfirm={finishCheckout} />}
+
       {selectedSlot && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="max-h-[92vh] w-full max-w-4xl overflow-auto rounded-lg bg-white p-5 shadow-panel thin-scrollbar">
+          <div data-testid="appointment-details-window" className="max-h-[96dvh] w-full max-w-6xl overflow-auto rounded-lg bg-white p-5 shadow-panel thin-scrollbar">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-semibold text-avvi-blue">{selectedSlot.hour}:00 · {professionalName(selectedSlot.professionalId)}</p>
@@ -1510,9 +1772,12 @@ export default function Home() {
               form={appointmentForm}
               setForm={setAppointmentForm}
               patients={patients}
-              procedures={procedures}
+              services={services}
               professionals={professionals}
-              saveAppointment={saveAppointment}
+              saveAppointment={() => saveAppointment()}
+              openCheckout={openCheckout}
+              deleteAccount={appointments.find((item) => item.id === selectedAppointmentId)?.accountClosed ? () => deleteClosedAccount(selectedAppointmentId!) : undefined}
+              error={appointmentError}
             />
           </div>
         </div>
@@ -1521,15 +1786,15 @@ export default function Home() {
   );
 }
 
-function Header({ activeTab }: { activeTab: Tab }) {
+function Header({ activeTab, compact = false }: { activeTab: Tab; compact?: boolean }) {
   return (
-    <header className="mb-4 rounded-2xl border border-white/70 bg-white/85 px-5 py-4 shadow-panel backdrop-blur">
+    <header className={`shrink-0 rounded-2xl border border-white/70 bg-white/85 shadow-panel backdrop-blur ${compact ? "mb-2 px-3 py-2" : "mb-4 px-5 py-4"}`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-avvi-blue">AVVI Clínica</p>
-          <h2 className="text-2xl font-bold text-avvi-ink">{activeTab}</h2>
+          {!compact && <p className="text-xs font-semibold uppercase tracking-[0.16em] text-avvi-blue">AVVI Clínica</p>}
+          <h2 className={`${compact ? "text-lg" : "text-2xl"} font-bold text-avvi-ink`}>{activeTab}</h2>
         </div>
-        <div className="flex items-center gap-2 rounded-xl bg-avvi-soft px-3 py-2 text-sm font-semibold text-avvi-blue">
+        <div className={`flex items-center gap-2 rounded-xl bg-avvi-soft font-semibold text-avvi-blue ${compact ? "px-2 py-1 text-[10px]" : "px-3 py-2 text-sm"}`}>
           <CheckCircle2 size={16} />
           Sistema v1 funcional
         </div>
@@ -1538,10 +1803,10 @@ function Header({ activeTab }: { activeTab: Tab }) {
   );
 }
 
-function MobileTabs({ activeTab, setActiveTab }: { activeTab: Tab; setActiveTab: (tab: Tab) => void }) {
+function MobileTabs({ activeTab, setActiveTab, allowedTabs }: { activeTab: Tab; setActiveTab: (tab: Tab) => void; allowedTabs: typeof tabs }) {
   return (
     <div className="mb-4 flex gap-2 overflow-x-auto lg:hidden">
-      {tabs.map((tab) => (
+      {allowedTabs.map((tab) => (
         <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm ${activeTab === tab.id ? "bg-avvi-blue text-white" : "bg-white/90 text-slate-600"}`}>
           {tab.id}
         </button>
@@ -1550,127 +1815,9 @@ function MobileTabs({ activeTab, setActiveTab }: { activeTab: Tab; setActiveTab:
   );
 }
 
-function AgendaView(props: {
-  viewMode: ViewMode;
-  setViewMode: (mode: ViewMode) => void;
-  selectedDate: string;
-  setSelectedDate: (date: string) => void;
-  professionalFilter: string;
-  setProfessionalFilter: (value: string) => void;
-  search: string;
-  setSearch: (value: string) => void;
-  appointments: Appointment[];
-  patients: Patient[];
-  procedures: Procedure[];
-  professionals: Professional[];
-  visibleProfessionals: Professional[];
-  openSlot: (hour: number, professionalId: string) => void;
-  openAppointment: (appointmentId: string) => void;
-}) {
-  const days = eachDayOfInterval({ start: startOfMonth(parseISO(`${props.selectedDate.slice(0, 7)}-01`)), end: endOfMonth(parseISO(`${props.selectedDate.slice(0, 7)}-01`)) });
-  const selected = parseISO(`${props.selectedDate}T00:00:00`);
-  const query = props.search.toLowerCase();
-
+function AppointmentForm({ form, setForm, patients, services, professionals, saveAppointment, openCheckout, deleteAccount, error }: { form: ReturnType<typeof makeAppointmentForm>; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; services: Service[]; professionals: Professional[]; saveAppointment: () => void; openCheckout: () => void; deleteAccount?: () => void; error: string }) {
   return (
-    <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-      <aside className="space-y-4">
-        <Panel>
-          <div className="mb-3 flex items-center justify-between">
-            <button className="rounded-md p-2 hover:bg-avvi-soft" onClick={() => props.setSelectedDate(addMonth(props.selectedDate, -1))} title="Mês anterior"><ChevronLeft size={16} /></button>
-            <strong>{format(selected, "MMMM yyyy", { locale: ptBR })}</strong>
-            <button className="rounded-md p-2 hover:bg-avvi-soft" onClick={() => props.setSelectedDate(addMonth(props.selectedDate, 1))} title="Próximo mês"><ChevronRight size={16} /></button>
-          </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500">
-            {["dom", "seg", "ter", "qua", "qui", "sex", "sáb"].map((day) => <span key={day}>{day}</span>)}
-            {days.map((day) => (
-              <button key={day.toISOString()} onClick={() => props.setSelectedDate(format(day, "yyyy-MM-dd"))} className={`aspect-square rounded-full text-sm ${isSameDay(day, selected) ? "bg-avvi-blue text-white" : "hover:bg-avvi-soft"}`}>
-                {getDate(day)}
-              </button>
-            ))}
-          </div>
-        </Panel>
-        <Panel>
-          <label className="text-xs font-semibold text-slate-500">Profissional</label>
-          <select value={props.professionalFilter} onChange={(event) => props.setProfessionalFilter(event.target.value)} className="mt-1 w-full rounded-md border border-avvi-line bg-white px-3 py-2 text-sm">
-            <option value="todos">Todos</option>
-            {props.professionals.map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}
-          </select>
-          <label className="mt-3 block text-xs font-semibold text-slate-500">Visão</label>
-          <div className="mt-1 grid grid-cols-3 gap-1">
-            {(["Dia", "Semana", "Mês"] as ViewMode[]).map((mode) => (
-              <button key={mode} onClick={() => props.setViewMode(mode)} className={`rounded-md px-2 py-2 text-sm font-semibold ${props.viewMode === mode ? "bg-avvi-blue text-white" : "bg-slate-100 text-slate-600"}`}>{mode}</button>
-            ))}
-          </div>
-          <div className="mt-4 space-y-2 text-sm">
-            {["Status do Agendamento", "Fechamento de Conta", "Tamanho da agenda", "Exibição da agenda"].map((item) => (
-              <div key={item} className="flex items-center justify-between border-t border-avvi-line pt-2 text-slate-600">
-                <span>{item}</span>
-                <ChevronRight size={14} />
-              </div>
-            ))}
-          </div>
-        </Panel>
-      </aside>
-
-      <div className="min-w-0 rounded-lg border border-avvi-line bg-white shadow-panel">
-        <div className="flex flex-wrap items-center gap-3 border-b border-avvi-line p-3">
-          <button className="rounded-md border border-avvi-line p-2" onClick={() => props.setSelectedDate(format(addDays(parseISO(props.selectedDate), -1), "yyyy-MM-dd"))} title="Dia anterior"><ChevronLeft size={16} /></button>
-          <div className="rounded-md border border-avvi-line px-4 py-2 text-center text-sm font-bold">
-            {format(parseISO(`${props.selectedDate}T00:00:00`), "dd MMM yyyy", { locale: ptBR })}
-            <span className="block text-xs font-normal text-slate-500">{format(parseISO(`${props.selectedDate}T00:00:00`), "EEEE", { locale: ptBR })}</span>
-          </div>
-          <button className="rounded-md border border-avvi-line p-2" onClick={() => props.setSelectedDate(format(addDays(parseISO(props.selectedDate), 1), "yyyy-MM-dd"))} title="Próximo dia"><ChevronRight size={16} /></button>
-          <button className="rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white"><Plus className="mr-1 inline" size={16} />Agendar</button>
-          <div className="relative min-w-[240px] flex-1">
-            <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
-            <input value={props.search} onChange={(event) => props.setSearch(event.target.value)} placeholder="Buscar clientes agendados hoje" className="w-full rounded-md border border-avvi-line py-2 pl-9 pr-3 text-sm" />
-          </div>
-        </div>
-        <div className="overflow-auto thin-scrollbar">
-          <div className="min-w-[900px]">
-            <div className="grid" style={{ gridTemplateColumns: `58px repeat(${props.visibleProfessionals.length}, minmax(210px, 1fr))` }}>
-              <div className="border-b border-avvi-line bg-white" />
-              {props.visibleProfessionals.map((professional) => (
-                <div key={professional.id} className="border-b border-l border-avvi-line p-3">
-                  <div className="flex items-center gap-2">
-                    <span className="grid h-9 w-9 place-items-center rounded-full text-sm font-bold text-white" style={{ background: professional.color }}>{professional.name.slice(0, 1)}</span>
-                    <div>
-                      <p className="font-bold">{professional.name}</p>
-                      <p className="text-xs text-slate-500">{professional.specialty}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {hours.map((hour) => (
-                <Fragment key={hour}>
-                  <div key={`h-${hour}`} className="border-b border-avvi-line bg-slate-50 px-2 py-4 text-right text-sm text-slate-500">{hour}h</div>
-                  {props.visibleProfessionals.map((professional) => {
-                    const slotAppointments = props.appointments.filter((appointment) => appointment.professionalId === professional.id && appointment.startsAt.startsWith(props.selectedDate) && Number(appointment.startsAt.slice(11, 13)) === hour);
-                    const visible = slotAppointments.filter((appointment) => patientNameLocal(props.patients, appointment.patientId).toLowerCase().includes(query));
-                    return (
-                      <button key={`${professional.id}-${hour}`} onClick={() => props.openSlot(hour, professional.id)} className="min-h-[62px] border-b border-l border-avvi-line bg-white p-2 text-left align-top hover:bg-avvi-soft">
-                        {visible.map((appointment) => (
-                          <div key={appointment.id} onClick={(event) => { event.stopPropagation(); props.openAppointment(appointment.id); }} className={`mb-1 rounded-md border-l-4 bg-white px-2 py-1 shadow-sm ${appointment.status === "Finalizado" ? "border-avvi-green" : appointment.status === "Cancelado" ? "border-avvi-red" : "border-avvi-blue"}`}>
-                            <p className="text-xs font-bold">{patientNameLocal(props.patients, appointment.patientId)}</p>
-                            <p className="truncate text-[11px] text-slate-500">{procedureNameLocal(props.procedures, appointment.procedureId)} · {appointment.status}</p>
-                          </div>
-                        ))}
-                      </button>
-                    );
-                  })}
-                </Fragment>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AppointmentForm({ form, setForm, patients, procedures, professionals, saveAppointment }: { form: ReturnType<typeof makeAppointmentForm>; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; procedures: Procedure[]; professionals: Professional[]; saveAppointment: () => void }) {
-  return (
-    <div className="mt-5 grid gap-4 lg:grid-cols-2">
+    <form onSubmit={(event) => { event.preventDefault(); saveAppointment(); }} className="mt-5 grid gap-4 lg:grid-cols-2">
       <FormField label="Ação">
         <select value={form.eventType} onChange={(event) => setForm({ ...form, eventType: event.target.value })} className="input">
           {eventOptions.map((option) => <option key={option}>{option}</option>)}
@@ -1693,25 +1840,39 @@ function AppointmentForm({ form, setForm, patients, procedures, professionals, s
       <FormField label="Telefone"><input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} className="input" /></FormField>
       <FormField label="CPF"><input value={form.cpf} onChange={(event) => setForm({ ...form, cpf: event.target.value })} className="input" /></FormField>
       <FormField label="Data de nascimento"><input type="date" value={form.birthDate} onChange={(event) => setForm({ ...form, birthDate: event.target.value })} className="input" /></FormField>
-      <FormField label="Procedimento">
-        <select value={form.procedureId} onChange={(event) => setForm({ ...form, procedureId: event.target.value })} className="input">
-          <option value="">Selecione</option>
-          {procedures.filter((procedure) => procedure.active).map((procedure) => <option key={procedure.id} value={procedure.id}>{procedure.name}</option>)}
-        </select>
-      </FormField>
+      <div className="space-y-2 lg:col-span-2">
+        <FormField label="Serviço">
+          <div className="flex items-center gap-2"><select aria-label="Serviço" value={form.serviceId} onChange={(event) => {
+            const service = services.find((item) => item.id === event.target.value);
+            setForm({ ...form, serviceId: event.target.value, procedureId: service ? "" : form.procedureId,
+              durationMinutes: service ? service.durationMinutes + form.additionalServices.reduce((sum, item) => sum + item.durationMinutes, 0) : form.durationMinutes,
+              servicePrice: service?.price, servicePriceType: service?.priceType });
+          }} className="input min-w-0 flex-1">
+            <option value="">Selecione um serviço</option>
+            {services.filter((service) => service.active || service.id === form.serviceId).slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((service) => <option key={service.id} value={service.id}>{service.name} · {service.priceType === "from" ? "A partir de " : ""}{currency(service.price)}{service.active ? "" : " (inativo)"}</option>)}
+          </select><button type="button" aria-label="Adicionar outro serviço ao agendamento" title="Adicionar outro serviço" onClick={() => setForm({ ...form, additionalServices: [...form.additionalServices, { id: id("scheduled-service"), serviceId: "", name: "", price: 0, priceType: "fixed", durationMinutes: 0 }] })} className="shrink-0 rounded-lg border border-avvi-line bg-amber-50 p-2.5 text-avvi-blue"><Plus size={18} /></button></div>
+        </FormField>
+        {form.additionalServices.map((item, index) => <div key={item.id} className="flex items-center gap-2"><select aria-label={`Serviço adicional ${index + 1}`} value={item.serviceId} className="input min-w-0 flex-1" onChange={(event) => {
+          const service = services.find((entry) => entry.id === event.target.value);
+          setForm({ ...form, durationMinutes: Math.max(1, form.durationMinutes - item.durationMinutes + (service?.durationMinutes ?? 0)), additionalServices: form.additionalServices.map((entry) => entry.id === item.id ? { ...entry, serviceId: service?.id ?? "", name: service?.name ?? "", price: service?.price ?? 0, priceType: service?.priceType ?? "fixed", durationMinutes: service?.durationMinutes ?? 0 } : entry) });
+        }}><option value="">Selecione outro serviço</option>{services.filter((service) => service.active || service.id === item.serviceId).slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((service) => <option key={service.id} value={service.id}>{service.name} · {service.priceType === "from" ? "A partir de " : ""}{currency(service.price)}{service.active ? "" : " (inativo)"}</option>)}</select><button type="button" aria-label={`Remover serviço adicional ${index + 1}`} onClick={() => setForm({ ...form, durationMinutes: Math.max(1, form.durationMinutes - item.durationMinutes), additionalServices: form.additionalServices.filter((entry) => entry.id !== item.id) })} className="shrink-0 rounded p-2.5 text-slate-400 hover:text-red-500"><Trash2 size={16} /></button></div>)}
+      </div>
       <FormField label="Profissional">
         <select value={form.professionalId} onChange={(event) => setForm({ ...form, professionalId: event.target.value })} className="input">
           {professionals.map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}
         </select>
       </FormField>
-      <FormField label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} className="input" /></FormField>
-      <FormField label="Hora"><input type="number" min={8} max={20} value={form.hour} onChange={(event) => setForm({ ...form, hour: event.target.value })} className="input" /></FormField>
+      <FormField label="Data"><input type="date" required value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} className="input" /></FormField>
+      <FormField label="Hora"><input type="time" required value={`${form.hour.padStart(2, "0")}:${form.minute}`} onChange={(event) => { const [hour, minute] = event.target.value.split(":"); setForm({ ...form, hour, minute }); }} className="input" /></FormField>
+      <FormField label="Duração (minutos)"><input type="number" required min={1} step={1} value={form.durationMinutes || ""} onChange={(event) => setForm({ ...form, durationMinutes: Number(event.target.value) })} className="input" /></FormField>
       <FormField label="Observações"><textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} className="input min-h-20" /></FormField>
       <FormField label="Observações do paciente"><textarea value={form.patientNotes} onChange={(event) => setForm({ ...form, patientNotes: event.target.value })} className="input min-h-20" /></FormField>
-      <div className="lg:col-span-2">
-        <button onClick={saveAppointment} className="rounded-md bg-avvi-blue px-4 py-2 font-bold text-white"><Save className="mr-2 inline" size={16} />Salvar agendamento</button>
+      <div className="flex items-center justify-between gap-3 lg:col-span-2">
+        <button type="submit" className="rounded-md bg-avvi-blue px-4 py-2 font-bold text-white"><Save className="mr-2 inline" size={16} />Salvar agendamento</button>
+        <div className="flex items-center gap-2">{deleteAccount && <button type="button" aria-label="Excluir conta fechada" title="Excluir conta fechada" onClick={deleteAccount} className="rounded-md border border-red-200 p-2 text-red-600 hover:bg-red-50"><Trash2 size={18} /></button>}<button type="button" onClick={openCheckout} className="rounded-md border border-orange-500 bg-orange-50 px-4 py-2 font-bold text-orange-600"><CircleDollarSign className="mr-2 inline" size={16} />Fechar conta</button></div>
       </div>
-    </div>
+      {error && <p role="alert" className="text-sm text-avvi-red lg:col-span-2">{error}</p>}
+    </form>
   );
 }
 
@@ -1939,7 +2100,7 @@ function FinancialView(props: {
       procedureId,
       servicePrice: procedure?.price ?? 0,
       productCost: procedure?.averageCost ?? 0,
-      professionalPercent: 70
+      professionalPercent: props.professionals.find((item) => item.id === props.entryForm.professionalId)?.commissionPercent ?? 70
     });
   }
 
@@ -1991,7 +2152,7 @@ function FinancialView(props: {
 
         <div className="mt-4 rounded-md border border-avvi-line p-3">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <p className="font-bold">Procedimentos do fechamento</p>
+            <p className="font-bold">Procedimentos do lançamento</p>
             <button onClick={addLine} className="text-sm font-bold text-avvi-blue"><Plus className="mr-1 inline" size={14} />Adicionar procedimento</button>
           </div>
           <div className="mb-3 grid gap-3 md:grid-cols-3">
@@ -2014,6 +2175,7 @@ function FinancialView(props: {
                       .sort((first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }))
                       .map((procedure) => <option key={procedure.id} value={procedure.id}>{procedure.name}</option>)}
                   </select>
+                  {!line.procedureId && line.manualProcedure && <p className="mt-2 text-sm font-bold text-avvi-blue">Serviço agendado: {line.manualProcedure}</p>}
                 </FormField>
                 <FormField label="Quantidade">
                   <input type="number" min={1} value={line.quantity} onChange={(event) => updateLine(index, { quantity: Number(event.target.value) })} className="input" />
@@ -2036,13 +2198,14 @@ function FinancialView(props: {
             ))}
           </div>
         </div>
+        <div className="mt-4"><FormField label="Observações do lançamento"><textarea className="input min-h-20" value={props.entryForm.notes} onChange={(event) => props.setEntryForm({ ...props.entryForm, notes: event.target.value })} /></FormField></div>
         <PaymentEditor form={props.entryForm} setForm={props.setEntryForm} patients={props.patients} />
         <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-[11px] md:grid-cols-8">
           <SummaryItem label="Custo médio" value={currency(productCost)} />
           <SummaryItem label="Descontos" value={currency(summary.discount)} tone="red" />
           <SummaryItem label="Taxa maquininha" value={currency(summary.machineFee)} tone="red" />
           <SummaryItem label="Custo total" value={currency(totalCost)} />
-          <SummaryItem label="Total de serviços" value={currency(totalServices)} tone="blue" />
+          <SummaryItem label="Total de procedimentos" value={currency(totalServices)} tone="blue" />
           <SummaryItem label="Lucro" value={currency(profit)} tone="green" />
           <SummaryItem label="Valor empresa" value={currency(summary.companyValue)} tone="blue" />
           <SummaryItem label="Valor profissional" value={currency(summary.professionalValue)} tone="violet" />
@@ -2131,7 +2294,7 @@ function FinancialEntriesTable(props: {
                   <td className="px-3 py-3 align-top">
                     <ActionButtons
                       small
-                      onEdit={() => props.setEntryForm({ ...entry, appointmentId: entry.appointmentId, patientName: props.patientName(entry.patientId), procedureId: entry.procedureId ?? "", manualProcedure: entry.manualProcedure ?? "", procedureLines: entry.procedureLines?.length ? entry.procedureLines : [entryToLine(entry)] })}
+                      onEdit={() => props.setEntryForm({ ...entry, sourceAccountId: entry.sourceAccountId, products: entry.products, accountClosed: entry.accountClosed, balanceDue: entry.balanceDue, appointmentId: entry.appointmentId, patientName: props.patientName(entry.patientId), procedureId: entry.procedureId ?? "", manualProcedure: entry.manualProcedure ?? "", procedureLines: entry.procedureLines?.length ? entry.procedureLines : [entryToLine(entry)] })}
                       onDelete={() => props.deleteEntry(entry.id)}
                     />
                   </td>
@@ -2443,6 +2606,91 @@ function ProfessionalPaymentView(props: {
   );
 }
 
+function makeServiceForm(): Service {
+  return { id: "", name: "", description: "", durationMinutes: 60, category: "", price: 0, priceType: "fixed", active: true };
+}
+
+function ServicesView({ services, setServices }: { services: Service[]; setServices: Dispatch<SetStateAction<Service[]>> }) {
+  const [serviceForm, setServiceForm] = useState<Service>(makeServiceForm);
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const sortedServices = services.filter((service) => serviceKey(`${service.name} ${service.category}`).includes(serviceKey(query)))
+    .slice().sort((first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }));
+
+  function saveService(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!serviceForm.name.trim() || !Number.isInteger(serviceForm.durationMinutes) || serviceForm.durationMinutes <= 0
+      || !Number.isFinite(serviceForm.price) || serviceForm.price < 0) {
+      setError("Informe o nome, uma duração válida e um preço igual ou maior que zero.");
+      return;
+    }
+    if (services.some((service) => service.id !== serviceForm.id && serviceKey(service.name) === serviceKey(serviceForm.name))) {
+      setError("Já existe um serviço com este nome. Edite o cadastro existente.");
+      return;
+    }
+    const saved: Service = { ...serviceForm, id: serviceForm.id || id("service"), name: serviceForm.name.trim(),
+      description: serviceForm.description.trim(), category: serviceForm.category.trim(), price: Math.round(serviceForm.price * 100) / 100 };
+    setServices((current) => serviceForm.id ? current.map((service) => service.id === serviceForm.id ? saved : service) : [saved, ...current]);
+    setServiceForm(makeServiceForm());
+    setError("");
+  }
+
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold">{serviceForm.id ? "Editar serviço" : "Cadastro de serviços"}</h3>
+            <p className="text-sm text-slate-500">Cadastre os serviços da clínica e selecione-os nos agendamentos.</p>
+          </div>
+          <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{services.length} serviços</span>
+        </div>
+        <form onSubmit={saveService}>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <FormField label="Nome"><input className="input" required value={serviceForm.name} onChange={(event) => setServiceForm({ ...serviceForm, name: event.target.value })} /></FormField>
+            <FormField label="Categoria"><input className="input" value={serviceForm.category} onChange={(event) => setServiceForm({ ...serviceForm, category: event.target.value })} /></FormField>
+            <FormField label="Duração (minutos)"><input className="input" type="number" required min={1} step={1} value={serviceForm.durationMinutes || ""} onChange={(event) => setServiceForm({ ...serviceForm, durationMinutes: Number(event.target.value) })} /></FormField>
+            <div className="md:col-span-2">
+              <FormField label="Descrição"><textarea className="input min-h-24" value={serviceForm.description} onChange={(event) => setServiceForm({ ...serviceForm, description: event.target.value })} /></FormField>
+            </div>
+            <div className="rounded-xl border border-avvi-blue/30 bg-avvi-soft p-4">
+              <p className="mb-2 text-xl font-bold text-avvi-blue">{serviceForm.priceType === "from" ? "A partir de " : ""}{currency(serviceForm.price)}</p>
+              <FormField label="Preço"><MoneyInput value={serviceForm.price} onChange={(value) => setServiceForm({ ...serviceForm, price: value })} /></FormField>
+              <div className="mt-3">
+                <FormField label="Tipo de preço"><select className="input" value={serviceForm.priceType} onChange={(event) => setServiceForm({ ...serviceForm, priceType: event.target.value as Service["priceType"] })}>
+                  <option value="fixed">Preço fixo</option><option value="from">A partir de</option>
+                </select></FormField>
+              </div>
+            </div>
+          </div>
+          {error && <p role="alert" className="mt-3 text-sm font-bold text-avvi-red">{error}</p>}
+          <div className="mt-4 flex gap-3">
+            <button type="submit" className="rounded-md bg-avvi-blue px-5 py-2 font-bold text-white"><Save className="mr-2 inline" size={16} />Salvar serviço</button>
+            {serviceForm.id && <button type="button" className="rounded-md border border-avvi-line px-4 py-2 text-sm font-bold" onClick={() => { setServiceForm(makeServiceForm()); setError(""); }}>Cancelar edição</button>}
+          </div>
+        </form>
+      </Panel>
+      <Panel>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-lg font-bold">Serviços cadastrados</h3>
+          <input aria-label="Buscar serviços" className="input max-w-sm" placeholder="Buscar nome ou categoria" value={query} onChange={(event) => setQuery(event.target.value)} />
+        </div>
+        <DataTable headers={["Serviço", "Categoria", "Duração", "Preço", "Status", "Ações"]} rows={sortedServices.map((service) => [
+          <div key={`${service.id}-name`} className="max-w-sm"><p className="font-bold">{service.name}</p>{service.description && <p className="mt-1 text-xs text-slate-500">{service.description}</p>}</div>,
+          service.category || "-", `${service.durationMinutes} min`,
+          <span key={`${service.id}-price`} className="whitespace-nowrap text-base font-bold text-avvi-blue">{service.priceType === "from" ? "A partir de " : ""}{currency(service.price)}</span>,
+          service.active ? "Ativo" : "Inativo",
+          <div key={`${service.id}-actions`} className="flex items-center gap-2">
+            <button title="Editar serviço" className="rounded-md border border-avvi-line p-2 text-avvi-blue hover:bg-avvi-soft" onClick={() => { setServiceForm({ ...service }); setError(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}><Pencil size={16} /></button>
+            <button className="rounded-md bg-avvi-soft px-3 py-2 text-sm font-bold text-avvi-blue" onClick={() => setServices((current) => current.map((item) => item.id === service.id ? { ...item, active: !item.active } : item))}>{service.active ? "Desativar" : "Ativar"}</button>
+          </div>
+        ])} />
+        {!sortedServices.length && <p className="py-4 text-sm text-slate-500">Nenhum serviço encontrado.</p>}
+      </Panel>
+    </div>
+  );
+}
+
 function ProceduresView({ procedureForm, setProcedureForm, procedures, setProcedures, saveProcedure }: { procedureForm: ReturnType<typeof makeProcedureForm>; setProcedureForm: (form: ReturnType<typeof makeProcedureForm>) => void; procedures: Procedure[]; setProcedures: (items: Procedure[]) => void; saveProcedure: () => void }) {
   const productCost = Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
   const taxValue = (Number(procedureForm.price) || 0) * ((Number(procedureForm.taxPercent) || 0) / 100);
@@ -2568,12 +2816,15 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
   );
 }
 
-function ProfessionalsView({ professionalForm, setProfessionalForm, professionals, setProfessionals, saveProfessional }: { professionalForm: ReturnType<typeof makeProfessionalForm>; setProfessionalForm: (form: ReturnType<typeof makeProfessionalForm>) => void; professionals: Professional[]; setProfessionals: (items: Professional[]) => void; saveProfessional: () => void }) {
+function ProfessionalsView({ professionalForm, setProfessionalForm, professionals, setProfessionals, saveProfessional, allowGoals }: { professionalForm: ReturnType<typeof makeProfessionalForm>; setProfessionalForm: Dispatch<SetStateAction<ReturnType<typeof makeProfessionalForm>>>; professionals: Professional[]; setProfessionals: Dispatch<SetStateAction<Professional[]>>; saveProfessional: () => void; allowGoals: boolean }) {
   function updateAvatar(professional: Professional, file?: File) {
     if (!file) return;
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setProfessionals(professionals.map((item) => item.id === professional.id ? { ...item, avatarDataUrl: String(reader.result) } : item));
+    reader.onload = () => {
+      if (typeof reader.result !== "string") return;
+      const avatarDataUrl = reader.result;
+      setProfessionals((current) => current.map((item) => item.id === professional.id ? { ...item, avatarDataUrl } : item));
+      setProfessionalForm((current) => current.id === professional.id ? { ...current, avatarDataUrl } : current);
     };
     reader.readAsDataURL(file);
   }
@@ -2584,7 +2835,7 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-bold">Cadastro de profissionais</h3>
-            <p className="text-sm text-slate-500">Dados da profissional, comissão padrão e meta mensal do dashboard.</p>
+            <p className="text-sm text-slate-500">{allowGoals ? "Dados da profissional e comissão padrão." : "Cadastro da profissional e comissão padrão."}</p>
           </div>
           <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{professionals.length} profissionais</span>
         </div>
@@ -2609,7 +2860,7 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
               <div className="flex items-center gap-3">
                 <label className="grid h-12 w-12 cursor-pointer place-items-center overflow-hidden rounded-full text-sm font-bold text-white" style={{ background: professional.color }} title="Adicionar foto">
                   {professional.avatarDataUrl ? <Image src={professional.avatarDataUrl} alt={professional.name} width={48} height={48} className="h-full w-full object-cover" unoptimized /> : professional.name.slice(0, 1)}
-                  <input type="file" accept="image/*" className="hidden" onChange={(event) => updateAvatar(professional, event.target.files?.[0])} />
+                  <input type="file" aria-label={`Foto de ${professional.name}`} accept="image/*" className="hidden" onChange={(event) => { updateAvatar(professional, event.target.files?.[0]); event.target.value = ""; }} />
                 </label>
                 <div>
                   <h4 className="text-lg font-bold">{professional.name}</h4>
@@ -3303,11 +3554,11 @@ function DataTable({ headers, rows }: { headers: string[]; rows: ReactNode[][] }
 }
 
 function makeAppointmentForm(professionalId: string, date: string, hour: number) {
-  return { patientId: "", patientName: "", phone: "", cpf: "", birthDate: "", patientNotes: "", procedureId: "", professionalId, date, hour: String(hour), status: "Agendado" as AppointmentStatus, eventType: "Novo Agendamento", notes: "" };
+  return { patientId: "", patientName: "", phone: "", cpf: "", birthDate: "", patientNotes: "", procedureId: "", serviceId: "", additionalServices: [] as AppointmentService[], servicePrice: undefined as number | undefined, servicePriceType: undefined as Service["priceType"] | undefined, durationMinutes: 60, professionalId, date, hour: String(hour), minute: "00", status: "Agendado" as AppointmentStatus, eventType: "Novo Agendamento", notes: "" };
 }
 
 function makeEntryForm() {
-  return { id: "", appointmentId: undefined as string | undefined, patientId: "", patientName: "", professionalId: "", procedureId: "", manualProcedure: "", quantity: 1, servicePrice: 0, productCost: 0, machineFee: 0, commercialDiscount: 0, discountSplit: "Empresa e profissional dividem" as DiscountSplit, professionalPercent: 70, procedureLines: [makeProcedureLine()], date: todayKey(), notes: "", payments: [{ ...blankPayment, id: id("payment") }] };
+  return { id: "", sourceAccountId: undefined as string | undefined, products: undefined as ProductUsage[] | undefined, accountClosed: undefined as boolean | undefined, balanceDue: undefined as number | undefined, appointmentId: undefined as string | undefined, patientId: "", patientName: "", professionalId: "", procedureId: "", manualProcedure: "", quantity: 1, servicePrice: 0, productCost: 0, machineFee: 0, commercialDiscount: 0, discountSplit: "Empresa e profissional dividem" as DiscountSplit, professionalPercent: 70, procedureLines: [makeProcedureLine()], date: todayKey(), notes: "", payments: [{ ...blankPayment, id: id("payment") }] };
 }
 
 function makeProcedureLine(): ProcedureLine {
@@ -3370,12 +3621,6 @@ function formatDate(date: string) {
 
 function monthLabel(key: string) {
   return format(parseISO(`${key}-01T00:00:00`), "MMM yyyy", { locale: ptBR });
-}
-
-function addMonth(date: string, amount: number) {
-  const parsed = parseISO(`${date}T00:00:00`);
-  const next = new Date(parsed.getFullYear(), parsed.getMonth() + amount, Math.min(parsed.getDate(), 28));
-  return format(next, "yyyy-MM-dd");
 }
 
 function addMonthsToDate(date: string, amount: number) {

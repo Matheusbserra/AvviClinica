@@ -1,0 +1,17 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import ts from 'typescript';
+const source=ts.transpileModule(fs.readFileSync('lib/leadFunnel.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
+const {leadAge,automaticLeadStage,stageForLead,leadStages}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const lead={id:'whatsapp-5598999990000',name:'Lead',phone:'5598999990000',firstContactAt:'2026-10-08T03:00:00Z',lastContactAt:'2026-10-08T03:00:00Z',lastMessage:'Olá',lastMessageId:'m'};
+const now=new Date('2026-10-08T20:00:00Z');
+assert.equal(leadStages.length,5);assert.equal(leadAge(lead,now),0);assert.equal(automaticLeadStage(lead,[],[],now),'entry');
+assert.equal(leadAge({...lead,firstContactAt:'2026-10-08T02:59:59Z'},now),1);
+for(const [date,age,stage] of [['2026-10-07',1,'warm'],['2026-10-01',7,'warm'],['2026-09-30',8,'cold']]) {const item={...lead,firstContactAt:date+'T12:00:00Z'};assert.equal(leadAge(item,now),age);assert.equal(automaticLeadStage(item,[],[],now),stage);}
+const patient={id:'p',name:'Paciente',phone:'(98) 99999-0000'};const booked={id:'a',patientId:'p',startsAt:'2026-10-08T09:00:00',status:'Confirmado'};
+assert.equal(automaticLeadStage(lead,[patient],[booked],now),'scheduled');assert.equal(automaticLeadStage(lead,[patient],[{...booked,accountClosed:true}],now),'aftercare');
+for(const status of ['Cancelado','Faltou','Reagendado'])assert.equal(automaticLeadStage(lead,[patient],[{...booked,status}],now),'entry');
+assert.equal(automaticLeadStage(lead,[patient],[{...booked,accountClosed:true},{...booked,id:'new',startsAt:'2026-10-09T10:00:00'}],now),'scheduled');
+assert.equal(stageForLead({...lead,manualStage:'cold'},[patient],[booked],now),'cold');assert.equal(stageForLead({...lead,manualStage:undefined},[patient],[booked],now),'scheduled');
+assert.equal(automaticLeadStage({...lead,patientId:'p',phone:'000'},[patient],[booked],now),'scheduled');
+console.log('PASS: Five funnel stages, São Paulo day boundaries, day 7/8, linked agenda, account closure, canceled appointments, newer booking priority, manual override/reset.');

@@ -73,3 +73,18 @@ button {
     @apply w-full rounded-lg border border-avvi-line bg-white/90 px-3 py-2 text-sm text-avvi-ink outline-none transition placeholder:text-slate-400 focus:border-avvi-blue focus:bg-white focus:ring-4 focus:ring-amber-100/70;
   }
 }
+
+@keyframes appointment-menu-reveal {
+  from { opacity: 0; transform: translateY(-6px) scaleY(0.94); }
+  to { opacity: 1; transform: translateY(0) scaleY(1); }
+}
+.appointment-context-menu { transform-origin: top; animation: appointment-menu-reveal 150ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .appointment-context-menu { animation: none; } }
+@media print {
+  body:has(.account-summary-dialog) * { visibility: hidden; }
+  .account-summary-dialog, .account-summary-dialog * { visibility: visible !important; }
+  .account-summary-dialog { position: absolute !important; inset: 0 !important; width: 100% !important; max-width: none !important; max-height: none !important; overflow: visible !important; box-shadow: none !important; border: 0 !important; }
+  .account-summary-dialog .summary-content { overflow: visible !important; }
+  .account-summary-dialog .summary-actions { display: none !important; }
+  .account-summary-dialog th { print-color-adjust: exact; }
+}

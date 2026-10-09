@@ -9,7 +9,7 @@ export type AppointmentStatus =
   | "Reagendado"
   | "Finalizado";
 
-export type PaymentMethod = "Pix" | "Débito" | "Crédito" | "Dinheiro" | "Crédito Futuro";
+export type PaymentMethod = "Pix" | "Débito" | "Crédito" | "Dinheiro" | "Crédito Futuro" | "Transferência Bancária" | "Depósito";
 export type DiscountSplit = "Empresa assume" | "Profissional assume" | "Empresa e profissional dividem";
 export type FixedCostStatus = "Pago" | "Pendente" | "Atrasado";
 export type ViewMode = "Dia" | "Semana" | "Mês";
@@ -32,6 +32,7 @@ export type Professional = {
 
 export type Patient = {
   id: string;
+  email?: string;
   name: string;
   gender?: "Feminino" | "Masculino" | "Não informado" | "";
   phone: string;
@@ -59,6 +60,26 @@ export type Procedure = {
   active: boolean;
 };
 
+export type Service = {
+  id: string;
+  name: string;
+  description: string;
+  durationMinutes: number;
+  category: string;
+  price: number;
+  priceType: "fixed" | "from";
+  active: boolean;
+};
+
+export type GiftStockItem = { id: string; name: string; quantity: number };
+export type GiftUsage = { id: string; giftId: string; name: string; quantity: number };
+
+export type InventoryItem = {
+  id: string;
+  procedureId: string;
+  quantity: number;
+};
+
 export type PaymentItem = {
   id: string;
   method: PaymentMethod;
@@ -71,6 +92,8 @@ export type PaymentItem = {
 
 export type ProcedureLine = {
   id: string;
+  serviceId?: string;
+  discount?: number;
   procedureId?: string;
   manualProcedure?: string;
   quantity: number;
@@ -79,8 +102,13 @@ export type ProcedureLine = {
   professionalPercent: number;
 };
 
+export type ProductUsage = { id: string; procedureId: string; quantity: number; unitCost: number };
+
 export type FinancialEntry = {
   id: string;
+  sourceAccountId?: string;
+  accountClosed?: boolean;
+  balanceDue?: number;
   appointmentId?: string;
   patientId: string;
   professionalId: string;
@@ -94,13 +122,34 @@ export type FinancialEntry = {
   discountSplit: DiscountSplit;
   professionalPercent: number;
   procedureLines?: ProcedureLine[];
+  products?: ProductUsage[];
   date: string;
   notes: string;
   payments: PaymentItem[];
 };
 
+// Billing is stored separately from the independently editable procedure ledger.
+export type ClosedAccount = FinancialEntry & {
+  gifts?: GiftUsage[];
+  closedAt?: string;
+  change?: number;
+  procedureLines: ProcedureLine[];
+  products: ProductUsage[];
+  generatedEntryId?: string;
+};
+
+export type AppointmentService = { id: string; serviceId: string; name: string; price: number; priceType: Service["priceType"]; durationMinutes: number };
+
 export type Appointment = {
+  giftConsumption?: GiftUsage[];
+  services?: AppointmentService[];
   id: string;
+  closedAccount?: ClosedAccount;
+  accountClosed?: boolean;
+  stockConsumption?: { procedureId: string; quantity: number }[];
+  serviceId?: string;
+  servicePrice?: number;
+  servicePriceType?: Service["priceType"];
   patientId?: string;
   professionalId: string;
   procedureId?: string;
@@ -173,3 +222,34 @@ export type ProfessionalPaymentReceipt = {
   entryIds: string[];
 };
 
+
+export type FollowUpTrigger = "keyword" | "appointment_before" | "appointment_after" | "scheduled" | "inactivity";
+export type FollowUpRule = {
+  id: string; name: string; active: boolean; trigger: FollowUpTrigger;
+  flow?: ConversationFlow;
+  keywords: string[]; match: "contains" | "exact"; delayMinutes: number;
+  scheduledAt: string; patientIds: string[]; message: string;
+  messageType: "text" | "template"; templateName: string; templateLanguage: string; templateParameters: string[];
+};
+export type FollowUpContact = { id: string; optIn: boolean; updatedAt: string; lastInboundAt?: string };
+export type FollowUpLog = { sentAt?: string;
+  id: string; ruleId: string; ruleName: string; patientId: string; patientName: string; phone: string;
+  message: string; scheduledFor: string; createdAt: string; sourceId: string;
+  status: "simulated" | "scheduled" | "sending" | "sent" | "delivered" | "read" | "failed" | "canceled";
+  providerMessageId?: string; error?: string;
+};
+
+export type ConversationBranch = { id: string; label: string; operator: "contains" | "exact" | "starts_with"; value: string; target: string };
+export type ConversationNode = {
+  id: string; type: "message" | "condition" | "wait" | "end"; title: string; x: number; y: number; next: string;
+  text: string; messageType: "text" | "image" | "template"; imageUrl: string;
+  templateName: string; templateLanguage: string; templateParameters: string[];
+  branches: ConversationBranch[]; fallback: string; waitMode: "reply" | "delay"; delayMinutes: number;
+};
+export type ConversationFlow = { version: 1; entry: string; nodes: ConversationNode[]; triggerPosition?: { x: number; y: number } };
+export type ConversationCursor = { nodeId: string; status: "active" | "waiting" | "done"; reply: string; wakeAt?: string; waitingSince?: string };
+
+export type LeadStage = "entry" | "warm" | "cold" | "scheduled" | "aftercare";
+export type FollowUpLead = { id: string; name: string; phone: string; patientId?: string; firstContactAt: string; lastContactAt: string; lastMessage: string; lastMessageId: string; manualStage?: LeadStage };
+
+export type FollowUpMessage = { id: string; leadId: string; direction: "incoming" | "outgoing"; text: string; at: string; status?: FollowUpLog["status"] };

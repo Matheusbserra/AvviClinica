@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import ts from 'typescript';
+const code=ts.transpileModule(fs.readFileSync('lib/gifts.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText;
+const {applyCheckoutGifts}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
+const stock=[{id:'kit',name:'Kit',quantity:2},{id:'other',name:'Outro',quantity:10}];const selected=[{id:'usage',giftId:'kit',name:'Kit',quantity:4}];
+const first=applyCheckoutGifts(stock,undefined,selected);assert.equal(first.gifts[0].quantity,-2);assert.equal(first.gifts[1].quantity,10);assert.equal(stock[0].quantity,2);
+const repeated=applyCheckoutGifts(first.gifts,first.consumption,selected);assert.equal(repeated.gifts[0].quantity,-2);
+const edited=applyCheckoutGifts(first.gifts,first.consumption,[{...selected[0],quantity:1}]);assert.equal(edited.gifts[0].quantity,1);
+const restored=applyCheckoutGifts(edited.gifts,edited.consumption,[]);assert.deepEqual(restored.gifts,stock);
+assert.equal(applyCheckoutGifts([],selected,[]).gifts[0].quantity,4);
+const duplicates=applyCheckoutGifts(stock,undefined,[selected[0],{...selected[0],id:'usage2',quantity:1}]);assert.equal(duplicates.gifts[0].quantity,-3);
+console.log('PASS: Gift stock independent copies, negative balances, merged consumption, idempotent closure, changed quantity and restoration after deletion.');

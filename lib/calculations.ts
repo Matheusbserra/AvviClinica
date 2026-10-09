@@ -27,7 +27,7 @@ export function monthKey(date: string) {
   return date.slice(0, 7);
 }
 
-export function calculateEntry(entry: Pick<FinancialEntry, "quantity" | "servicePrice" | "productCost" | "machineFee" | "commercialDiscount" | "professionalPercent" | "discountSplit" | "payments" | "procedureLines">): FinancialSummary {
+export function calculateEntry(entry: Pick<FinancialEntry, "quantity" | "servicePrice" | "productCost" | "machineFee" | "commercialDiscount" | "professionalPercent" | "discountSplit" | "payments" | "procedureLines" | "accountClosed" | "products">): FinancialSummary {
   const lines = entry.procedureLines?.length ? entry.procedureLines : [{
     quantity: entry.quantity,
     servicePrice: entry.servicePrice,
@@ -41,8 +41,8 @@ export function calculateEntry(entry: Pick<FinancialEntry, "quantity" | "service
   const machineFee = entry.machineFee + paymentFees;
   const discount = entry.commercialDiscount + paymentDiscounts;
   const discountedGross = Math.max(0, grossRevenue - discount);
-  const received = paymentTotal || discountedGross;
-  const productCost = lines.reduce((sum, line) => sum + line.productCost * line.quantity, 0) + machineFee;
+  const received = entry.accountClosed ? paymentTotal : paymentTotal || discountedGross;
+  const productCost = lines.reduce((sum, line) => sum + line.productCost * line.quantity, 0) + (entry.products ?? []).reduce((sum, product) => sum + product.unitCost * product.quantity, 0) + machineFee;
   const baseProfitBeforeSplit = received - productCost;
   const weightedPercent = grossRevenue
     ? lines.reduce((sum, line) => sum + line.servicePrice * line.quantity * line.professionalPercent, 0) / grossRevenue
@@ -54,7 +54,7 @@ export function calculateEntry(entry: Pick<FinancialEntry, "quantity" | "service
 
   return {
     grossRevenue,
-    paymentTotal: paymentTotal || grossRevenue,
+    paymentTotal: entry.accountClosed ? paymentTotal : paymentTotal || grossRevenue,
     machineFee,
     discount,
     productCost,
