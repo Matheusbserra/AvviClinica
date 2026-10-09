@@ -28,5 +28,19 @@ try {
  // A configured cloud never falls back to local file storage or old credentials after a network failure.
  process.env.NEXT_PUBLIC_SUPABASE_URL="http://database.test";process.env.SUPABASE_SERVICE_ROLE_KEY="qa-service";globalThis.fetch=async()=>new Response(JSON.stringify({message:"offline"}),{status:503,headers:{"Content-Type":"application/json"}});
  await assert.rejects(auth.authenticateUser("avviclinica","avviclinica2026"));assert.equal(await auth.resolveAccess(request(defaultEdited)),null);
- console.log("PASS: Immutable primary admin, existing user, private encrypted passwords, new users, exact custom tabs and API permissions, duplicate login, rename/password/role editing, promotion, stale edit rejection, session revocation and cloud failure closed. Isolated files and mocked network only.");
+ const leak="private-key-must-not-appear";
+ for(const fixture of [{status:401,code:"",expected:/recusou a chave/},{status:403,code:"42501",expected:/negou acesso/},{status:400,code:"42703",expected:/estrutura diferente/},{status:503,code:"PGRST002",expected:/Código: PGRST002/}]){
+  globalThis.fetch=async()=>new Response(JSON.stringify({code:fixture.code,message:leak,details:leak}),{status:fixture.status,headers:{"Content-Type":"application/json"}});
+  await assert.rejects(accounts.listAccounts(),error=>fixture.expected.test(error.message)&&!error.message.includes(leak));
+ }
+ globalThis.fetch=async()=>new Response(JSON.stringify({code:"PGRST205",message:leak}),{status:404,headers:{"Content-Type":"application/json"}});
+ const unprepared=await accounts.listAccounts();assert.equal(unprepared.editable,false);assert.match(unprepared.message,/mesmo projeto/);assert.equal(unprepared.accounts.length,2);
+ const jwt=claims=>Buffer.from("{}").toString("base64url")+"."+Buffer.from(JSON.stringify(claims)).toString("base64url")+".signature";
+ process.env.SUPABASE_SERVICE_ROLE_KEY=jwt({role:"anon",ref:"project"});await assert.rejects(accounts.listAccounts(),error=>/chave pública ou de usuário/.test(error.message));
+ process.env.SUPABASE_SERVICE_ROLE_KEY="sb_publishable_not-a-secret";await assert.rejects(accounts.listAccounts(),error=>/chave pública/.test(error.message));
+ process.env.NEXT_PUBLIC_SUPABASE_URL="https://project.supabase.co";process.env.SUPABASE_SERVICE_ROLE_KEY=jwt({role:"service_role",ref:"another-project"});await assert.rejects(accounts.listAccounts(),error=>/outro projeto/.test(error.message));
+ globalThis.fetch=async()=>new Response("[]",{status:200,headers:{"Content-Type":"application/json"}});
+ process.env.SUPABASE_SERVICE_ROLE_KEY=jwt({role:"service_role",ref:"project"});assert.equal((await accounts.listAccounts()).editable,true);
+ process.env.SUPABASE_SERVICE_ROLE_KEY="sb_secret_server-test-key";assert.equal((await accounts.listAccounts()).editable,true);
+ console.log("PASS: Immutable primary admin, existing user, private encrypted passwords, new users, exact custom tabs and API permissions, duplicate login, rename/password/role editing, promotion, stale edit rejection, session revocation and cloud failure closed; specific safe diagnostics for API keys, project mismatch, schema permissions and missing columns; legacy and modern private keys. Isolated files and mocked network only.");
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

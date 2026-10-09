@@ -55,7 +55,7 @@ export function clinicRankings(input: { start: string; end: string; professional
   }
   const all = [...people.values()].map(item => ({ ...item, revenue: Math.round(item.revenue * 100) / 100, averageTicket: item.attendances ? item.revenue / item.attendances : 0, productivity: item.capacity ? item.attendances / item.capacity * 100 : 0 }));
   const rank = (key: "revenue" | "averageTicket" | "attendances" | "productivity") => [...all].sort((a, b) => b[key] - a[key] || a.name.localeCompare(b.name, "pt-BR"));
-  const usage = (map: Map<string, UsageRanking>) => [...map.values()].sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name, "pt-BR")).slice(0, 20);
+  const usage = (map: Map<string, UsageRanking>) => [...map.values()].sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name, "pt-BR")).slice(0, 10);
   const unattributed = (input.revenues ?? []).filter(item => period.valid && inPeriod(item.serviceDate || item.paymentDate) && !item.sourceFinancialEntryId).reduce((sum, item) => sum + amount(item.total), 0);
   return { ...period, revenue: rank("revenue"), averageTicket: rank("averageTicket"), attendances: rank("attendances"), productivity: rank("productivity"), procedures: usage(products), services: usage(services), totalRevenue: all.reduce((sum, item) => sum + item.revenue, 0), totalAttendances: all.reduce((sum, item) => sum + item.attendances, 0), unattributed };
 }

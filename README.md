@@ -207,7 +207,7 @@ Testes: `tests/access.mjs`, `tests/accounts-server.mjs` e `tests/accounts-report
 
 ## Relatórios e rankings
 
-**Operação > Relatórios**, abaixo de Follow Up, reúne seis rankings: faturamento, ticket médio, quantidade de atendimentos e produtividade por profissional, além do Top 20 de procedimentos/produtos e Top 20 de serviços. Profissionais cadastrados, inclusive inativos e sem movimento, são exibidos; vínculos antigos com profissional removido são identificados. Os empates têm ordenação por nome. O administrador pode autorizar Relatórios para usuários padrão em Contas.
+**Operação > Relatórios**, abaixo de Follow Up, reúne seis rankings: faturamento, ticket médio, quantidade de atendimentos e produtividade por profissional, além do Top 10 de produtos e Top 10 de serviços. Profissionais cadastrados, inclusive inativos e sem movimento, são exibidos; vínculos antigos com profissional removido são identificados. Os empates têm ordenação por nome. O administrador pode autorizar Relatórios para usuários padrão em Contas.
 
 Escolha um mês completo ou um intervalo de início/fim inclusivos. As datas usam o dia registrado do atendimento, sem conversão para o fuso da máquina. A capacidade individual é 2 × quantidade de dias do intervalo, excluindo somente os domingos, inclusive para intervalos parciais e meses de 28/29/30/31 dias. A produtividade é atendimentos ÷ capacidade × 100%; valores acima de 100% permanecem visíveis quando há mais atendimentos que a capacidade prevista.
 
@@ -215,7 +215,7 @@ Atendimentos contam agendamentos Compareceu/Finalizado/com conta fechada, uma ve
 
 Procedimentos/produtos usam as quantidades consumidas no estoque pelo atendimento e lançamentos antigos independentes, sem duplicar o lançamento automático. Serviços usam as linhas do fechamento com suas quantidades; em comparecimentos/finalizações sem conta, usam os serviços do agendamento. Receitas antigas sem vínculo com profissional são indicadas separadamente e não distribuídas arbitrariamente. Os relatórios são somente leitura e não criam, alteram ou apagam dados.
 
-`node tests/reports.mjs` testa cálculos, duplicação, preços/recebimentos, quantidades, estados, Top 20, datas, domingos, ano bissexto, períodos vazios e utilização acima da capacidade. `tests/accounts-reports-ui.mjs` verifica tabelas, filtros de mês/intervalo, navegação e largura de celular com dados fictícios.
+`node tests/reports.mjs` testa cálculos, duplicação, preços/recebimentos, quantidades, estados, Top 10, datas, domingos, ano bissexto, períodos vazios e utilização acima da capacidade. `tests/accounts-reports-ui.mjs` verifica tabelas, filtros de mês/intervalo, navegação e largura de celular com dados fictícios.
 
 ## Foto dos profissionais na agenda
 
@@ -242,3 +242,5 @@ A barra lateral ajusta a altura das opções à tela e exibe somente uma faixa p
 Quando algum serviço da conta contém “avaliação” ou “retorno” no nome, o fechamento permite não adicionar produtos. A identificação ignora acentos e diferenças de maiúsculas/minúsculas, inclusive avaliação estética e avaliação HOF. A regra acompanha os serviços atuais do fechamento: remover a avaliação/retorno remove a exceção. Nome de produto não libera essa regra. O preço e os descontos continuam editáveis; total a pagar zero permite fechar sem selecionar pagamento. Contas de outros serviços continuam exigindo ao menos um produto.
 
 Sem produtos, o fechamento marca o atendimento como Finalizado, grava a conta e não cria um lançamento de procedimentos nem movimenta o estoque de produtos. Produtos ou brindes efetivamente utilizados mantêm suas regras de consumo. Se produtos forem adicionados, o lançamento de procedimentos segue a regra existente. Os registros são salvos pelo mesmo fluxo da agenda e não exigem migração dos dados existentes.
+
+A aba Contas distingue chave pública indevida, chave de outro projeto, recusa da API, permissão negada e colunas incompatíveis. O diagnóstico não exibe chaves, senhas nem mensagens brutas do banco. Falhas na nuvem continuam bloqueando alterações; não há conversão automática para usuários locais.

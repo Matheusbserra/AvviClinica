@@ -20,13 +20,33 @@ function encrypt(password: string) { const iv = randomBytes(12), cipher = create
 function decrypt(value: string) { const [iv, encrypted, tag] = value.split(".").map(part => Buffer.from(part, "base64url")); const decipher = createDecipheriv("aes-256-gcm", cryptKey(), iv); decipher.setAuthTag(tag); return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8"); }
 export function accountStorageMode() { return !process.env.VERCEL && !process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ? "local" : "cloud"; }
 const localFile = () => path.join(process.env.AVVI_LOCAL_ACCOUNTS_DIRECTORY ?? path.join(process.cwd(), ".avvi-local"), "accounts.json");
-function cloud() { const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/\/+$/, ""), key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim(); if (!url || !key) throw new AccountError("Para gerenciar usuários na nuvem, configure SUPABASE_SERVICE_ROLE_KEY no servidor e execute supabase/accounts.sql no mesmo projeto Supabase.", 503); return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(25000) }) } }); }
+function cloud() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/\/+$/, ""), key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!url || !key) throw new AccountError("Para gerenciar usuários na nuvem, configure SUPABASE_SERVICE_ROLE_KEY no servidor e execute supabase/accounts.sql no mesmo projeto Supabase.", 503);
+  if (key.startsWith("sb_publishable_")) throw new AccountError("SUPABASE_SERVICE_ROLE_KEY contém uma chave pública. Use a chave privada service_role ou Secret key do mesmo projeto Supabase, no Vercel Production.", 503);
+  if (key.split(".").length === 3) {
+    let claims: { role?: string; ref?: string } | undefined;
+    try { claims = JSON.parse(Buffer.from(key.split(".")[1], "base64url").toString()); } catch { /* The API validates malformed keys. */ }
+    if (claims?.role && claims.role !== "service_role") throw new AccountError("SUPABASE_SERVICE_ROLE_KEY contém uma chave pública ou de usuário. Copie a chave service_role do Supabase para essa variável no Vercel Production.", 503);
+    const host = new URL(url).hostname;
+    if (claims?.ref && host.endsWith(".supabase.co") && host !== `${claims.ref}.supabase.co`) throw new AccountError("A chave privada pertence a outro projeto Supabase. Use a chave do mesmo projeto indicado em NEXT_PUBLIC_SUPABASE_URL.", 503);
+  }
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(25000) }) } });
+}
 function unavailable(error: { code?: string }) { return ["42P01", "PGRST205"].includes(error.code ?? ""); }
+function databaseFailure(error: { code?: string }, status: number, action: "consultar" | "salvar") {
+  if (unavailable(error)) return new AccountError("Execute supabase/accounts.sql no SQL Editor do mesmo projeto Supabase configurado no Vercel para habilitar Contas.", 503);
+  if (error.code === "42501") return new AccountError("O Supabase negou acesso à tabela de usuários. Confira a chave privada SUPABASE_SERVICE_ROLE_KEY e execute novamente supabase/accounts.sql para conceder as permissões ao servidor.", 503);
+  if (status === 401 || status === 403 || error.code === "PGRST301" || error.code === "PGRST303") return new AccountError("O Supabase recusou a chave privada. Confira SUPABASE_SERVICE_ROLE_KEY do mesmo projeto no Vercel Production e publique novamente.", 503);
+  if (error.code === "42703" || error.code === "PGRST204") return new AccountError("A tabela de usuários está com uma estrutura diferente da esperada. Confira as colunas de avvi_user_accounts com supabase/accounts.sql.", 503);
+  if (error.code === "23505") return new AccountError("Este login já está cadastrado.", 409);
+  return new AccountError(`Não foi possível ${action} os usuários na nuvem. Tente novamente. Diagnóstico: HTTP ${status}.${error.code && /^(?:PGRST\d{3}|[A-Z0-9]{5})$/.test(error.code) ? ` Código: ${error.code}.` : ""}`, 503);
+}
 async function storedAccounts(allowUnprepared = false): Promise<StoredAccount[]> {
   if (accountStorageMode() === "local") { try { return JSON.parse(await readFile(localFile(), "utf8")); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; } }
   if (allowUnprepared && !process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) return [];
-  const { data, error } = await cloud().from("avvi_user_accounts").select("*").order("login");
-  if (error) { if (allowUnprepared && unavailable(error)) return []; throw new AccountError(unavailable(error) ? "Execute supabase/accounts.sql no SQL Editor do Supabase para habilitar Contas." : "Não foi possível consultar os usuários na nuvem. Tente novamente.", 503); }
+  const { data, error, status } = await cloud().from("avvi_user_accounts").select("*").order("login");
+  if (error) { if (allowUnprepared && unavailable(error)) return []; throw databaseFailure(error, status, "consultar"); }
   return data as StoredAccount[];
 }
 export async function findAccount(idOrLogin: string) { const stored = await storedAccounts(true), all = stored.some(item => item.id === builtin.id) ? stored : [...stored, builtin]; return all.find(item => item.id === idOrLogin || item.login === idOrLogin); }
@@ -61,7 +81,7 @@ export async function saveAccount(input: { id?: string; login?: string; name?: s
     const salt = password ? randomBytes(16).toString("hex") : current!.salt;
     const row: StoredAccount = { id: current?.id ?? randomUUID(), login, name, role: input.role!, tabs, salt, password_hash: password ? scryptSync(password, salt, 64).toString("hex") : current!.password_hash, password_ciphertext: password ? encrypt(password) : current!.password_ciphertext ?? (current?.id === builtin.id ? encrypt("avviclinica2026") : null), version: (current?.version ?? 0) + 1 };
     if (accountStorageMode() === "local") { const next = [...stored.filter(item => item.id !== row.id), row], file = localFile(); await mkdir(path.dirname(file), { recursive: true }); const temporary = file + "." + randomUUID() + ".tmp"; await writeFile(temporary, JSON.stringify(next), { mode: 0o600 }); await rename(temporary, file); }
-    else { const db = cloud(), exists = stored.some(item => item.id === row.id); const query = exists ? db.from("avvi_user_accounts").update({ ...row, updated_at: new Date().toISOString() }).eq("id", row.id).eq("version", current!.version) : db.from("avvi_user_accounts").insert(row); const { data, error } = await query.select("id"); if (error) throw new AccountError(error.code === "23505" ? "Este login já está cadastrado." : "Não foi possível salvar o usuário na nuvem.", error.code === "23505" ? 409 : 503); if (!data?.length) throw new AccountError("Este usuário foi alterado em outra janela. Atualize a lista.", 409); }
+    else { const db = cloud(), exists = stored.some(item => item.id === row.id); const query = exists ? db.from("avvi_user_accounts").update({ ...row, updated_at: new Date().toISOString() }).eq("id", row.id).eq("version", current!.version) : db.from("avvi_user_accounts").insert(row); const { data, error, status } = await query.select("id"); if (error) throw databaseFailure(error, status, "salvar"); if (!data?.length) throw new AccountError("Este usuário foi alterado em outra janela. Atualize a lista.", 409); }
     return accountUser(row);
   };
   if (accountStorageMode() !== "local") return operation();
