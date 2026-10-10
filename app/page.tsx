@@ -74,8 +74,9 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { appDataTableMissing, selectEntityState, syncEntityDiffs, setDatabaseAccess, isProtectedDatabase } from "@/lib/database";
 import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
-import { hasSnapshotChanges, readSnapshot, writeSnapshot, snapshotChanges, recoverPendingChanges, recordIsPending, snapshotEntities } from "@/lib/persistence";
+import { hasSnapshotChanges, snapshotChanges, recoverPendingChanges, recordIsPending, snapshotEntities } from "@/lib/persistence";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
+import { readBrowserSnapshot, writeBrowserSnapshot } from "@/lib/browserPersistence";
 import { canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey } from "@/lib/access";
 import { permittedSnapshot } from "@/lib/accessSnapshot";
 import { AccountsView } from "@/app/components/AccountsView";
@@ -379,10 +380,10 @@ function applyRemoteList<T extends { id?: string; month?: string }>(current: T[]
   return current.some(matches) ? current.map((item) => matches(item) ? record : item) : [record, ...current];
 }
 
-function readLocalSnapshot(user: AppUser): LocalSnapshot | null {
+async function readLocalSnapshot(user: AppUser): Promise<LocalSnapshot | null> {
   if (typeof window === "undefined") return null;
   try {
-    return readSnapshot(window.localStorage, userSnapshotKey(user));
+    return await readBrowserSnapshot(userSnapshotKey(user));
   } catch {
     return null;
   }
@@ -460,6 +461,8 @@ export default function Home() {
   const cloudLoaded = useRef(false);
   const [connectionRetry, setConnectionRetry] = useState(0);
   const [storageError, setStorageError] = useState("");
+  const [isSavingLocal, setIsSavingLocal] = useState(false);
+  const localWriteSequence = useRef(0);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [syncError, setSyncError] = useState(() => isSupabaseConfigured ? "" : "Supabase não configurado. Preencha NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local.");
@@ -518,19 +521,25 @@ export default function Home() {
     };
   }
 
-  const persistLocalDraft = useCallback((data: DataSnapshot) => {
+  const persistLocalDraft = useCallback(async (data: DataSnapshot) => {
+    const sequence = ++localWriteSequence.current;
+    setIsSavingLocal(true);
     try {
-      writeSnapshot(window.localStorage, data, lastSyncedSnapshot.current, userSnapshotKey(currentUser));
-      setStorageError("");
+      await writeBrowserSnapshot(data, lastSyncedSnapshot.current, userSnapshotKey(currentUser));
+      if (sequence === localWriteSequence.current) setStorageError("");
     } catch {
-      setStorageError("Não foi possível guardar a cópia neste navegador. Libere espaço ou permita o armazenamento local. Confira a confirmação na nuvem antes de sair.");
+      if (sequence === localWriteSequence.current) setStorageError("Não foi possível guardar a cópia neste navegador. Libere espaço ou permita o armazenamento local. Confira a confirmação na nuvem antes de sair.");
+    } finally {
+      if (sequence === localWriteSequence.current) setIsSavingLocal(false);
     }
   }, [currentUser]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    function restoreLocalData() {
-      const local = readLocalSnapshot(currentUser);
+    let cancelled = false;
+    async function restoreLocalData() {
+      const local = await readLocalSnapshot(currentUser);
+      if (cancelled) return;
       const snapshot = local?.data ? permittedSnapshot(local.data, currentUser) : undefined;
       if (isSupabaseConfigured && !lastSyncedSnapshot.current) {
         // Also preserve edits made when the very first connection fails.
@@ -559,11 +568,9 @@ export default function Home() {
       setIsDataReady(true);
     }
     if (!isSupabaseConfigured) {
-      restoreLocalData();
-      return;
+      void restoreLocalData();
+      return () => { cancelled = true; };
     }
-
-    let cancelled = false;
 
     async function hydrateFromSupabase() {
       try {
@@ -648,7 +655,8 @@ export default function Home() {
           professional_receipts: dbProfessionalReceipts,
           monthly_goals: canReadEntity(currentUser, "monthly_goals") ? (isEmptyDatabase ? initialGoals : dbGoals) : []
         };
-        const savedLocalSnapshot = readLocalSnapshot(currentUser);
+        const savedLocalSnapshot = await readLocalSnapshot(currentUser);
+        if (cancelled) return;
         const localSnapshot = savedLocalSnapshot ? {
           ...savedLocalSnapshot,
           data: {
@@ -710,7 +718,8 @@ export default function Home() {
         if (cancelled) return;
         cloudLoaded.current = false;
         isRemoteUpdate.current = false;
-        restoreLocalData();
+        await restoreLocalData();
+        if (cancelled) return;
         const message = appDataTableMissing(error)
           ? "Tabela avvi_records não encontrada no Supabase. Execute supabase/schema.sql no SQL Editor."
           : `Erro ao conectar ao Supabase: ${(error as Error).message}`;
@@ -809,18 +818,19 @@ export default function Home() {
   }, [syncError, hasPendingChanges, isSyncing, syncRetry, connectionRetry]);
 
   useEffect(() => {
-    if (!isSyncing && !hasPendingChanges && !storageError) return;
+    if (!isSyncing && !hasPendingChanges && !storageError && !isSavingLocal) return;
     const warnBeforeClose = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", warnBeforeClose);
     return () => window.removeEventListener("beforeunload", warnBeforeClose);
-  }, [isSyncing, hasPendingChanges, storageError]);
+  }, [isSyncing, hasPendingChanges, storageError, isSavingLocal]);
 
   function acceptUser(user: AppUser) {
     setDatabaseAccess(user);
     setUserRole(user.role); setCurrentUser(user);
+    localWriteSequence.current++; setIsSavingLocal(false);
     setIsDataReady(false); setHasPendingChanges(false); setStorageError(""); setLastSavedAt("");
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
     setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
@@ -1586,7 +1596,7 @@ export default function Home() {
           )}
           {storageError && <div role="alert" className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-avvi-red">{storageError}</div>}
           <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
-            {!isDataReady ? "Carregando dados…" : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : hasPendingChanges || syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
+            {!isDataReady ? "Carregando dados…" : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : hasPendingChanges || syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
           </div>
           {activeTab === "Agenda" ? <select aria-label="Navegar pelo sistema" value={activeTab} onChange={(event) => changeTab(event.target.value as Tab)} className="mb-2 shrink-0 rounded border border-avvi-line bg-white p-1.5 text-xs lg:hidden">{availableTabs.map((tab) => <option key={tab.id}>{tab.id}</option>)}</select> : <MobileTabs activeTab={activeTab} setActiveTab={changeTab} allowedTabs={availableTabs} />}
 

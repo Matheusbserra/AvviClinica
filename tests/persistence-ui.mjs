@@ -1,6 +1,10 @@
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs"; import ts from "typescript";
+const moduleUrl = source => "data:text/javascript;base64,"+Buffer.from(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText).toString("base64");
+const persistenceModule = moduleUrl(fs.readFileSync("lib/persistence.ts","utf8"));
+const browserModule = moduleUrl(fs.readFileSync("lib/browserPersistence.ts","utf8").replace('"./persistence"',JSON.stringify(persistenceModule)));
 const password=process.env.AVVI_TEST_ADMIN_PASSWORD;
 if (!password) throw new Error("Configure AVVI_TEST_ADMIN_PASSWORD para o teste.");
 const browser=await chromium.launch({...(process.env.CHROME_PATH ? {executablePath:process.env.CHROME_PATH} : {}),headless:true});
@@ -45,7 +49,7 @@ async function inventory(){await page.getByRole("button",{name:"Estoque",exact:t
 async function waitFor(check){for(let i=0;i<100;i++){if(await check())return;await page.waitForTimeout(100);}throw new Error("Timeout awaiting persistence assertion");}
 async function saved(){await waitFor(async()=>/Dados salvos na nuvem/.test(await status().textContent()));}
 const quantity=()=>page.getByLabel("Quantidade de Brinde QA",{exact:true});
-const cache=()=>page.evaluate(()=>JSON.parse(localStorage.getItem("avvi.data.snapshot.v1")));
+const cache=()=>page.evaluate(async module=>{const {readBrowserSnapshot}=await import(module);return readBrowserSnapshot("avvi.data.snapshot.v1");},browserModule);
 try{
  await page.goto(process.env.AVVI_TEST_URL??"http://127.0.0.1:3108");await page.waitForTimeout(600);await login();await inventory();await saved();
  failWrites=true;await quantity().fill("6");await quantity().blur();await waitFor(async()=>/pendente/.test(await status().textContent()));
@@ -57,14 +61,17 @@ try{
  delayFirst=true;await quantity().fill("7");await quantity().blur();await waitFor(()=>delayedStarted);await quantity().fill("9");await quantity().blur();await waitFor(async()=>(await cache()).data.gifts.find(item=>item.id==="gift").quantity===9);releaseDelayed();await saved();assert.equal(records.get("gifts:gift").data.quantity,9);assert.equal((await cache()).data.gifts.find(item=>item.id==="gift").quantity,9);
  // A failed initial connection remains usable and reconnects without losing edits.
  failReads=true;await page.reload();await page.waitForTimeout(600);await login();await inventory();await quantity().fill("11");await quantity().blur();await waitFor(async()=>(await cache()).data.gifts.find(item=>item.id==="gift").quantity===11);failReads=false;await page.getByRole("button",{name:"Tentar novamente",exact:true}).click();await saved();assert.equal(records.get("gifts:gift").data.quantity,11);
- // Exhausted local storage must show an alert and still try the cloud.
+ // Exhausted localStorage falls back to IndexedDB without stopping cloud saving.
  await page.evaluate(()=>{const original=Storage.prototype.setItem;window.__restoreStorage=()=>{Storage.prototype.setItem=original;};Storage.prototype.setItem=function(key,value){if(key==="avvi.data.snapshot.v1")throw new DOMException("full","QuotaExceededError");return original.call(this,key,value);};});
- await quantity().fill("12");await quantity().blur();await saved();assert.equal(records.get("gifts:gift").data.quantity,12);await page.getByRole("alert").filter({hasText:"Não foi possível guardar a cópia"}).waitFor();await page.evaluate(()=>window.__restoreStorage());
- await page.reload();await page.waitForTimeout(600);await login();await inventory();await saved();assert.equal(await quantity().inputValue(),"12");
- const copy2=await cache();assert.equal(copy2.data.gifts.find(item=>item.id==="gift").quantity,12);assert.equal(copy2.data.procedures.find(item=>item.id==="procedure").averageCost,987.65);
+ await quantity().fill("12");await quantity().blur();await saved();assert.equal(records.get("gifts:gift").data.quantity,12);await waitFor(async()=>(await cache())?.data.gifts.find(item=>item.id==="gift")?.quantity===12);assert.equal(await page.getByRole("alert").filter({hasText:"Não foi possível guardar a cópia"}).count(),0);
+ // If both storage mechanisms fail, keep the warning and still save to the cloud.
+ await page.evaluate(()=>{const original=IDBDatabase.prototype.transaction;window.__restoreIndexed=()=>{IDBDatabase.prototype.transaction=original;};IDBDatabase.prototype.transaction=function(...args){if(this.name==="avvi-browser-copies-v1")throw new DOMException("blocked","SecurityError");return original.apply(this,args);};});
+ await quantity().fill("14");await quantity().blur();await saved();assert.equal(records.get("gifts:gift").data.quantity,14);await page.getByRole("alert").filter({hasText:"Não foi possível guardar a cópia"}).waitFor();await page.evaluate(()=>{window.__restoreStorage();window.__restoreIndexed();});
+ await page.reload();await page.waitForTimeout(600);await login();await inventory();await saved();assert.equal(await quantity().inputValue(),"14");
+ const copy2=await cache();assert.equal(copy2.data.gifts.find(item=>item.id==="gift").quantity,14);assert.equal(copy2.data.procedures.find(item=>item.id==="procedure").averageCost,987.65);
  failWrites=true;await quantity().fill("13");await quantity().blur();await waitFor(async()=>/pendente/.test(await status().textContent()));failWrites=false;await page.evaluate(()=>window.dispatchEvent(new Event("online")));await saved();assert.equal(records.get("gifts:gift").data.quantity,13);
  // No cache and an unavailable first connection: edits to the initial catalog survive reconnection.
- await page.evaluate(()=>localStorage.removeItem("avvi.data.snapshot.v1"));failReads=true;await page.reload();await page.waitForTimeout(600);await login();await inventory();await page.getByRole("button",{name:"Adicionar brinde",exact:true}).click();await page.getByLabel("Nome do brinde",{exact:true}).fill("Brinde durante primeira falha");await page.getByLabel("Quantidade inicial do brinde",{exact:true}).fill("4");await page.getByRole("button",{name:"Salvar brinde",exact:true}).click();await waitFor(async()=>(await cache())?.data?.gifts?.some(item=>item.name==="Brinde durante primeira falha"));failReads=false;await page.getByRole("button",{name:"Tentar novamente",exact:true}).click();await saved();assert.equal([...records.values()].some(row=>row.entity==="gifts"&&row.data.name==="Brinde durante primeira falha"),true);assert.equal(records.get("gifts:gift").data.quantity,13);
+ await page.evaluate(async()=>{localStorage.removeItem("avvi.data.snapshot.v1");await new Promise((resolve,reject)=>{const request=indexedDB.open("avvi-browser-copies-v1",1);request.onsuccess=()=>{const db=request.result,tx=db.transaction("snapshots","readwrite");tx.objectStore("snapshots").delete("avvi.data.snapshot.v1");tx.oncomplete=()=>{db.close();resolve();};tx.onabort=()=>reject(tx.error);};request.onerror=()=>reject(request.error);});});failReads=true;await page.reload();await page.waitForTimeout(600);await login();await inventory();await page.getByRole("button",{name:"Adicionar brinde",exact:true}).click();await page.getByLabel("Nome do brinde",{exact:true}).fill("Brinde durante primeira falha");await page.getByLabel("Quantidade inicial do brinde",{exact:true}).fill("4");await page.getByRole("button",{name:"Salvar brinde",exact:true}).click();await waitFor(async()=>(await cache())?.data?.gifts?.some(item=>item.name==="Brinde durante primeira falha"));failReads=false;await page.getByRole("button",{name:"Tentar novamente",exact:true}).click();await saved();assert.equal([...records.values()].some(row=>row.entity==="gifts"&&row.data.name==="Brinde durante primeira falha"),true);assert.equal(records.get("gifts:gift").data.quantity,13);
  assert.deepEqual(errors,[]);
- console.log("PASS: Failed cloud writes survive reload, unrelated cloud changes are preserved, manual retry confirms saving, newer drafts survive old request completion, failed reads reconnect, local quota failures are visible and do not prevent cloud saving.");
+ console.log("PASS: Failed cloud writes survive reload, unrelated cloud changes are preserved, manual retry confirms saving, newer drafts survive old request completion, failed reads reconnect, localStorage quota uses IndexedDB and survives reload; failures in both stores are visible without preventing cloud saving.");
 }finally{await browser.close();await new Promise(resolve=>mock.close(resolve));}
