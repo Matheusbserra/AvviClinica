@@ -1615,7 +1615,7 @@ export default function Home() {
 
           {activeTab === "Follow Up" && <FollowUpView tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
 
-          {userRole === "admin" && activeTab === "Contas" && <AccountsView />}
+          {userRole === "admin" && activeTab === "Contas" && <AccountsView professionals={professionals} />}
           {canAccessTab(currentUser, "Relatórios") && activeTab === "Relatórios" && <ReportsView appointments={appointments} entries={entries} professionals={professionals} procedures={procedures} services={services} revenues={revenues} />}
 
           {canAccessTab(currentUser, "Ultraformer MPT") && activeTab === "Ultraformer MPT" && <UltraformerView user={currentUser} tips={ultraformerTips} setTips={setUltraformerTips} patients={patients} professionals={professionals} />}
@@ -1688,6 +1688,7 @@ export default function Home() {
 
           {canAccessTab(currentUser, "Relatório Profissional") && activeTab === "Relatório Profissional" && (
             <ProfessionalReportView
+              user={currentUser}
               entries={entries}
               professionals={professionals}
               selectedMonth={selectedMonth}

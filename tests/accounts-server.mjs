@@ -25,6 +25,21 @@ try {
  await assert.rejects(accounts.saveAccount({id:user.id,revision:user.revision,name:"Stale",login:"renomeado",password:"",role:"standard",tabs:[]}),error=>error.status===409);
  const defaultEdited=await accounts.saveAccount({id:original.id,revision:0,name:"Recepção",login:"recepcao",password:"",role:"standard",tabs:["Agenda"]});assert.equal(await auth.resolveAccess(request(original)),null);assert.equal(await auth.authenticateUser("avviclinica","avviclinica2026"),null);assert.equal((await auth.authenticateUser("recepcao","avviclinica2026")).id,defaultEdited.id);
  list=await accounts.listAccounts();assert.equal(list.accounts.find(a=>a.id===defaultEdited.id).password,"avviclinica2026");assert.equal(list.accounts[0].login,"admin");assert.equal(list.accounts[0].password,null);
+ // Scoped report accounts persist their allowed professional IDs and revoke old sessions.
+ const scoped=await accounts.saveAccount({name:"Ana restrita",login:"ana-restrita",password:"senha-qa-2026",role:"standard",tabs:["Relatório Profissional"],professionalReport:{professionalIds:["ana","ana"]}});
+ assert.deepEqual(scoped.professionalReport,{professionalIds:["ana"]});
+ assert.deepEqual((await auth.authenticateUser("ana-restrita","senha-qa-2026")).professionalReport,scoped.professionalReport);
+ assert.deepEqual((await accounts.listAccounts()).accounts.find(a=>a.id===scoped.id).professionalReport,scoped.professionalReport);
+ for(const entity of ["professionals","patients","services","appointments","financial_entries","monthly_goals"]){assert.equal(access.canReadEntity(scoped,entity),false);assert.equal(access.canWriteEntity(scoped,entity),false);}
+ assert.equal(access.hasFinancialAccess(scoped),false);assert.equal(access.canAccessTab(scoped,"Relatório Profissional"),true);
+ assert.equal(permittedSnapshot(snapshot,scoped).financial_entries.length,0);
+ assert.deepEqual((await auth.resolveAccess(request({...scoped,professionalReport:{professionalIds:["samia"]}}))).professionalReport,{professionalIds:["ana"]});
+ for(const invalid of [{professionalIds:[]},{professionalIds:[3]},[],"all"]){await assert.rejects(accounts.saveAccount({name:"Inválido",login:"bad-scope",password:"senha-qa-2026",role:"standard",tabs:["Relatório Profissional"],professionalReport:invalid}),error=>error.status===400);}
+ const changed=await accounts.saveAccount({id:scoped.id,revision:scoped.revision,name:"Ana restrita",login:scoped.login,password:"",role:"standard",tabs:["Relatório Profissional"],professionalReport:{professionalIds:["samia"]}});
+ assert.equal(await auth.resolveAccess(request(scoped)),null);assert.deepEqual(changed.professionalReport,{professionalIds:["samia"]});
+ const complete=await accounts.saveAccount({id:changed.id,revision:changed.revision,name:"Ana restrita",login:changed.login,password:"",role:"standard",tabs:["Relatório Profissional"],professionalReport:null});
+ assert.equal(complete.professionalReport,undefined);assert.equal(access.hasFinancialAccess(complete),true);
+ const promoted=await accounts.saveAccount({id:complete.id,revision:complete.revision,name:"Ana restrita",login:complete.login,password:"",role:"admin",tabs:[],professionalReport:{professionalIds:["ana"]}});assert.equal(promoted.professionalReport,undefined);
  // A configured cloud never falls back to local file storage or old credentials after a network failure.
  process.env.NEXT_PUBLIC_SUPABASE_URL="http://database.test";process.env.SUPABASE_SERVICE_ROLE_KEY="qa-service";globalThis.fetch=async()=>new Response(JSON.stringify({message:"offline"}),{status:503,headers:{"Content-Type":"application/json"}});
  await assert.rejects(auth.authenticateUser("avviclinica","avviclinica2026"));assert.equal(await auth.resolveAccess(request(defaultEdited)),null);

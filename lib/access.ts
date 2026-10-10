@@ -1,7 +1,7 @@
 export type AppRole = "admin" | "standard";
 export const appTabs = ["Agenda", "Estoque", "Follow Up", "Ultraformer MPT", "Relatórios", "Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] as const;
 export type AppTab = typeof appTabs[number];
-export type AppUser = { id?: string; name?: string; login: string; role: AppRole; tabs?: string[]; revision?: number };
+export type AppUser = { id?: string; name?: string; login: string; role: AppRole; tabs?: string[]; revision?: number; professionalReport?: { professionalIds: string[] } };
 export const standardTabs: string[] = ["Agenda", "Estoque", "Follow Up", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes"];
 type Access = AppRole | AppUser;
 export function canAccessTab(access: Access, tab: string) {
@@ -9,7 +9,8 @@ export function canAccessTab(access: Access, tab: string) {
   if (!appTabs.includes(tab as AppTab)) return false;
   return role === "admin" || (tab !== "Contas" && (typeof access === "string" ? standardTabs : access.tabs ?? standardTabs).includes(tab));
 }
-export function hasFinancialAccess(access: Access) { return ["Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional"].some(tab => canAccessTab(access, tab)); }
+export function hasLimitedProfessionalReport(access: Access) { return typeof access !== "string" && access.role !== "admin" && !!access.professionalReport; }
+export function hasFinancialAccess(access: Access) { return ["Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional"].some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
 const readTabs: Record<string, string[]> = {
   ultraformer_tips: ["Ultraformer MPT"],
   patients: ["Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Cadastro de Pacientes", "Recibos de Pagamento", "Relatório Profissional"],
@@ -30,7 +31,7 @@ const writeTabs: Record<string, string[]> = {
   followup_rules: ["Follow Up"], followup_contacts: ["Follow Up"], followup_logs: ["Follow Up"]
 };
 export const standardEntities = Object.keys(writeTabs).filter(entity => writeTabs[entity].some(tab => standardTabs.includes(tab)));
-export function canReadEntity(access: Access, entity: string) { return (readTabs[entity] ?? []).some(tab => canAccessTab(access, tab)); }
+export function canReadEntity(access: Access, entity: string) { return (readTabs[entity] ?? []).some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
 export function canWriteEntity(access: Access, entity: string) { return (writeTabs[entity] ?? []).some(tab => canAccessTab(access, tab)); }
 export function userSnapshotKey(user: AppUser) {
   if (user.login === "admin" && (!user.id || user.id === "primary-admin")) return "avvi.data.snapshot.v1";
