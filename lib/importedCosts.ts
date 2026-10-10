@@ -6092,21 +6092,6 @@ export const importedCosts: FixedCost[] = [
     "notes": "TRAFÃ‰GO PAGO"
   },
   {
-    "id": "custo-pdf-0407-atendimento-nutri-08-11-karol",
-    "name": "ATENDIMENTO NUTRI 08/11 Karol",
-    "category": "Custos variáveis",
-    "costType": "Pagamento Profissional",
-    "professionalName": "",
-    "supplier": "",
-    "value": 115.0,
-    "dueDate": "2026-01-09",
-    "status": "Pago",
-    "paymentMethod": "Pix",
-    "replicateMonths": 0,
-    "creditInstallments": 1,
-    "notes": "ATENDIMENTO NUTRI 08/11 Karol"
-  },
-  {
     "id": "custo-pdf-0408-restylane-sculptra-pg-elfa",
     "name": "RESTYLANE|+SCULPTRA PG ELFA",
     "category": "Custos variáveis",

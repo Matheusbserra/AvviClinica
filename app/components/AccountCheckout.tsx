@@ -18,6 +18,8 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
 }) {
   const [client, setClient] = useState({ ...draft.client });
   const [lines, setLines] = useState(() => draft.lines.map((line) => ({ ...line })));
+  const [expandedDiscount, setExpandedDiscount] = useState<string | null>(null);
+  const [percentages, setPercentages] = useState<Record<string, number>>({});
   const [products, setProducts] = useState(() => draft.products.map((product) => ({ ...product })));
   const [selectedGifts, setSelectedGifts] = useState(() => (draft.gifts ?? []).map((gift) => ({ ...gift })));
   const [giftId, setGiftId] = useState(""); const [giftQuantity, setGiftQuantity] = useState(1);
@@ -49,14 +51,27 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
     { name: "Pré-pago", choices: paymentChoices.filter((choice) => choice.method === "Crédito Futuro") }
   ];
   function updateLine(index: number, patch: Partial<ProcedureLine>) {
-    setLines((current) => current.map((line, row) => row === index ? { ...line, ...patch } : line));
+    const target = lines[index];
+    if (patch.discount !== undefined && target) setPercentages(current => { const next = { ...current }; delete next[target.id]; return next; });
+    setLines((current) => current.map((line, row) => {
+      if (row !== index) return line;
+      const next = { ...line, ...patch };
+      if (patch.discount === undefined && percentages[line.id] !== undefined) next.discount = moneyRound(next.quantity * next.servicePrice * percentages[line.id] / 100);
+      return next;
+    }));
+  }
+  function applyPercentage(index: number, value: number) {
+    const percent = Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
+    const line = lines[index];
+    setPercentages(current => ({ ...current, [line.id]: percent }));
+    setLines(current => current.map((item, row) => row === index ? { ...item, discount: moneyRound(item.quantity * item.servicePrice * percent / 100) } : item));
   }
   function addService() {
     const service = services.find((item) => item.id === serviceId && item.active);
     if (!service || !Number.isInteger(serviceQuantity) || serviceQuantity <= 0) return;
     setLines((current) => {
       const existing = current.find((line) => line.serviceId === service.id);
-      return existing ? current.map((line) => line.id === existing.id ? { ...line, quantity: line.quantity + serviceQuantity } : line)
+      return existing ? current.map((line) => line.id === existing.id ? { ...line, quantity: line.quantity + serviceQuantity, discount: percentages[line.id] !== undefined ? moneyRound((line.quantity + serviceQuantity) * line.servicePrice * percentages[line.id] / 100) : line.discount } : line)
         : [...current, { id: `line-${crypto.randomUUID()}`, serviceId: service.id, manualProcedure: service.name, quantity: serviceQuantity,
           servicePrice: service.price, productCost: 0, professionalPercent: draft.professional?.commissionPercent ?? 70, discount: 0 }];
     });
@@ -141,7 +156,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
           <div className="overflow-x-auto"><table data-testid="checkout-services" className="w-full min-w-[620px] text-sm"><thead className="border-b-2 border-avvi-line text-left text-xs text-slate-500"><tr><th className="px-2 py-3">Item</th><th className="px-2 py-3">Quantidade</th><th className="px-2 py-3">Preço</th><th className="px-2 py-3">Desconto</th><th className="px-2 py-3">A pagar</th><th /></tr></thead><tbody>
             {lines.map((line, index) => {
               const name = line.manualProcedure || services.find((service) => service.id === line.serviceId)?.name || "Serviço registrado";
-              return <tr key={line.id} className="border-b border-avvi-line"><td className="border-l-4 border-l-lime-500 px-3 py-4"><p className="font-semibold">{name}</p><p className="mt-1 text-xs text-orange-600">com {draft.professional?.name ?? "Profissional"}</p></td><td className="px-2 py-3"><input aria-label={`Quantidade de ${name} na conta`} type="number" min={1} step={1} required value={line.quantity} onChange={(event) => updateLine(index, { quantity: Number(event.target.value) })} className="w-16 rounded border border-slate-300 px-2 py-1 text-right" /></td><td className="px-2 py-3"><input aria-label={`Preço de ${name} na conta`} type="number" min={0} step="0.01" required value={line.servicePrice} onChange={(event) => updateLine(index, { servicePrice: Number(event.target.value) })} className="w-24 rounded border border-slate-300 px-2 py-1 text-right" /></td><td className="px-2 py-3"><input aria-label={`Desconto de ${name} na conta`} type="number" min={0} max={moneyRound(line.servicePrice * line.quantity)} step="0.01" value={line.discount ?? 0} onChange={(event) => updateLine(index, { discount: Number(event.target.value) })} className="w-20 rounded border border-slate-300 px-2 py-1 text-right" /></td><td className="whitespace-nowrap px-2 py-3">{currency(Math.max(0, moneyRound(line.servicePrice * line.quantity - (line.discount ?? 0))))}</td><td><button type="button" aria-label={`Remover ${name} da conta`} onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={15} /></button></td></tr>;
+              return <tr key={line.id} className="border-b border-avvi-line"><td className="border-l-4 border-l-lime-500 px-3 py-4"><p className="font-semibold">{name}</p><p className="mt-1 text-xs text-orange-600">com {draft.professional?.name ?? "Profissional"}</p></td><td className="px-2 py-3"><input aria-label={`Quantidade de ${name} na conta`} type="number" min={1} step={1} required value={line.quantity} onChange={(event) => updateLine(index, { quantity: Number(event.target.value) })} className="w-16 rounded border border-slate-300 px-2 py-1 text-right" /></td><td className="px-2 py-3 align-top"><div className="relative w-28"><span className="pointer-events-none absolute left-2 top-1 text-xs text-slate-500">R$</span><input aria-label={`Preço de ${name} na conta`} type="number" min={0} step="0.01" required value={line.servicePrice} onChange={(event) => updateLine(index, { servicePrice: Number(event.target.value) })} className="w-full rounded border border-slate-300 py-1 pl-8 pr-2 text-right" /></div></td><td className="px-2 py-3 align-top"><div className="relative w-28"><span className="pointer-events-none absolute left-2 top-1 text-xs text-slate-500">R$</span><input aria-label={`Desconto de ${name} na conta`} type="number" min={0} max={moneyRound(line.servicePrice * line.quantity)} step="0.01" value={line.discount ?? 0} onFocus={() => setExpandedDiscount(line.id)} onClick={() => setExpandedDiscount(line.id)} onChange={(event) => updateLine(index, { discount: Number(event.target.value) })} className="w-full rounded border border-slate-300 py-1 pl-8 pr-2 text-right" /></div>{expandedDiscount === line.id && <div className="mt-2 w-32 rounded-md border border-avvi-line bg-avvi-soft p-2"><label className="block text-[10px] font-semibold text-slate-600">Desconto em %<div className="relative mt-1"><input aria-label={`Porcentagem de desconto de ${name}`} type="number" min={0} max={100} step="0.01" value={percentages[line.id] ?? (line.quantity * line.servicePrice > 0 ? moneyRound((line.discount ?? 0) / (line.quantity * line.servicePrice) * 100) : 0)} onChange={event => applyPercentage(index, Number(event.target.value))} className="w-full rounded border border-slate-300 bg-white py-1 pl-2 pr-6 text-right text-xs" /><span className="pointer-events-none absolute right-2 top-1 text-xs">%</span></div></label><p className="mt-1 text-[9px] text-slate-500">Sobre {currency(line.quantity * line.servicePrice)}</p><button type="button" aria-label={`Ocultar porcentagem de ${name}`} onClick={() => setExpandedDiscount(null)} className="mt-1 text-[10px] font-semibold text-avvi-blue">Concluir</button></div>}</td><td className="whitespace-nowrap px-2 py-3">{currency(Math.max(0, moneyRound(line.servicePrice * line.quantity - (line.discount ?? 0))))}</td><td><button type="button" aria-label={`Remover ${name} da conta`} onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={15} /></button></td></tr>;
             })}
           </tbody></table></div>
           {!lines.length && <p className="py-6 text-center text-sm text-slate-500">Adicione os serviços desta conta.</p>}

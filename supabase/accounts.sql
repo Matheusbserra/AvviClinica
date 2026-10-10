@@ -14,6 +14,7 @@ create table if not exists public.avvi_user_accounts (
   constraint avvi_user_login_normalized check (login = lower(login) and login <> 'admin')
 );
 alter table public.avvi_user_accounts add column if not exists professional_report jsonb;
+alter table public.avvi_user_accounts add column if not exists professional_registration jsonb;
 alter table public.avvi_user_accounts enable row level security;
 revoke all on public.avvi_user_accounts from anon, authenticated;
 grant all on public.avvi_user_accounts to service_role;

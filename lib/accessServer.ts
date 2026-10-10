@@ -33,7 +33,7 @@ export function readAccess(request: Request, now = Date.now()): AppUser | null {
     if (received.length !== expected.length || !timingSafeEqual(received, expected)) return null;
     const data = JSON.parse(Buffer.from(value, "base64url").toString());
     if (typeof data.login !== "string" || !["admin", "standard"].includes(data.role) || !Number.isFinite(data.expires) || data.expires <= now) return null;
-    return { login: data.login, role: data.role, ...(data.id ? { id: data.id } : {}), ...(data.name ? { name: data.name } : {}), ...(data.tabs ? { tabs: data.tabs } : {}), ...(data.revision !== undefined ? { revision: data.revision } : {}), ...(data.professionalReport ? { professionalReport: data.professionalReport } : {}) };
+    return { login: data.login, role: data.role, ...(data.id ? { id: data.id } : {}), ...(data.name ? { name: data.name } : {}), ...(data.tabs ? { tabs: data.tabs } : {}), ...(data.revision !== undefined ? { revision: data.revision } : {}), ...(data.professionalReport ? { professionalReport: data.professionalReport } : {}), ...(data.professionalRegistration ? { professionalRegistration: data.professionalRegistration } : {}) };
   } catch { return null; }
 }
 export function sameOrigin(request: Request) {

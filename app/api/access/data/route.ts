@@ -1,7 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
-import { canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
+import { canManageProfessional, registrationOnly, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { stockHistoryEntry } from "@/lib/accessSnapshot";
+import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAvailability";
 import { isUltraformerTip } from "@/lib/ultraformer";
 import { entityNames } from "@/lib/database";
 import type { EntityName } from "@/lib/database";
@@ -28,9 +29,15 @@ export async function GET(request: Request) {
   if (!entityNames.includes(entity as EntityName) || !canReadEntity(user, entity)) return Response.json({ error: "Esta informação é restrita ao administrador." }, { status: 403, headers });
   try {
     const records = await rows(entity);
-    const data = records.map((row) => {
+    const permitted = entity === "professionals" && registrationOnly(user) && user.professionalRegistration ? records.filter(row => user.professionalRegistration!.professionalIds.includes(row.record_id)) : records;
+    const data = permitted.map((row) => {
       if (user.role === "admin") return row.data;
-      if (entity === "professionals" && !canReadEntity(user, "monthly_goals")) { const copy = { ...row.data }; delete copy.monthlyGoal; return copy; }
+      if (entity === "professionals") {
+        const copy = { ...row.data };
+        if (!canReadEntity(user, "monthly_goals")) delete copy.monthlyGoal;
+        if (registrationOnly(user)) copy.commissionPercent = 0;
+        return copy;
+      }
       if (entity !== "financial_entries" || hasFinancialAccess(user)) return row.data;
       const entry = row.data as unknown as FinancialEntry;
       return stockHistoryEntry(entry);
@@ -46,7 +53,18 @@ export async function POST(request: Request) {
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
     const db = database();
     const appointmentUpdates = upserts.filter((row) => row.entity === "appointments").map((row) => row.data as Appointment);
-    const stored = user.role === "standard" && appointmentUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
+    const stored = appointmentUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
+    const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt));
+    if (moved.length) {
+      const professionals = (await rows("professionals")).map(row => row.data as unknown as import("@/lib/types").Professional);
+      const deleted = new Set(removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids));
+      const effectiveAppointments = [...stored.filter(item => !deleted.has(item.id) && !appointmentUpdates.some(next => next.id === item.id)), ...appointmentUpdates];
+      for (const appointment of moved) {
+        const professional = upserts.find(row => row.entity === "professionals" && row.record_id === appointment.professionalId)?.data ?? professionals.find(item => item.id === appointment.professionalId);
+        const error = appointmentAvailabilityError(professional, effectiveAppointments, appointment.startsAt, appointment.endsAt, appointment.id);
+        if (error) return Response.json({ error }, { status: 409, headers });
+      }
+    }
     if (user.role === "standard") for (const appointment of appointmentUpdates) {
       const account = appointment.closedAccount;
       if (!account) continue;
@@ -60,6 +78,9 @@ export async function POST(request: Request) {
     const receiptSources = new Set<string>(canWriteEntity(user, "professional_receipts") ? upserts.filter(row => row.entity === "professional_receipts").map(row => row.record_id) : []);
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
+      if (row.entity === "professionals" && row.data.showInAgenda !== undefined && typeof row.data.showInAgenda !== "boolean") return Response.json({ error: "Visibilidade na agenda inválida." }, { status: 400, headers });
+      if (row.entity === "professionals" && row.data.closedShifts !== undefined && !validClosedShifts(row.data.closedShifts)) return Response.json({ error: "Turnos de agenda inválidos." }, { status: 400, headers });
+      if (row.entity === "professionals" && !canManageProfessional(user, row.record_id)) return Response.json({ error: "Cadastro deste profissional não autorizado." }, { status: 403, headers });
       if (row.entity === "ultraformer_tips" && !isUltraformerTip(row.data)) return Response.json({ error: "Dados de ponteira ou utilização inválidos." }, { status: 400, headers });
       if (row.entity === "ultraformer_tips" && !canWriteEntity(user, "ultraformer_tips")) return Response.json({ error: "Acesso ao Ultraformer MPT não autorizado." }, { status: 403, headers });
       if (row.entity === "ultraformer_tips") {
@@ -74,10 +95,12 @@ export async function POST(request: Request) {
       }
       if (user.role !== "standard") continue;
       if (canWriteEntity(user, row.entity)) {
-        if (row.entity === "professionals" && !canAccessTab(user, "Metas")) {
-          const { data } = await db.from("avvi_records").select("data").eq("entity", "professionals").eq("record_id", row.record_id).maybeSingle();
-          // The standard user never edits a professional's goal through an allowed registration screen.
-          delete row.data.monthlyGoal; if (data?.data.monthlyGoal !== undefined) row.data.monthlyGoal = data.data.monthlyGoal;
+        if (row.entity === "professionals") {
+          const { data, error } = await db.from("avvi_records").select("data").eq("entity", "professionals").eq("record_id", row.record_id).maybeSingle();
+          if (error) throw error;
+          // Registration updates cannot change a standard user's hidden commission.
+          row.data.commissionPercent = data?.data.commissionPercent ?? 0;
+          if (!canAccessTab(user, "Metas")) { delete row.data.monthlyGoal; if (data?.data.monthlyGoal !== undefined) row.data.monthlyGoal = data.data.monthlyGoal; }
         }
         continue;
       }
@@ -90,6 +113,7 @@ export async function POST(request: Request) {
     }
     for (const item of removed) {
       if (!entityNames.includes(item.entity) || !Array.isArray(item.ids) || item.ids.some((id: unknown) => typeof id !== "string")) return Response.json({ error: "Exclusão inválida." }, { status: 400, headers });
+      if (item.entity === "professionals" && item.ids.some((id: string) => !canManageProfessional(user, id))) return Response.json({ error: "Exclusão deste profissional não autorizada." }, { status: 403, headers });
       if (user.role === "standard" && !canWriteEntity(user, item.entity)) {
         if (!canAccessTab(user, "Agenda") || !["financial_entries", "revenues", "fixed_costs"].includes(item.entity)) return Response.json({ error: "Exclusão financeira restrita ao administrador." }, { status: 403, headers });
         const { data, error } = await db.from("avvi_records").select("record_id,data").eq("entity", item.entity).in("record_id", item.ids);

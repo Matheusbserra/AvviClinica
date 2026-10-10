@@ -51,6 +51,9 @@ import jsPDF from "jspdf";
 import { appointments as seedAppointments, financialEntries as seedFinancialEntries, fixedCosts as seedFixedCosts, patients as seedPatients, procedures as seedProcedures, professionals as seedProfessionals, receipts as seedReceipts } from "@/lib/seed";
 import { catalogProcedures } from "@/lib/catalogProcedures";
 import { FollowUpView, FollowUpNavigation } from "@/app/components/FollowUpView";
+import { ProfessionalShifts } from "@/app/components/ProfessionalShifts";
+import { appointmentAvailabilityError, isAbsence, newAbsences } from "@/lib/agendaAvailability";
+import type { AgendaSlot } from "@/lib/agendaAvailability";
 import { AgendaView } from "@/app/components/AgendaView";
 import { UltraformerView } from "@/app/components/UltraformerView";
 import { InventorySection } from "@/app/components/GiftInventoryView";
@@ -62,7 +65,7 @@ import { checkoutAllowsNoProducts, distributeCheckoutDiscount, restoreCheckoutIt
 import { procedureEntryFromAccount } from "@/lib/accountProcedures";
 import { applyCheckoutInventory } from "@/lib/inventory";
 import { importedServices } from "@/lib/importedServices";
-import { appointmentServices } from "@/lib/appointmentServices";
+import { appointmentServices, totalServiceMinutes } from "@/lib/appointmentServices";
 import type { AppointmentService } from "@/lib/types";
 import { serviceKey } from "@/lib/services";
 import { importedClients } from "@/lib/importedClients";
@@ -77,7 +80,7 @@ import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 import { hasSnapshotChanges, snapshotChanges, recoverPendingChanges, recordIsPending, snapshotEntities } from "@/lib/persistence";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
 import { readBrowserSnapshot, writeBrowserSnapshot } from "@/lib/browserPersistence";
-import { canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey } from "@/lib/access";
+import { canManageProfessional, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey } from "@/lib/access";
 import { permittedSnapshot } from "@/lib/accessSnapshot";
 import { AccountsView } from "@/app/components/AccountsView";
 import { ReportsView } from "@/app/components/ReportsView";
@@ -469,7 +472,8 @@ export default function Home() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncRetry, setSyncRetry] = useState(0);
 
-  const visibleProfessionals = professionalFilter === "todos" ? professionals : professionals.filter((professional) => professional.id === professionalFilter);
+  const agendaProfessionals = professionals.filter(professional => professional.showInAgenda !== false);
+  const visibleProfessionals = agendaProfessionals.some(professional => professional.id === professionalFilter) ? agendaProfessionals.filter(professional => professional.id === professionalFilter) : agendaProfessionals;
   const currentMonthSummary = useMemo(() => summarizeMonth(revenues, costs, selectedMonth), [revenues, costs, selectedMonth]);
   const previousMonthKey = previousMonth(selectedMonth);
   const previousSummary = useMemo(() => summarizeMonth(revenues, costs, previousMonthKey), [revenues, costs, previousMonthKey]);
@@ -540,7 +544,21 @@ export default function Home() {
     async function restoreLocalData() {
       const local = await readLocalSnapshot(currentUser);
       if (cancelled) return;
-      const snapshot = local?.data ? permittedSnapshot(local.data, currentUser) : undefined;
+      let snapshot = local?.data ? permittedSnapshot(local.data, currentUser) : undefined;
+      if (!isSupabaseConfigured && currentUser.role === "admin" && new URLSearchParams(window.location.search).get("previa") === "historico-agendamentos") {
+        try {
+          const response = await fetch("/api/local-preview/data", { cache: "no-store" });
+          if (response.ok) {
+            const preview: { data: DataSnapshot; removed?: { entity: string; ids: string[] }[] } = await response.json();
+            if (!snapshot) snapshot = permittedSnapshot(preview.data, currentUser);
+            else {
+              const excluded = new Map(preview.removed?.map(item => [item.entity, new Set(item.ids)]));
+              snapshot = Object.fromEntries(snapshotEntities.map(entity => [entity, snapshot![entity].filter(record => !excluded.get(entity)?.has("id" in record ? record.id : record.month))])) as DataSnapshot;
+            }
+          }
+        } catch { /* Normal local preview remains available when no import snapshot is configured. */ }
+        if (cancelled) return;
+      }
       if (isSupabaseConfigured && !lastSyncedSnapshot.current) {
         // Also preserve edits made when the very first connection fails.
         const initial = permittedSnapshot(startupSnapshot.current, currentUser);
@@ -900,13 +918,19 @@ export default function Home() {
   const availableTabs = tabs.filter((tab) => canAccessTab(currentUser, tab.id));
   function changeTab(tab: Tab) { if (canAccessTab(currentUser, tab)) setActiveTab(tab); }
 
-  function openSlot(hour: number, professionalId: string) {
+  function openSlot(hour: number, professionalId: string, durationMinutes = 60) {
     setAppointmentError("");
     setSelectedAppointmentId(null);
     setSelectedSlot({ hour, professionalId });
-    setAppointmentForm(makeAppointmentForm(professionalId, selectedDate, hour));
+    setAppointmentForm({ ...makeAppointmentForm(professionalId, selectedDate, hour), durationMinutes });
   }
 
+  function markAgendaAbsent(slots: AgendaSlot[]) {
+    setAppointments(current => [...current, ...newAbsences(professionals, current, slots, () => id("absence"))]);
+  }
+  function removeAgendaAbsence(appointmentId: string) {
+    setAppointments(current => current.filter(item => item.id !== appointmentId || !isAbsence(item)));
+  }
   function openAppointment(appointmentId: string) {
     setAppointmentError("");
     const appointment = appointments.find((item) => item.id === appointmentId);
@@ -927,6 +951,7 @@ export default function Home() {
       serviceId: appointmentServices(appointment, services)[0]?.serviceId ?? "",
       servicePrice: appointmentServices(appointment, services)[0]?.price,
       servicePriceType: appointmentServices(appointment, services)[0]?.priceType,
+      serviceDurationMinutes: appointmentServices(appointment, services)[0]?.durationMinutes,
       additionalServices: appointmentServices(appointment, services).slice(1),
       minute: format(startsAt, "mm"),
       durationMinutes: Math.max(1, Math.round((parseISO(appointment.endsAt).getTime() - startsAt.getTime()) / 60000)) || 60,
@@ -942,9 +967,16 @@ export default function Home() {
     if (appointmentForm.serviceId && !selectedService) return;
     if (appointmentForm.additionalServices.some((item) => item.serviceId && !services.some((service) => service.id === item.serviceId))) return;
     const scheduledServices: AppointmentService[] = [
-      ...(selectedService ? [{ id: appointments.find((item) => item.id === selectedAppointmentId)?.services?.[0]?.id ?? (selectedAppointmentId ? `scheduled-${selectedAppointmentId}` : id("scheduled-service")), serviceId: selectedService.id, name: selectedService.name, price: appointmentForm.servicePrice ?? selectedService.price, priceType: appointmentForm.servicePriceType ?? selectedService.priceType, durationMinutes: selectedService.durationMinutes }] : []),
+      ...(selectedService ? [{ id: appointments.find((item) => item.id === selectedAppointmentId)?.services?.[0]?.id ?? (selectedAppointmentId ? `scheduled-${selectedAppointmentId}` : id("scheduled-service")), serviceId: selectedService.id, name: selectedService.name, price: appointmentForm.servicePrice ?? selectedService.price, priceType: appointmentForm.servicePriceType ?? selectedService.priceType, durationMinutes: appointmentForm.serviceDurationMinutes ?? selectedService.durationMinutes }] : []),
       ...appointmentForm.additionalServices.filter((item) => item.serviceId).map((item) => ({ ...item, name: services.find((service) => service.id === item.serviceId)!.name }))
     ];
+    const startsAt = `${appointmentForm.date}T${appointmentForm.hour.padStart(2, "0")}:${appointmentForm.minute}:00`;
+    const endsAt = format(addMinutes(parseISO(startsAt), appointmentForm.durationMinutes), "yyyy-MM-dd'T'HH:mm:ss");
+    const existing = appointments.find(item => item.id === selectedAppointmentId);
+    if (!existing || existing.professionalId !== appointmentForm.professionalId || existing.startsAt !== startsAt || existing.endsAt !== endsAt) {
+      const error = appointmentAvailabilityError(professionals.find(item => item.id === appointmentForm.professionalId), appointments, startsAt, endsAt, selectedAppointmentId ?? undefined);
+      if (error) { setAppointmentError(error); return; }
+    }
     let patientId = appointmentForm.patientId;
     if (!patientId && appointmentForm.patientName.trim()) {
       const created: Patient = {
@@ -964,8 +996,6 @@ export default function Home() {
       setPatients((current) => [...current, created]);
       patientId = created.id;
     }
-    const startsAt = `${appointmentForm.date}T${appointmentForm.hour.padStart(2, "0")}:${appointmentForm.minute}:00`;
-    const endsAt = format(addMinutes(parseISO(startsAt), appointmentForm.durationMinutes), "yyyy-MM-dd'T'HH:mm:ss");
     const created: Appointment = {
       id: selectedAppointmentId || id("appointment"),
       patientId,
@@ -980,6 +1010,7 @@ export default function Home() {
       accountClosed: appointments.find((appointment) => appointment.id === selectedAppointmentId)?.accountClosed,
       stockConsumption: appointments.find((appointment) => appointment.id === selectedAppointmentId)?.stockConsumption,
       giftConsumption: appointments.find((appointment) => appointment.id === selectedAppointmentId)?.giftConsumption,
+      historicalImport: existing?.historicalImport,
       startsAt,
       endsAt,
       status: appointmentForm.status,
@@ -1434,10 +1465,11 @@ export default function Home() {
   }
 
   function saveProfessional() {
+    if (!canManageProfessional(currentUser, professionalForm.id)) return;
     const saved = {
       ...professionalForm,
       id: professionalForm.id || id("professional"),
-      commissionPercent: Number(professionalForm.commissionPercent) || 0,
+      commissionPercent: userRole === "admin" ? Number(professionalForm.commissionPercent) || 0 : professionals.find(item => item.id === professionalForm.id)?.commissionPercent ?? 0,
       monthlyGoal: Number(professionalForm.monthlyGoal) || 0
     };
     setProfessionals((current) => professionalForm.id ? current.map((professional) => professional.id === professionalForm.id ? { ...saved, avatarDataUrl: professional.avatarDataUrl } : professional) : [saved, ...current]);
@@ -1615,6 +1647,8 @@ export default function Home() {
               services={services}
               professionals={professionals}
               visibleProfessionals={visibleProfessionals}
+              markAbsent={markAgendaAbsent}
+              removeAbsence={removeAgendaAbsence}
               openSlot={openSlot}
               openAppointment={openAppointment}
               updateStatus={updateAgendaStatus}
@@ -1726,12 +1760,12 @@ export default function Home() {
 
           {activeTab === "Cadastro de Profissionais" && (
             <ProfessionalsView
+              user={currentUser}
               professionalForm={professionalForm}
               setProfessionalForm={setProfessionalForm}
               professionals={professionals}
               setProfessionals={setProfessionals}
               saveProfessional={saveProfessional}
-              allowGoals={canAccessTab(currentUser, "Metas")}
             />
           )}
 
@@ -1857,6 +1891,13 @@ function MobileTabs({ activeTab, setActiveTab, allowedTabs }: { activeTab: Tab; 
 }
 
 function AppointmentForm({ form, setForm, patients, services, professionals, saveAppointment, openCheckout, deleteAccount, error }: { form: ReturnType<typeof makeAppointmentForm>; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; services: Service[]; professionals: Professional[]; saveAppointment: () => void; openCheckout: () => void; deleteAccount?: () => void; error: string }) {
+  const hasServices = !!form.serviceId || form.additionalServices.some(item => item.serviceId);
+  function updateServices(patch: Partial<typeof form>) {
+    const next = { ...form, ...patch };
+    const primaryMinutes = next.serviceId ? next.serviceDurationMinutes ?? services.find(item => item.id === next.serviceId)?.durationMinutes ?? 0 : 0;
+    const minutes = totalServiceMinutes([{ durationMinutes: primaryMinutes }, ...next.additionalServices.filter(item => item.serviceId)]);
+    setForm({ ...next, durationMinutes: minutes || 60 });
+  }
   return (
     <form onSubmit={(event) => { event.preventDefault(); saveAppointment(); }} className="mt-5 grid gap-4 lg:grid-cols-2">
       <FormField label="Ação">
@@ -1885,9 +1926,8 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
         <FormField label="Serviço">
           <div className="flex items-center gap-2"><select aria-label="Serviço" value={form.serviceId} onChange={(event) => {
             const service = services.find((item) => item.id === event.target.value);
-            setForm({ ...form, serviceId: event.target.value, procedureId: service ? "" : form.procedureId,
-              durationMinutes: service ? service.durationMinutes + form.additionalServices.reduce((sum, item) => sum + item.durationMinutes, 0) : form.durationMinutes,
-              servicePrice: service?.price, servicePriceType: service?.priceType });
+            updateServices({ serviceId: event.target.value, procedureId: service ? "" : form.procedureId,
+              serviceDurationMinutes: service?.durationMinutes, servicePrice: service?.price, servicePriceType: service?.priceType });
           }} className="input min-w-0 flex-1">
             <option value="">Selecione um serviço</option>
             {services.filter((service) => service.active || service.id === form.serviceId).slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((service) => <option key={service.id} value={service.id}>{service.name} · {service.priceType === "from" ? "A partir de " : ""}{currency(service.price)}{service.active ? "" : " (inativo)"}</option>)}
@@ -1895,8 +1935,8 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
         </FormField>
         {form.additionalServices.map((item, index) => <div key={item.id} className="flex items-center gap-2"><select aria-label={`Serviço adicional ${index + 1}`} value={item.serviceId} className="input min-w-0 flex-1" onChange={(event) => {
           const service = services.find((entry) => entry.id === event.target.value);
-          setForm({ ...form, durationMinutes: Math.max(1, form.durationMinutes - item.durationMinutes + (service?.durationMinutes ?? 0)), additionalServices: form.additionalServices.map((entry) => entry.id === item.id ? { ...entry, serviceId: service?.id ?? "", name: service?.name ?? "", price: service?.price ?? 0, priceType: service?.priceType ?? "fixed", durationMinutes: service?.durationMinutes ?? 0 } : entry) });
-        }}><option value="">Selecione outro serviço</option>{services.filter((service) => service.active || service.id === item.serviceId).slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((service) => <option key={service.id} value={service.id}>{service.name} · {service.priceType === "from" ? "A partir de " : ""}{currency(service.price)}{service.active ? "" : " (inativo)"}</option>)}</select><button type="button" aria-label={`Remover serviço adicional ${index + 1}`} onClick={() => setForm({ ...form, durationMinutes: Math.max(1, form.durationMinutes - item.durationMinutes), additionalServices: form.additionalServices.filter((entry) => entry.id !== item.id) })} className="shrink-0 rounded p-2.5 text-slate-400 hover:text-red-500"><Trash2 size={16} /></button></div>)}
+          updateServices({ additionalServices: form.additionalServices.map((entry) => entry.id === item.id ? { ...entry, serviceId: service?.id ?? "", name: service?.name ?? "", price: service?.price ?? 0, priceType: service?.priceType ?? "fixed", durationMinutes: service?.durationMinutes ?? 0 } : entry) });
+        }}><option value="">Selecione outro serviço</option>{services.filter((service) => service.active || service.id === item.serviceId).slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((service) => <option key={service.id} value={service.id}>{service.name} · {service.priceType === "from" ? "A partir de " : ""}{currency(service.price)}{service.active ? "" : " (inativo)"}</option>)}</select><button type="button" aria-label={`Remover serviço adicional ${index + 1}`} onClick={() => updateServices({ additionalServices: form.additionalServices.filter((entry) => entry.id !== item.id) })} className="shrink-0 rounded p-2.5 text-slate-400 hover:text-red-500"><Trash2 size={16} /></button></div>)}
       </div>
       <FormField label="Profissional">
         <select value={form.professionalId} onChange={(event) => setForm({ ...form, professionalId: event.target.value })} className="input">
@@ -1905,7 +1945,7 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
       </FormField>
       <FormField label="Data"><input type="date" required value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} className="input" /></FormField>
       <FormField label="Hora"><input type="time" required value={`${form.hour.padStart(2, "0")}:${form.minute}`} onChange={(event) => { const [hour, minute] = event.target.value.split(":"); setForm({ ...form, hour, minute }); }} className="input" /></FormField>
-      <FormField label="Duração (minutos)"><input type="number" required min={1} step={1} value={form.durationMinutes || ""} onChange={(event) => setForm({ ...form, durationMinutes: Number(event.target.value) })} className="input" /></FormField>
+      <FormField label="Duração (minutos)"><input aria-label="Duração (minutos)" type="number" required min={1} step={1} readOnly={hasServices} aria-readonly={hasServices} value={form.durationMinutes || ""} onChange={(event) => setForm({ ...form, durationMinutes: Number(event.target.value) })} className={`input ${hasServices ? "bg-slate-50" : ""}`} />{hasServices && <p className="mt-1 text-xs text-slate-500">Soma dos serviços. A agenda preenche cada horário inteiro, incluindo a última hora parcial.</p>}</FormField>
       <FormField label="Observações"><textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} className="input min-h-20" /></FormField>
       <FormField label="Observações do paciente"><textarea value={form.patientNotes} onChange={(event) => setForm({ ...form, patientNotes: event.target.value })} className="input min-h-20" /></FormField>
       <div className="flex items-center justify-between gap-3 lg:col-span-2">
@@ -2857,7 +2897,10 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
   );
 }
 
-function ProfessionalsView({ professionalForm, setProfessionalForm, professionals, setProfessionals, saveProfessional, allowGoals }: { professionalForm: ReturnType<typeof makeProfessionalForm>; setProfessionalForm: Dispatch<SetStateAction<ReturnType<typeof makeProfessionalForm>>>; professionals: Professional[]; setProfessionals: Dispatch<SetStateAction<Professional[]>>; saveProfessional: () => void; allowGoals: boolean }) {
+function ProfessionalsView({ professionalForm, setProfessionalForm, professionals, setProfessionals, saveProfessional, user }: { user: AppUser; professionalForm: ReturnType<typeof makeProfessionalForm>; setProfessionalForm: Dispatch<SetStateAction<ReturnType<typeof makeProfessionalForm>>>; professionals: Professional[]; setProfessionals: Dispatch<SetStateAction<Professional[]>>; saveProfessional: () => void }) {
+  const allowCommission = user.role === "admin";
+  const permittedProfessionals = professionals.filter(item => canManageProfessional(user, item.id));
+  const formAllowed = canManageProfessional(user, professionalForm.id);
   function updateAvatar(professional: Professional, file?: File) {
     if (!file) return;
     const reader = new FileReader();
@@ -2876,26 +2919,28 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-bold">Cadastro de profissionais</h3>
-            <p className="text-sm text-slate-500">{allowGoals ? "Dados da profissional e comissão padrão." : "Cadastro da profissional e comissão padrão."}</p>
+            <p className="text-sm text-slate-500">{allowCommission ? "Dados da profissional e comissão padrão." : "Dados dos profissionais autorizados para este usuário."}</p>
           </div>
-          <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{professionals.length} profissionais</span>
+          <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{permittedProfessionals.length} profissionais</span>
         </div>
-        <div className="grid gap-3 md:grid-cols-3">
+        {!formAllowed && <p className="mb-3 text-sm text-slate-500">Selecione abaixo um profissional autorizado para editar o cadastro ou fechar turnos da agenda.</p>}
+        <fieldset disabled={!formAllowed} className="grid gap-3 md:grid-cols-3">
           <FormField label="Nome"><input className="input" value={professionalForm.name} onChange={(event) => setProfessionalForm({ ...professionalForm, name: event.target.value })} /></FormField>
           <FormField label="Especialidade"><input className="input" value={professionalForm.specialty} onChange={(event) => setProfessionalForm({ ...professionalForm, specialty: event.target.value })} /></FormField>
           <FormField label="Telefone"><input className="input" value={professionalForm.phone} onChange={(event) => setProfessionalForm({ ...professionalForm, phone: event.target.value })} /></FormField>
           <FormField label="E-mail"><input className="input" type="email" value={professionalForm.email} onChange={(event) => setProfessionalForm({ ...professionalForm, email: event.target.value })} /></FormField>
           <FormField label="CPF"><input className="input" value={professionalForm.cpf} onChange={(event) => setProfessionalForm({ ...professionalForm, cpf: event.target.value })} /></FormField>
           <FormField label="Data de nascimento"><input className="input" type="date" value={professionalForm.birthDate} onChange={(event) => setProfessionalForm({ ...professionalForm, birthDate: event.target.value })} /></FormField>
-          <FormField label="% comissão padrão"><input className="input" type="number" value={professionalForm.commissionPercent} onChange={(event) => setProfessionalForm({ ...professionalForm, commissionPercent: Number(event.target.value) })} /></FormField>
-          <FormField label="Cor na agenda"><input className="input h-10" type="color" value={professionalForm.color} onChange={(event) => setProfessionalForm({ ...professionalForm, color: event.target.value })} /></FormField>
+          {allowCommission && <FormField label="% comissão padrão"><input className="input" type="number" value={professionalForm.commissionPercent} onChange={(event) => setProfessionalForm({ ...professionalForm, commissionPercent: Number(event.target.value) })} /></FormField>}
           <FormField label="Observações"><textarea className="input min-h-20" value={professionalForm.notes} onChange={(event) => setProfessionalForm({ ...professionalForm, notes: event.target.value })} /></FormField>
-        </div>
-        <button onClick={saveProfessional} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white">Salvar profissional</button>
+          <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={professionalForm.showInAgenda !== false} onChange={event => setProfessionalForm({ ...professionalForm, showInAgenda: event.target.checked })} />Mostrar na agenda</label>
+        </fieldset>
+        {formAllowed && <ProfessionalShifts value={professionalForm.closedShifts ?? []} change={closedShifts => setProfessionalForm({ ...professionalForm, closedShifts })} />}
+        <button disabled={!formAllowed} onClick={saveProfessional} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white disabled:opacity-40">Salvar profissional</button>
       </Panel>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        {professionals.map((professional) => (
+        {permittedProfessionals.map((professional) => (
           <Panel key={professional.id}>
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-3">
@@ -2919,9 +2964,10 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
               </div>
             </div>
             <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
-              <SummaryItem label="Comissão" value={`${professional.commissionPercent}%`} tone="violet" />
+              {allowCommission && <SummaryItem label="Comissão" value={`${professional.commissionPercent}%`} tone="violet" />}
               <SummaryItem label="Telefone" value={professional.phone || "-"} />
             </div>
+            <button type="button" aria-label={`Fechar agenda de ${professional.name}`} onClick={() => { setProfessionalForm(professional); window.scrollTo({ top: 0, behavior: "smooth" }); }} className="mt-3 rounded-md border border-avvi-line px-3 py-2 text-xs font-bold text-avvi-blue">Agenda semanal · {professional.closedShifts?.length ?? 0} turnos fechados</button>
             <p className="mt-3 text-sm text-slate-500">{professional.email || "Sem e-mail cadastrado"}</p>
             <p className="mt-1 text-sm text-slate-500">{professional.notes || "Sem observações."}</p>
           </Panel>
@@ -3521,7 +3567,7 @@ function DataTable({ headers, rows }: { headers: string[]; rows: ReactNode[][] }
 }
 
 function makeAppointmentForm(professionalId: string, date: string, hour: number) {
-  return { patientId: "", patientName: "", phone: "", cpf: "", birthDate: "", patientNotes: "", procedureId: "", serviceId: "", additionalServices: [] as AppointmentService[], servicePrice: undefined as number | undefined, servicePriceType: undefined as Service["priceType"] | undefined, durationMinutes: 60, professionalId, date, hour: String(hour), minute: "00", status: "Agendado" as AppointmentStatus, eventType: "Novo Agendamento", notes: "" };
+  return { patientId: "", patientName: "", phone: "", cpf: "", birthDate: "", patientNotes: "", procedureId: "", serviceId: "", additionalServices: [] as AppointmentService[], servicePrice: undefined as number | undefined, servicePriceType: undefined as Service["priceType"] | undefined, serviceDurationMinutes: undefined as number | undefined, durationMinutes: 60, professionalId, date, hour: String(hour), minute: "00", status: "Agendado" as AppointmentStatus, eventType: "Novo Agendamento", notes: "" };
 }
 
 function makeEntryForm() {
@@ -3559,6 +3605,7 @@ function makeProcedureForm(): Procedure {
 function makeProfessionalForm(): Professional {
   return {
     id: "",
+    closedShifts: [],
     name: "",
     specialty: "",
     phone: "",
@@ -3569,6 +3616,7 @@ function makeProfessionalForm(): Professional {
     active: true,
     color: "#b8862b",
     avatarDataUrl: "",
+    showInAgenda: true,
     commissionPercent: 50,
     monthlyGoal: 0
   };

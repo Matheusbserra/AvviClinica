@@ -14,7 +14,11 @@ export type DiscountSplit = "Empresa assume" | "Profissional assume" | "Empresa 
 export type FixedCostStatus = "Pago" | "Pendente" | "Atrasado";
 export type ViewMode = "Dia" | "Semana" | "Mês";
 
+export type ClosedShift = { weekday: number; shift: "morning" | "afternoon" | "evening" };
+
 export type Professional = {
+  closedShifts?: ClosedShift[];
+  showInAgenda?: boolean;
   id: string;
   name: string;
   specialty: string;
@@ -141,6 +145,15 @@ export type ClosedAccount = FinancialEntry & {
 export type AppointmentService = { id: string; serviceId: string; name: string; price: number; priceType: Service["priceType"]; durationMinutes: number };
 
 export type Appointment = {
+  historicalImport?: {
+    sourceFile: string;
+    sourceFingerprint: string;
+    sourceRows: number[];
+    originalStatus: string;
+    originalAccount: string;
+    closedByCutoff: boolean;
+    paymentsUnknown: boolean;
+  };
   giftConsumption?: GiftUsage[];
   services?: AppointmentService[];
   id: string;
