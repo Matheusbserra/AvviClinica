@@ -33,7 +33,8 @@ try{
  const appointment=(id,start,end)=>({entity:'appointments',record_id:id,data:{id,professionalId:'ana',startsAt:'2026-10-10T'+start+':00',endsAt:'2026-10-10T'+end+':00',eventType:'Novo Agendamento',status:'Agendado',notes:''}});
  assert.equal((await route.POST(req(admin,{upserts:[appointment('first','08:00','09:20')]}))).status,200);
  before=writes;
- response=await route.POST(req(admin,{upserts:[appointment('conflict','09:45','10:00')]}));assert.equal(response.status,409);assert.match((await response.json()).error,/reservado/);assert.equal(writes,before);
+ response=await route.POST(req(admin,{upserts:[appointment('conflict','09:15','09:45')]}));assert.equal(response.status,409);assert.match((await response.json()).error,/reservado/);assert.equal(writes,before);
+ assert.equal((await route.POST(req(admin,{upserts:[appointment('half-next','09:30','10:00')]}))).status,200);
  assert.equal((await route.POST(req(admin,{upserts:[appointment('next','10:00','11:00')]}))).status,200);
  assert.equal((await route.POST(req(admin,change('ana',{closedShifts:[{weekday:6,shift:'morning'}]})))).status,200);
  assert.equal((await route.POST(req(admin,{upserts:[{...records.get('first'),data:{...records.get('first').data,notes:'existing preserved'}}]}))).status,200);
@@ -41,7 +42,7 @@ try{
  assert.equal((await route.POST(req(admin,{upserts:[appointment('closed','11:00','12:00')]}))).status,409);
  assert.equal((await route.POST(req(admin,{upserts:[appointment('batch-one','16:00','18:00'),appointment('batch-two','17:30','19:00')]}))).status,409);
  assert.equal(records.has('batch-one'),false);
- console.log('PASS: API rejects whole-hour conflicts and closed shifts, releases exact-hour endings, rejects overlapping appointments in one batch before writing and preserves existing appointments after weekly closures.');
+ console.log('PASS: API rejects half-hour conflicts and closed shifts, allows adjacent half-hour appointments, rejects overlapping appointments in one batch before writing and preserves existing appointments after weekly closures.');
  stored[0].version++;assert.equal((await route.GET(req())).status,401);
  console.log('PASS: independent report/registration scopes, deduplication, empty scope rejection, persisted scope, signed sessions revalidate stored permissions, selected-only API/cache, hidden commission, forged commission preserved, unauthorized writes/deletes blocked, weekly rule validation, admin unchanged and session revocation. Isolated files and mock network.');
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

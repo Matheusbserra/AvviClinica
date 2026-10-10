@@ -52,7 +52,7 @@ import { appointments as seedAppointments, financialEntries as seedFinancialEntr
 import { catalogProcedures } from "@/lib/catalogProcedures";
 import { FollowUpView, FollowUpNavigation } from "@/app/components/FollowUpView";
 import { ProfessionalShifts } from "@/app/components/ProfessionalShifts";
-import { appointmentAvailabilityError, isAbsence, newAbsences } from "@/lib/agendaAvailability";
+import { appointmentAvailabilityError, isAbsence, newAbsences, slotTime } from "@/lib/agendaAvailability";
 import type { AgendaSlot } from "@/lib/agendaAvailability";
 import { AgendaView } from "@/app/components/AgendaView";
 import { UltraformerView } from "@/app/components/UltraformerView";
@@ -918,7 +918,7 @@ export default function Home() {
   const availableTabs = tabs.filter((tab) => canAccessTab(currentUser, tab.id));
   function changeTab(tab: Tab) { if (canAccessTab(currentUser, tab)) setActiveTab(tab); }
 
-  function openSlot(hour: number, professionalId: string, durationMinutes = 60) {
+  function openSlot(hour: number, professionalId: string, durationMinutes = 30) {
     setAppointmentError("");
     setSelectedAppointmentId(null);
     setSelectedSlot({ hour, professionalId });
@@ -1831,7 +1831,7 @@ export default function Home() {
           <div data-testid="appointment-details-window" className="max-h-[96dvh] w-full max-w-6xl overflow-auto rounded-lg bg-white p-5 shadow-panel thin-scrollbar">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-sm font-semibold text-avvi-blue">{selectedSlot.hour}:00 · {professionalName(selectedSlot.professionalId)}</p>
+                <p className="text-sm font-semibold text-avvi-blue">{slotTime(selectedSlot.hour)} · {professionalName(selectedSlot.professionalId)}</p>
                 <h2 className="text-xl font-bold">{selectedAppointmentId ? "Detalhes do agendamento" : "Novo evento da agenda"}</h2>
               </div>
               <div className="flex items-center gap-2">
@@ -1945,7 +1945,7 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
       </FormField>
       <FormField label="Data"><input type="date" required value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} className="input" /></FormField>
       <FormField label="Hora"><input type="time" required value={`${form.hour.padStart(2, "0")}:${form.minute}`} onChange={(event) => { const [hour, minute] = event.target.value.split(":"); setForm({ ...form, hour, minute }); }} className="input" /></FormField>
-      <FormField label="Duração (minutos)"><input aria-label="Duração (minutos)" type="number" required min={1} step={1} readOnly={hasServices} aria-readonly={hasServices} value={form.durationMinutes || ""} onChange={(event) => setForm({ ...form, durationMinutes: Number(event.target.value) })} className={`input ${hasServices ? "bg-slate-50" : ""}`} />{hasServices && <p className="mt-1 text-xs text-slate-500">Soma dos serviços. A agenda preenche cada horário inteiro, incluindo a última hora parcial.</p>}</FormField>
+      <FormField label="Duração (minutos)"><input aria-label="Duração (minutos)" type="number" required min={1} step={1} readOnly={hasServices} aria-readonly={hasServices} value={form.durationMinutes || ""} onChange={(event) => setForm({ ...form, durationMinutes: Number(event.target.value) })} className={`input ${hasServices ? "bg-slate-50" : ""}`} /></FormField>
       <FormField label="Observações"><textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} className="input min-h-20" /></FormField>
       <FormField label="Observações do paciente"><textarea value={form.patientNotes} onChange={(event) => setForm({ ...form, patientNotes: event.target.value })} className="input min-h-20" /></FormField>
       <div className="flex items-center justify-between gap-3 lg:col-span-2">
@@ -2240,9 +2240,6 @@ function FinancialView(props: {
             <FormField label="Desconto comercial">
               <MoneyInput value={props.entryForm.commercialDiscount} onChange={updateCommercialDiscount} />
             </FormField>
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-slate-600 md:col-span-2">
-              O desconto reduz o valor dos procedimentos e preenche automaticamente o valor pago. Em &quot;Profissional assume&quot;, ele também é abatido integralmente do valor profissional.
-            </div>
           </div>
           <div className="space-y-3">
             {props.entryForm.procedureLines.map((line, index) => (
@@ -2898,6 +2895,18 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
 }
 
 function ProfessionalsView({ professionalForm, setProfessionalForm, professionals, setProfessionals, saveProfessional, user }: { user: AppUser; professionalForm: ReturnType<typeof makeProfessionalForm>; setProfessionalForm: Dispatch<SetStateAction<ReturnType<typeof makeProfessionalForm>>>; professionals: Professional[]; setProfessionals: Dispatch<SetStateAction<Professional[]>>; saveProfessional: () => void }) {
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (!isFormOpen) return;
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, [isFormOpen]);
+  function editProfessional(professional: Professional) {
+    setProfessionalForm({ ...makeProfessionalForm(), ...professional });
+    setIsFormOpen(true);
+  }
   const allowCommission = user.role === "admin";
   const permittedProfessionals = professionals.filter(item => canManageProfessional(user, item.id));
   const formAllowed = canManageProfessional(user, professionalForm.id);
@@ -2916,14 +2925,19 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
   return (
     <div className="space-y-4">
       <Panel>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-bold">Cadastro de profissionais</h3>
-            <p className="text-sm text-slate-500">{allowCommission ? "Dados da profissional e comissão padrão." : "Dados dos profissionais autorizados para este usuário."}</p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-lg font-bold">Cadastro de profissionais</h3>
+          <div className="flex items-center gap-3">
+            <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{permittedProfessionals.length} profissionais</span>
+            {canManageProfessional(user, "") && <button type="button" onClick={() => { setProfessionalForm(makeProfessionalForm()); setIsFormOpen(true); }} className="inline-flex items-center gap-2 rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white"><Plus size={16} />Novo profissional</button>}
           </div>
-          <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{permittedProfessionals.length} profissionais</span>
         </div>
-        {!formAllowed && <p className="mb-3 text-sm text-slate-500">Selecione abaixo um profissional autorizado para editar o cadastro ou fechar turnos da agenda.</p>}
+      </Panel>
+      {isFormOpen && <dialog ref={dialogRef} onCancel={() => setIsFormOpen(false)} aria-labelledby="professional-form-title" className="max-h-[92dvh] w-[calc(100%-2rem)] max-w-4xl overflow-y-auto rounded-xl border-0 bg-white p-5 text-avvi-ink shadow-panel backdrop:bg-slate-900/40">
+        <header className="mb-4 flex items-center justify-between gap-3">
+          <h3 id="professional-form-title" className="text-lg font-bold">{professionalForm.id ? "Editar profissional" : "Novo profissional"}</h3>
+          <button type="button" aria-label="Fechar cadastro de profissional" onClick={() => setIsFormOpen(false)} className="rounded-md border border-avvi-line p-2 text-slate-500 hover:bg-avvi-soft"><X size={18} /></button>
+        </header>
         <fieldset disabled={!formAllowed} className="grid gap-3 md:grid-cols-3">
           <FormField label="Nome"><input className="input" value={professionalForm.name} onChange={(event) => setProfessionalForm({ ...professionalForm, name: event.target.value })} /></FormField>
           <FormField label="Especialidade"><input className="input" value={professionalForm.specialty} onChange={(event) => setProfessionalForm({ ...professionalForm, specialty: event.target.value })} /></FormField>
@@ -2936,8 +2950,8 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
           <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={professionalForm.showInAgenda !== false} onChange={event => setProfessionalForm({ ...professionalForm, showInAgenda: event.target.checked })} />Mostrar na agenda</label>
         </fieldset>
         {formAllowed && <ProfessionalShifts value={professionalForm.closedShifts ?? []} change={closedShifts => setProfessionalForm({ ...professionalForm, closedShifts })} />}
-        <button disabled={!formAllowed} onClick={saveProfessional} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white disabled:opacity-40">Salvar profissional</button>
-      </Panel>
+        <button disabled={!formAllowed} onClick={() => { saveProfessional(); setIsFormOpen(false); }} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white disabled:opacity-40">Salvar profissional</button>
+      </dialog>}
 
       <div className="grid gap-4 xl:grid-cols-2">
         {permittedProfessionals.map((professional) => (
@@ -2955,7 +2969,7 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
               </div>
               <div className="flex items-center gap-2">
                 <ActionButtons
-                  onEdit={() => setProfessionalForm(professional)}
+                  onEdit={() => editProfessional(professional)}
                   onDelete={() => setProfessionals(professionals.filter((item) => item.id !== professional.id))}
                 />
                 <button onClick={() => setProfessionals(professionals.map((item) => item.id === professional.id ? { ...item, active: !item.active } : item))} className="rounded-md bg-avvi-soft px-3 py-2 text-sm font-bold text-avvi-blue">
@@ -2967,7 +2981,7 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
               {allowCommission && <SummaryItem label="Comissão" value={`${professional.commissionPercent}%`} tone="violet" />}
               <SummaryItem label="Telefone" value={professional.phone || "-"} />
             </div>
-            <button type="button" aria-label={`Fechar agenda de ${professional.name}`} onClick={() => { setProfessionalForm(professional); window.scrollTo({ top: 0, behavior: "smooth" }); }} className="mt-3 rounded-md border border-avvi-line px-3 py-2 text-xs font-bold text-avvi-blue">Agenda semanal · {professional.closedShifts?.length ?? 0} turnos fechados</button>
+            <button type="button" aria-label={`Fechar agenda de ${professional.name}`} onClick={() => editProfessional(professional)} className="mt-3 rounded-md border border-avvi-line px-3 py-2 text-xs font-bold text-avvi-blue">Agenda semanal · {professional.closedShifts?.length ?? 0} turnos fechados</button>
             <p className="mt-3 text-sm text-slate-500">{professional.email || "Sem e-mail cadastrado"}</p>
             <p className="mt-1 text-sm text-slate-500">{professional.notes || "Sem observações."}</p>
           </Panel>
@@ -3567,7 +3581,7 @@ function DataTable({ headers, rows }: { headers: string[]; rows: ReactNode[][] }
 }
 
 function makeAppointmentForm(professionalId: string, date: string, hour: number) {
-  return { patientId: "", patientName: "", phone: "", cpf: "", birthDate: "", patientNotes: "", procedureId: "", serviceId: "", additionalServices: [] as AppointmentService[], servicePrice: undefined as number | undefined, servicePriceType: undefined as Service["priceType"] | undefined, serviceDurationMinutes: undefined as number | undefined, durationMinutes: 60, professionalId, date, hour: String(hour), minute: "00", status: "Agendado" as AppointmentStatus, eventType: "Novo Agendamento", notes: "" };
+  return { patientId: "", patientName: "", phone: "", cpf: "", birthDate: "", patientNotes: "", procedureId: "", serviceId: "", additionalServices: [] as AppointmentService[], servicePrice: undefined as number | undefined, servicePriceType: undefined as Service["priceType"] | undefined, serviceDurationMinutes: undefined as number | undefined, durationMinutes: 60, professionalId, date, hour: String(Math.floor(hour)), minute: slotTime(hour).slice(3), status: "Agendado" as AppointmentStatus, eventType: "Novo Agendamento", notes: "" };
 }
 
 function makeEntryForm() {
