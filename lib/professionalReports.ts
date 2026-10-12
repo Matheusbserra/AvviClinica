@@ -10,6 +10,7 @@ export type MonthlyProfessionalInsights = {
   ticketChange: number | null; ticketChangePercent: number | null;
   patientCount: number; monthlyPatientAverage: number | null;
   patientChange: number | null; historyMonths: number; newPatientCount: number;
+  evaluationOnlyPatientCount: number; returnCount: number;
 };
 export type ProfessionalReport = {
   professional: Professional; goal: number; totalPaid: number; totalProfit: number;
@@ -115,47 +116,98 @@ export function professionalReports(input: Parameters<typeof periodProfessionalR
   });
   const current = input.start === period.start && input.end === period.end ? result : periodProfessionalReports({ ...input, ...period });
   const history = previousMonths.map(value => ({ month: value, reports: periodProfessionalReports({ ...input, ...reportMonthPeriod(value)! }).reports }));
-  const eligible = excludeZeroAccounts(input.appointments, input.entries, input.services);
-  const entries = new Map(eligible.entries.map(item => [item.id, item]));
-  const appointments = new Map(eligible.appointments.map(item => [item.id, item]));
+  const visits = professionalVisits(input);
   const firstVisits = new Map<string, Map<string, string>>();
   const firstMonths = new Map<string, string>();
-  const addVisit = (professionalId: string, patientId: string | undefined, date: string) => {
+  const paidPatients = new Map<string, Map<string, Set<string>>>();
+  const addVisit = (professionalId: string, patientId: string | undefined, date: string, key: string) => {
     date = date.slice(0, 10);
     if (!validReportDate(date)) return;
     const activityMonth = date.slice(0, 7);
+    const months = paidPatients.get(professionalId) ?? new Map<string, Set<string>>();
+    const patients = months.get(activityMonth) ?? new Set<string>();
+    patients.add(patientId || `unknown:${key}`);
+    months.set(activityMonth, patients); paidPatients.set(professionalId, months);
     if (!firstMonths.has(professionalId) || activityMonth < firstMonths.get(professionalId)!) firstMonths.set(professionalId, activityMonth);
     if (!patientId) return;
     const visits = firstVisits.get(professionalId) ?? new Map<string, string>();
     if (!visits.has(patientId) || date < visits.get(patientId)!) visits.set(patientId, date);
     firstVisits.set(professionalId, visits);
   };
-  for (const appointment of eligible.appointments) {
-    const legacy = entries.get(appointment.financialEntryId ?? "");
-    if (appointment.accountClosed || (appointment.accountClosed !== false && (appointment.closedAccount || legacy?.accountClosed)))
-      addVisit(appointment.professionalId, appointment.patientId || appointment.closedAccount?.patientId || legacy?.patientId, appointment.startsAt);
-  }
-  for (const entry of eligible.entries) if (entry.accountClosed)
-    addVisit(entry.professionalId, entry.patientId || appointments.get(entry.appointmentId ?? "")?.patientId, appointments.get(entry.appointmentId ?? "")?.startsAt || entry.date);
+  for (const visit of visits) if (visit.positiveClosed) addVisit(visit.professionalId, visit.patientId, visit.date, visit.key);
   const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
   for (const item of result.reports) {
     const id = item.professional.id, selected = current.reports.find(row => row.professional.id === id)!;
+    const monthlyVisits = visits.filter(visit => visit.professionalId === id && visit.date >= period.start && visit.date <= period.end);
+    const convertedPatients = new Set(monthlyVisits.filter(visit => visit.positiveClosed && visit.services.some(line => !clinicalService(line.name))).map(visit => visit.patientId).filter(Boolean));
+    const evaluationPatients = new Set(monthlyVisits.filter(visit => visit.performed && visit.services.some(line => clinicalService(line.name) === "evaluation")).map(visit => visit.patientId).filter(Boolean));
+    const patientCount = paidPatients.get(id)?.get(month)?.size ?? 0;
     const previous = history[0].reports.find(row => row.professional.id === id)!;
     const firstMonth = firstMonths.get(id);
     const availableHistory = firstMonth ? history.filter(value => value.month >= firstMonth) : [];
     const monthlyPatientAverage = availableHistory.length
-      ? availableHistory.reduce((sum, value) => sum + (value.reports.find(row => row.professional.id === id)?.closedPatientCount ?? 0), 0) / availableHistory.length : null;
+      ? availableHistory.reduce((sum, value) => sum + (paidPatients.get(id)?.get(value.month)?.size ?? 0), 0) / availableHistory.length : null;
     const previousTicket = previous.closedPatientCount > 0 ? previous.averageTicket : null;
     item.monthlyInsights = {
       month, averageTicket: round(selected.averageTicket), previousTicket: previousTicket === null ? null : round(previousTicket),
       ticketChange: previousTicket === null ? null : round(selected.averageTicket - previousTicket),
       ticketChangePercent: previousTicket === null || previousTicket === 0 ? null : round((selected.averageTicket - previousTicket) / previousTicket * 100),
-      patientCount: selected.closedPatientCount,
+      patientCount,
       monthlyPatientAverage: monthlyPatientAverage === null ? null : round(monthlyPatientAverage),
-      patientChange: monthlyPatientAverage === null ? null : round(selected.closedPatientCount - monthlyPatientAverage),
+      patientChange: monthlyPatientAverage === null ? null : round(patientCount - monthlyPatientAverage),
       historyMonths: availableHistory.length,
       newPatientCount: [...(firstVisits.get(id)?.values() ?? [])].filter(date => date >= period.start && date <= period.end).length,
+      evaluationOnlyPatientCount: [...evaluationPatients].filter(patientId => !convertedPatients.has(patientId)).length,
+      returnCount: monthlyVisits.filter(visit => visit.performed).reduce((sum, visit) => sum + visit.services.filter(line => clinicalService(line.name) === "return").reduce((total, line) => total + line.quantity, 0), 0),
     };
   }
   return result;
+}
+
+function clinicalService(name: string) {
+  const normalized = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (/retorno/.test(normalized)) return "return";
+  if (/avaliacao/.test(normalized)) return "evaluation";
+  return null;
+}
+
+// Clinical activity must use the original records: free evaluations and returns
+// remain eligible here even though they are excluded from financial rankings.
+function professionalVisits(input: Parameters<typeof periodProfessionalReports>[0]) {
+  const entries = new Map(input.entries.map(entry => [entry.id, entry]));
+  const catalog = new Map(input.services.map(service => [service.id, service.name]));
+  const linked = new Set<string>();
+  const visits: {key: string; professionalId: string; patientId?: string; date: string; positiveClosed: boolean; performed: boolean; services: {name: string; quantity: number}[]}[] = [];
+  const serviceLines = (account?: FinancialEntry) => (account?.procedureLines ?? []).filter(line => (line.serviceId || !line.procedureId) && Number.isFinite(line.quantity) && line.quantity > 0).map(line => ({name: line.manualProcedure || catalog.get(line.serviceId ?? "") || "Serviço registrado", quantity: line.quantity}));
+  const paid = (account?: FinancialEntry, appointment?: Appointment) => {
+    if (account && Array.isArray(account.payments)) return account.payments.reduce((sum, payment) => sum + payment.amount, 0) > 0;
+    // Historical imports may lack payment methods. In that case use their saved
+    // account/service value, while explicit zero payments always remain excluded.
+    const value = account?.procedureLines?.length
+      ? account.procedureLines.reduce((sum, line) => sum + line.servicePrice * line.quantity, 0) - (account.commercialDiscount || 0)
+      : appointment ? appointmentServices(appointment, input.services).reduce((sum, line) => sum + line.price, 0) : 0;
+    return Number.isFinite(value) && value > 0;
+  };
+  for (const appointment of input.appointments) {
+    const legacy = entries.get(appointment.financialEntryId ?? "");
+    const account = appointment.closedAccount ?? legacy;
+    const closed = !!(appointment.accountClosed || (appointment.accountClosed !== false && account?.accountClosed));
+    for (const id of [appointment.financialEntryId, account?.id, appointment.closedAccount?.generatedEntryId]) if (id) linked.add(id);
+    const date = appointment.startsAt.slice(0, 10);
+    if (!validReportDate(date)) continue;
+    const excluded = ["Cancelado", "Faltou", "Reagendado"].includes(appointment.status);
+    const lines = serviceLines(account);
+    visits.push({key: appointment.id, professionalId: appointment.professionalId, patientId: appointment.patientId || account?.patientId, date,
+      positiveClosed: !excluded && closed && paid(account, appointment), performed: !excluded && (closed || ["Compareceu", "Finalizado"].includes(appointment.status)),
+      services: lines.length ? lines : appointmentServices(appointment, input.services).map(line => ({name: line.name, quantity: 1}))});
+  }
+  const appointmentIds = new Set(input.appointments.map(appointment => appointment.id));
+  for (const entry of input.entries) {
+    if (linked.has(entry.id) || (entry.sourceAccountId && (linked.has(entry.sourceAccountId) || entries.get(entry.sourceAccountId)?.accountClosed)) || (entry.appointmentId && appointmentIds.has(entry.appointmentId))) continue;
+    const date = entry.date.slice(0, 10);
+    if (!validReportDate(date)) continue;
+    visits.push({key: entry.id, professionalId: entry.professionalId, patientId: entry.patientId, date, positiveClosed: entry.accountClosed === true && paid(entry), performed: entry.accountClosed === true,
+      services: serviceLines(entry).length ? serviceLines(entry) : entry.manualProcedure ? [{name: entry.manualProcedure, quantity: entry.quantity}] : []});
+  }
+  return visits;
 }

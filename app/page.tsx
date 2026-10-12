@@ -1770,12 +1770,12 @@ export default function Home() {
           {canAccessTab(currentUser, "Relatório Profissional") && activeTab === "Relatório Profissional" && (
             <ProfessionalReportView
               user={currentUser}
-              entries={accounting.entries}
+              entries={entries}
               professionals={professionals}
               selectedMonth={selectedMonth}
               setSelectedMonth={setSelectedMonth}
               monthlyGoals={monthlyGoals}
-              appointments={accounting.appointments}
+              appointments={appointments}
               patients={patients}
               services={services}
               procedures={procedures}

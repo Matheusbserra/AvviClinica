@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import Image from "next/image";
 import { BarChart3, ChevronDown, Eye, EyeOff, Trophy, TrendingUp, TrendingDown, Minus, UserPlus } from "lucide-react";
 import { currency, percent } from "@/lib/calculations";
@@ -93,16 +94,17 @@ function MonthlyInsights({name, values}: {name: string; values: MonthlyProfessio
     <div className="space-y-2 text-xs">
       <InsightLine label="Ticket médio vs. mês anterior" change={values.ticketChange} value={ticket}/>
       <div title={`Média de pacientes únicos em ${values.historyMonths} meses anteriores, até seis meses. Meses sem atendimento dentro do histórico contam como zero.`}>
-        <InsightLine label="Pacientes atendidos" change={values.patientChange} value={number(values.patientCount)}/>
-        <p className="mt-1 text-right text-[11px] text-slate-500">{values.monthlyPatientAverage === null ? "Sem média anterior" : `Média dos meses anteriores: ${number(values.monthlyPatientAverage)}`}</p>
+        <InsightLine label="Pacientes atendidos" change={values.patientChange} value={<><span>{number(values.patientCount)}</span><span className="text-[10px] font-normal text-slate-500">· {values.monthlyPatientAverage === null ? "Sem média anterior" : `Média dos meses anteriores: ${number(values.monthlyPatientAverage)}`}</span></>}/>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2" title="Primeira conta fechada e não zerada com esta profissional."><span className="text-slate-600">Pacientes novos</span><strong className="inline-flex items-center gap-1 text-avvi-blue"><UserPlus size={14}/>{values.newPatientCount}</strong></div>
+      <div className="flex flex-wrap items-center justify-between gap-2" title="Pacientes únicos que realizaram avaliação no mês e não fecharam outro serviço com esta profissional no mesmo mês."><span className="text-slate-600">Pacientes só de avaliação</span><strong className="text-avvi-blue">{values.evaluationOnlyPatientCount}</strong></div>
+      <div className="flex flex-wrap items-center justify-between gap-2" title="Quantidade de retornos realizados no mês, incluindo os gratuitos."><span className="text-slate-600">Retornos realizados</span><strong className="text-avvi-blue">{values.returnCount}</strong></div>
     </div>
   </div>;
 }
-function InsightLine({label, change, value, title}: {label: string; change: number | null; value: string; title?: string}) {
+function InsightLine({label, change, value, title}: {label: string; change: number | null; value: ReactNode; title?: string}) {
   const color = change === null || change === 0 ? "text-slate-500" : change > 0 ? "text-green-600" : "text-red-600";
-  return <div className="flex flex-wrap items-center justify-between gap-2" title={title}><span className="text-slate-600">{label}</span><strong className={`inline-flex items-center gap-1 ${color}`} data-testid={`insight-${label}`}>
+  return <div className="flex flex-wrap items-center justify-between gap-2" title={title}><span className="text-slate-600">{label}</span><strong className={`inline-flex max-w-full flex-wrap items-center gap-1 ${color}`} data-testid={`insight-${label}`}>
     {change === null || change === 0 ? <Minus size={14} className="shrink-0"/> : change > 0 ? <TrendingUp size={14} className="shrink-0"/> : <TrendingDown size={14} className="shrink-0"/>}{value}
   </strong></div>;
 }
