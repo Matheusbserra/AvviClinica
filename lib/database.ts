@@ -1,3 +1,4 @@
+import type { ServicePackage } from "./servicePackages";
 import { supabase } from "./supabase";
 import type { AppRole, AppUser } from "./access";
 import { canReadEntity } from "./access";
@@ -20,6 +21,7 @@ export type EntityName =
   | "professionals"
   | "procedures"
   | "services"
+  | "service_packages"
   | "inventory"
   | "gifts"
   | "strategies"
@@ -41,6 +43,7 @@ export type EntityPayloadMap = {
   professionals: Professional;
   procedures: Procedure;
   services: Service;
+  service_packages: ServicePackage;
   inventory: InventoryItem;
   gifts: GiftStockItem;
   strategies: ProfessionalStrategy;
@@ -63,6 +66,7 @@ export const entityNames: EntityName[] = [
   "professionals",
   "procedures",
   "services",
+  "service_packages",
   "inventory",
   "gifts",
   "strategies",

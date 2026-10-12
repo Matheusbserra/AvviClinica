@@ -21,25 +21,27 @@ type Access = AppRole | AppUser;
 export function canAccessTab(access: Access, tab: string) {
   const role = typeof access === "string" ? access : access.role;
   if (!appTabs.includes(tab as AppTab)) return false;
-  return role === "admin" || (tab !== "Contas" && (typeof access === "string" ? standardTabs : access.tabs ?? standardTabs).includes(tab));
+  return role === "admin" || (typeof access === "string" ? standardTabs : access.tabs ?? standardTabs).includes(tab);
 }
 export function hasLimitedProfessionalReport(access: Access) { return typeof access !== "string" && !!professionalScope(access); }
 export function hasFinancialAccess(access: Access) { return ["Dashboard", "Metas", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional"].some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
 const readTabs: Record<string, string[]> = {
+  service_packages: ["Agenda", "Cadastro de Serviços"],
   strategies: ["Estratégias"],
   anamneses: ["Anamnese"],
   ultraformer_tips: ["Ultraformer MPT"],
-  patients: ["Anamnese", "Dashboard", "Metas", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Cadastro de Pacientes", "Recibos de Pagamento", "Relatório Profissional", "Nota Fiscal"],
-  professionals: ["Estratégias", "Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Cadastro de Profissionais", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento", "Nota Fiscal"],
+  patients: ["Receitas", "Anamnese", "Dashboard", "Metas", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Cadastro de Pacientes", "Recibos de Pagamento", "Relatório Profissional", "Nota Fiscal"],
+  professionals: ["Receitas", "Estratégias", "Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Cadastro de Profissionais", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento", "Nota Fiscal"],
   procedures: ["Agenda", "Estoque", "Relatórios", "Relatório Profissional", "Lançamento de Procedimentos", "Cadastro de Procedimentos"],
-  services: ["Dashboard", "Metas", "Agenda", "Follow Up", "Relatórios", "Cadastro de Serviços", "Relatório Profissional", "Nota Fiscal"],
-  inventory: ["Agenda", "Estoque"], gifts: ["Agenda", "Estoque"], appointments: ["Dashboard", "Metas", "Agenda", "Estoque", "Follow Up", "Relatórios", "Cadastro de Pacientes", "Relatório Profissional", "Nota Fiscal"],
+  services: ["Receitas", "Dashboard", "Metas", "Agenda", "Follow Up", "Relatórios", "Cadastro de Serviços", "Relatório Profissional", "Nota Fiscal"],
+  inventory: ["Agenda", "Estoque"], gifts: ["Agenda", "Estoque"], appointments: ["Receitas", "Dashboard", "Metas", "Agenda", "Estoque", "Follow Up", "Relatórios", "Cadastro de Pacientes", "Relatório Profissional", "Nota Fiscal"],
   fixed_costs: ["Custos", "Dashboard", "Metas"], revenues: ["Receitas", "Dashboard", "Metas"],
   receipts: ["Recibos de Pagamento"], professional_receipts: ["Pagamento Profissional"], monthly_goals: ["Metas", "Dashboard", "Relatório Profissional"],
   financial_entries: ["Agenda", "Estoque", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Dashboard", "Metas"],
   followup_rules: ["Follow Up"], followup_contacts: ["Follow Up"], followup_logs: ["Follow Up"]
 };
 const writeTabs: Record<string, string[]> = {
+  service_packages: ["Cadastro de Serviços"],
   strategies: ["Estratégias"],
   anamneses: ["Anamnese"],
   ultraformer_tips: ["Ultraformer MPT"],
@@ -61,5 +63,8 @@ export function canManageProfessional(user: AppUser, professionalId: string) {
   return canAccessTab(user, "Cadastro de Profissionais") && canAccessProfessional(user, professionalId);
 }
 export function registrationOnly(user: AppUser) {
-  return user.role === "standard" && !["Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento"].some(tab => canAccessTab(user, tab));
+  return user.role === "standard" && !["Receitas", "Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento"].some(tab => canAccessTab(user, tab));
 }
+
+// Preserve saved account permissions while updating the visible navigation name.
+export function tabLabel(tab: string) { return tab === "Receitas" ? "Movimentações" : tab === "Relatórios" ? "Rankings" : tab; }

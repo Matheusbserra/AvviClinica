@@ -89,11 +89,11 @@ button {
   .account-summary-dialog th { print-color-adjust: exact; }
 }
 
-/* Fit all 18 navigation options into the desktop viewport. */
+/* Compact accordion groups keep the desktop navigation visible. */
 .avvi-sidebar-brand { margin-bottom: 6px; }
 .avvi-sidebar-brand img { height: clamp(28px, 6vh, 48px); }
-.avvi-sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
-.avvi-sidebar-link { height: clamp(15px, calc((100dvh - 232px) / 20), 32px); font-size: clamp(10px, 1.5vh, 12px); line-height: 1.2; }
+.avvi-sidebar-nav { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+.avvi-sidebar-link { height: clamp(24px, 3.6dvh, 34px); font-size: 12px; line-height: 1.2; }
 .avvi-sidebar-link svg { flex-shrink: 0; }
 .avvi-sidebar-footer { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 

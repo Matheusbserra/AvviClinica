@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
-import { appTabs, standardTabs, professionalAccessTabs, professionalScope } from "./access";
+import { appTabs, standardTabs, professionalAccessTabs, professionalScope, canAccessTab } from "./access";
 import type { AppRole, AppUser } from "./access";
 import { legacyStandard } from "./accessServer";
 export type StoredAccount = { id: string; login: string; name: string; role: AppRole; tabs: string[]; salt: string; password_hash: string; password_ciphertext: string | null; version: number; professional_report?: { professionalIds: string[] } | null; professional_registration?: { professionalIds: string[] } | null };
@@ -13,7 +13,7 @@ const builtin: StoredAccount = { id: "builtin-standard", login: "avviclinica", n
 export function accountUser(account: StoredAccount): AppUser {
   const clean = (scope: StoredAccount["professional_report"]) => scope ? { professionalIds: Array.isArray(scope.professionalIds) ? scope.professionalIds.filter(id => typeof id === "string") : [] } : undefined;
   const scope = professionalScope({ login: account.login, role: account.role, professionalReport: clean(account.professional_report), professionalRegistration: clean(account.professional_registration) });
-  return { id: account.id, login: account.login, name: account.name, role: account.role, tabs: account.role === "admin" ? [...appTabs] : account.tabs.filter(tab => tab !== "Contas" && appTabs.includes(tab as typeof appTabs[number])), revision: account.version, ...(scope ? { professionalReport: scope, professionalRegistration: scope } : {}) };
+  return { id: account.id, login: account.login, name: account.name, role: account.role, tabs: account.role === "admin" ? [...appTabs] : account.tabs.filter(tab => appTabs.includes(tab as typeof appTabs[number])), revision: account.version, ...(scope ? { professionalReport: scope, professionalRegistration: scope } : {}) };
 }
 function cryptKey() {
   const secret = process.env.AVVI_SESSION_SECRET;
@@ -83,7 +83,7 @@ export async function saveAccount(input: { id?: string; login?: string; name?: s
     const password = input.password ?? "";
     if ((!current && password.length < 8) || (password && (password.length < 8 || password.length > 256))) throw new AccountError("A senha deve ter de 8 a 256 caracteres.");
     if (!Array.isArray(input.tabs) || input.tabs.some(tab => typeof tab !== "string" || !appTabs.includes(tab as typeof appTabs[number]))) throw new AccountError("Permissões inválidas.");
-    const tabs = input.role === "admin" ? [...appTabs] : [...new Set(input.tabs as string[])].filter(tab => tab !== "Contas");
+    const tabs = input.role === "admin" ? [...appTabs] : [...new Set(input.tabs as string[])];
     const validateScope = (value: unknown) => {
       if (value === null) return null;
       const scope = value as { professionalIds?: unknown };
@@ -106,8 +106,40 @@ export async function saveAccount(input: { id?: string; login?: string; name?: s
     const professionalReport = scope, professionalRegistration = scope;
     const salt = password ? randomBytes(16).toString("hex") : current!.salt;
     const row: StoredAccount = { id: current?.id ?? randomUUID(), login, name, role: input.role!, tabs, professional_report: professionalReport as StoredAccount["professional_report"], ...(current && "professional_registration" in current ? { professional_registration: professionalRegistration as StoredAccount["professional_registration"] } : {}), salt, password_hash: password ? scryptSync(password, salt, 64).toString("hex") : current!.password_hash, password_ciphertext: password ? encrypt(password) : current!.password_ciphertext ?? (current?.id === builtin.id ? encrypt("avviclinica2026") : null), version: (current?.version ?? 0) + 1 };
-    if (accountStorageMode() === "local") { const next = [...stored.filter(item => item.id !== row.id), row], file = localFile(); await mkdir(path.dirname(file), { recursive: true }); const temporary = file + "." + randomUUID() + ".tmp"; await writeFile(temporary, JSON.stringify(next), { mode: 0o600 }); await rename(temporary, file); }
-    else { const db = cloud(), exists = stored.some(item => item.id === row.id); const query = exists ? db.from("avvi_user_accounts").update({ ...row, updated_at: new Date().toISOString() }).eq("id", row.id).eq("version", current!.version) : db.from("avvi_user_accounts").insert(row); const { data, error, status } = await query.select("id"); if (error) throw databaseFailure(error, status, "salvar"); if (!data?.length) throw new AccountError("Este usuário foi alterado em outra janela. Atualize a lista.", 409); }
+    await persistAccount(row, current, stored);
+    return accountUser(row);
+  };
+  if (accountStorageMode() !== "local") return operation();
+  const pending = localQueue.then(operation); localQueue = pending.catch(() => undefined); return pending;
+}
+
+async function persistAccount(row: StoredAccount, current: StoredAccount | undefined, stored: StoredAccount[]) {
+  if (accountStorageMode() === "local") {
+    const next = [...stored.filter(item => item.id !== row.id), row], file = localFile();
+    await mkdir(path.dirname(file), { recursive: true });
+    const temporary = file + "." + randomUUID() + ".tmp";
+    await writeFile(temporary, JSON.stringify(next), { mode: 0o600 }); await rename(temporary, file);
+  } else {
+    const db = cloud(), exists = stored.some(item => item.id === row.id);
+    const query = exists ? db.from("avvi_user_accounts").update({ ...row, updated_at: new Date().toISOString() }).eq("id", row.id).eq("version", current!.version) : db.from("avvi_user_accounts").insert(row);
+    const { data, error, status } = await query.select("id");
+    if (error) throw databaseFailure(error, status, "salvar");
+    if (!data?.length) throw new AccountError("Esta conta foi alterada em outra janela. Entre novamente.", 409);
+  }
+}
+export async function changeOwnPassword(user: AppUser, currentPassword: string, newPassword: string) {
+  if (user.login === "admin" || user.id === primary.id) throw new AccountError("O administrador principal é fixo e não pode ser alterado.", 403);
+  if (typeof currentPassword !== "string" || !currentPassword || currentPassword.length > 256 || typeof newPassword !== "string" || newPassword.length < 8 || newPassword.length > 256) throw new AccountError("Informe a senha atual e uma nova senha de 8 a 256 caracteres.");
+  const operation = async () => {
+    const stored = await storedAccounts(), current = stored.find(item => item.id === user.id) ?? (user.id === builtin.id ? builtin : undefined);
+    if (!current || current.login !== user.login || current.version !== user.revision || current.role !== user.role) throw new AccountError("Autentique-se novamente.", 401);
+    if (!canAccessTab(accountUser(current), "Contas")) throw new AccountError("Acesso a Contas não autorizado.", 403);
+    const hash = scryptSync(currentPassword, current.salt, 64);
+    if (!timingSafeEqual(hash, Buffer.from(current.password_hash, "hex"))) throw new AccountError("Senha atual incorreta.", 401);
+    const salt = randomBytes(16).toString("hex");
+    const row: StoredAccount = { ...current, salt, password_hash: scryptSync(newPassword, salt, 64).toString("hex"), password_ciphertext: encrypt(newPassword), version: current.version + 1 };
+    // Only credential fields and the session version change; permissions remain exact.
+    await persistAccount(row, current, stored);
     return accountUser(row);
   };
   if (accountStorageMode() !== "local") return operation();

@@ -1,8 +1,9 @@
+import {navigationButton} from './navigation-helper.mjs';
 import {chromium} from 'file:///C:/Users/mathe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs';
 import assert from 'node:assert/strict';
 const browser=await chromium.launch({headless:true,executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe'}),context=await browser.newContext({viewport:{width:1440,height:900}}),page=await context.newPage(),errors=[];
 const origin=process.env.AVVI_TEST_URL??'http://127.0.0.1:3107',root='C:/Users/mathe/.codex/visualizations/2026/10/08/01a11cce-4e90-7ed3-9fab-934e7f183230/',key='avvi.data.snapshot.v1';
-const tab=name=>page.getByRole('button',{name,exact:true}).filter({visible:true}).first(),card=id=>page.getByTestId('appointment-'+id),checkout=page.getByRole('dialog',{name:'Fechamento de conta',exact:true}),state=()=>page.evaluate(k=>JSON.parse(localStorage.getItem(k)).data,key);
+const tab=name=>navigationButton(page,name),card=id=>page.getByTestId('appointment-'+id),checkout=page.getByRole('dialog',{name:'Fechamento de conta',exact:true}),state=()=>page.evaluate(k=>JSON.parse(localStorage.getItem(k)).data,key);
 page.on('pageerror',e=>errors.push(e.message));
 async function open(id){await tab('Agenda').click();await card(id).click();await page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();await checkout.waitFor();}
 async function addProduct(){await checkout.getByRole('button',{name:'Produtos',exact:true}).click();await checkout.getByRole('combobox',{name:'Adicionar produto ao consumo'}).fill('toxina');await checkout.getByRole('option',{name:'Produto Toxina Booster',exact:true}).click();await checkout.getByRole('button',{name:'Adicionar produto',exact:true}).click();}

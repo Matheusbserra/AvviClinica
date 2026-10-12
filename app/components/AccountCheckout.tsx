@@ -2,6 +2,8 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, UserRound, X } from "lucide-react";
 import { SearchSelect } from "./SearchSelect";
+import { packageCheckoutLines } from "@/lib/servicePackages";
+import type { ServicePackage } from "@/lib/servicePackages";
 import { currency } from "@/lib/calculations";
 import { checkoutTotals, checkoutCommission, settleCheckoutPayments, checkoutAllowsNoProducts, moneyRound, paymentChoiceKey, paymentChoices, toggleCheckoutPayment } from "@/lib/checkout";
 import type { Appointment, DiscountSplit, Patient, PaymentItem, Procedure, ProcedureLine, Professional, ProductUsage, Service, GiftStockItem, GiftUsage } from "@/lib/types";
@@ -13,8 +15,8 @@ export type CheckoutDraft = {
 };
 export type CheckoutResult = { client: Patient; lines: ProcedureLine[]; products: ProductUsage[]; gifts: GiftUsage[]; payments: PaymentItem[]; total: number; discount: number; balanceDue: number; change: number; creditAdded: number; creditPayments: PaymentItem[]; clinicPatient: boolean };
 
-export function AccountCheckout({ draft, gifts, procedures, services, appointments, onCancel, onConfirm, onDelete }: {
-  draft: CheckoutDraft; gifts: GiftStockItem[]; procedures: Procedure[]; services: Service[]; appointments: Appointment[];
+export function AccountCheckout({ draft, gifts, procedures, services, packages = [], appointments, onCancel, onConfirm, onDelete }: {
+  draft: CheckoutDraft; gifts: GiftStockItem[]; procedures: Procedure[]; services: Service[]; packages?: ServicePackage[]; appointments: Appointment[];
   onDelete?: () => void; onCancel: () => void; onConfirm: (result: CheckoutResult) => void;
 }) {
   const [client, setClient] = useState({ ...draft.client });
@@ -26,7 +28,9 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
   const [giftId, setGiftId] = useState(""); const [giftQuantity, setGiftQuantity] = useState(1);
   const [payments, setPayments] = useState(() => [...draft.payments,...(draft.storedCreditPayments??[])].map((payment) => ({ ...payment })));
   const [editingClient, setEditingClient] = useState(false);
-  const [adding, setAdding] = useState<"service" | "product" | "gift" | null>(null);
+  const [adding, setAdding] = useState<"service" | "product" | "gift" | "package" | null>(null);
+  const [packageId, setPackageId] = useState("");
+  const [packageQuantity, setPackageQuantity] = useState(1);
   const [serviceId, setServiceId] = useState("");
   const [serviceQuantity, setServiceQuantity] = useState(1);
   const [procedureId, setProcedureId] = useState("");
@@ -73,12 +77,18 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
     const service = services.find((item) => item.id === serviceId && item.active);
     if (!service || !Number.isInteger(serviceQuantity) || serviceQuantity <= 0) return;
     setLines((current) => {
-      const existing = current.find((line) => line.serviceId === service.id);
+      const existing = current.find((line) => line.serviceId === service.id && !line.packageId);
       return existing ? current.map((line) => line.id === existing.id ? { ...line, quantity: line.quantity + serviceQuantity, discount: percentages[line.id] !== undefined ? moneyRound((line.quantity + serviceQuantity) * line.servicePrice * percentages[line.id] / 100) : line.discount } : line)
         : [...current, { id: `line-${crypto.randomUUID()}`, serviceId: service.id, manualProcedure: service.name, quantity: serviceQuantity,
           servicePrice: service.price, productCost: 0, professionalPercent: draft.professional?.commissionPercent ?? 70, discount: 0 }];
     });
     setServiceId(""); setServiceQuantity(1); setAdding(null);
+  }
+  function addPackage() {
+    const pack = packages.find(item => item.id === packageId && item.active);
+    if (!pack) return;
+    try { const added = packageCheckoutLines(pack, packageQuantity); setLines(current => [...current, ...added]); setPackageId(""); setPackageQuantity(1); setAdding(null); setError(""); }
+    catch (error) { setError(error instanceof Error ? error.message : "Confira o pacote."); }
   }
   function addProduct() {
     const procedure = procedures.find((item) => item.id === procedureId && item.active);
@@ -117,7 +127,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
     try {
       const settled = settleCheckoutPayments(payments,totals.change,keepCredit);
       const professionalPercent=checkoutCommission(draft.professional?.commissionPercent??0,clinicPatient);
-      onConfirm({ client, lines: lines.map(line=>({...line,professionalPercent})), products, gifts: selectedGifts, ...settled, clinicPatient, total: totals.total, discount: totals.discount, balanceDue: totals.remaining });
+      onConfirm({ client, lines: lines.map(line=>({...line,professionalPercent: line.packageCommissionPercent === undefined ? professionalPercent : checkoutCommission(line.packageCommissionPercent,clinicPatient)})), products, gifts: selectedGifts, ...settled, clinicPatient, total: totals.total, discount: totals.discount, balanceDue: totals.remaining });
     } catch (error) {setError(error instanceof Error?error.message:"Confira os pagamentos.");}
 
   }
@@ -133,6 +143,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
           </section>
           <div className="my-5 flex flex-wrap justify-end gap-2">
             <button type="button" onClick={() => setAdding(adding === "service" ? null : "service")} className="flex items-center gap-2 rounded-md bg-lime-300 px-4 py-2 text-sm font-bold text-slate-800 hover:bg-lime-400"><Plus size={16} />Serviços</button>
+            <button type="button" onClick={() => setAdding(adding === "package" ? null : "package")} className="flex items-center gap-2 rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white hover:brightness-95"><Plus size={16}/>Mais pacote</button>
             <button type="button" onClick={() => setAdding(adding === "product" ? null : "product")} className="flex items-center gap-2 rounded-md bg-lime-300 px-4 py-2 text-sm font-bold text-slate-800 hover:bg-lime-400"><Plus size={16} />Produtos</button>
             <button type="button" onClick={() => setAdding(adding === "gift" ? null : "gift")} className="flex items-center gap-2 rounded-md bg-lime-300 px-4 py-2 text-sm font-bold text-slate-800 hover:bg-lime-400"><Plus size={16} />Brindes</button>
           </div>
@@ -140,6 +151,13 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
             <label className="text-xs font-semibold">Serviço<SearchSelect label="Adicionar serviço à conta" options={services.filter(service=>service.active)} value={serviceId} onChange={setServiceId}/></label>
             <label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do serviço a adicionar" className="input mt-1" type="number" min={1} step={1} value={serviceQuantity} onChange={(event) => setServiceQuantity(Number(event.target.value))} /></label>
             <button type="button" disabled={!serviceId || !Number.isInteger(serviceQuantity) || serviceQuantity < 1} onClick={addService} className="self-end rounded-md bg-lime-400 px-3 py-2 text-sm font-bold disabled:opacity-40">Adicionar serviço</button>
+          </div>}
+          {adding === "package" && <div className="mb-4 grid gap-3 rounded-md border border-avvi-line bg-avvi-soft p-3 sm:grid-cols-[1fr_100px_auto]">
+            <label className="text-xs font-semibold">Pacote<SearchSelect label="Adicionar pacote à conta" options={packages.filter(pack => pack.active)} value={packageId} onChange={setPackageId}/></label>
+            <label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do pacote a adicionar" className="input mt-1" type="number" min={1} max={10000} step={1} value={packageQuantity} onChange={event => setPackageQuantity(Number(event.target.value))}/></label>
+            <button type="button" disabled={!packageId || !Number.isSafeInteger(packageQuantity) || packageQuantity < 1 || packageQuantity > 10000} onClick={addPackage} className="self-end rounded-md bg-avvi-blue px-3 py-2 text-sm font-bold text-white disabled:opacity-40">Adicionar pacote</button>
+            {packageId && <p className="text-xs text-slate-600 sm:col-span-3">{currency((packages.find(pack => pack.id === packageId)?.salePrice ?? 0) * packageQuantity)} · {packages.find(pack => pack.id === packageId)?.items.map(item => `${item.quantity * packageQuantity}× ${item.name}`).join(" · ")}</p>}
+            {!packages.some(pack => pack.active) && <p className="text-xs text-slate-500 sm:col-span-3">Cadastre um pacote em Cadastro de Serviços → Pacotes.</p>}
           </div>}
           {adding === "product" && <div className="mb-4 grid gap-3 rounded-md border border-lime-200 bg-lime-50 p-3 sm:grid-cols-[1fr_100px_auto]">
             <label className="text-xs font-semibold">Produto<SearchSelect label="Adicionar produto ao consumo" options={procedures.filter(procedure=>procedure.active)} value={procedureId} onChange={setProcedureId}/></label>
@@ -155,7 +173,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
           <div className="overflow-x-auto"><table data-testid="checkout-services" className="w-full min-w-[620px] text-sm"><thead className="border-b-2 border-avvi-line text-left text-xs text-slate-500"><tr><th className="px-2 py-3">Item</th><th className="px-2 py-3">Quantidade</th><th className="px-2 py-3">Preço</th><th className="px-2 py-3">Desconto</th><th className="px-2 py-3">A pagar</th><th /></tr></thead><tbody>
             {lines.map((line, index) => {
               const name = line.manualProcedure || services.find((service) => service.id === line.serviceId)?.name || "Serviço registrado";
-              return <tr key={line.id} className="border-b border-avvi-line"><td className="border-l-4 border-l-lime-500 px-3 py-4"><p className="font-semibold">{name}</p><p className="mt-1 text-xs text-orange-600">com {draft.professional?.name ?? "Profissional"}</p></td><td className="px-2 py-3"><input aria-label={`Quantidade de ${name} na conta`} type="number" min={1} step={1} required value={line.quantity} onChange={(event) => updateLine(index, { quantity: Number(event.target.value) })} className="w-16 rounded border border-slate-300 px-2 py-1 text-right" /></td><td className="px-2 py-3 align-top"><div className="relative w-28"><span className="pointer-events-none absolute left-2 top-1 text-xs text-slate-500">R$</span><input aria-label={`Preço de ${name} na conta`} type="number" min={0} step="0.01" required value={line.servicePrice} onChange={(event) => updateLine(index, { servicePrice: Number(event.target.value) })} className="w-full rounded border border-slate-300 py-1 pl-8 pr-2 text-right" /></div></td><td className="px-2 py-3 align-top"><div className="relative w-28"><span className="pointer-events-none absolute left-2 top-1 text-xs text-slate-500">R$</span><input aria-label={`Desconto de ${name} na conta`} type="number" min={0} max={moneyRound(line.servicePrice * line.quantity)} step="0.01" value={line.discount ?? 0} onFocus={() => setExpandedDiscount(line.id)} onClick={() => setExpandedDiscount(line.id)} onChange={(event) => updateLine(index, { discount: Number(event.target.value) })} className="w-full rounded border border-slate-300 py-1 pl-8 pr-2 text-right" /></div>{expandedDiscount === line.id && <div className="mt-2 w-32 rounded-md border border-avvi-line bg-avvi-soft p-2"><label className="block text-[10px] font-semibold text-slate-600">Desconto em %<div className="relative mt-1"><input aria-label={`Porcentagem de desconto de ${name}`} type="number" min={0} max={100} step="0.01" value={percentages[line.id] ?? (line.quantity * line.servicePrice > 0 ? moneyRound((line.discount ?? 0) / (line.quantity * line.servicePrice) * 100) : 0)} onChange={event => applyPercentage(index, Number(event.target.value))} className="w-full rounded border border-slate-300 bg-white py-1 pl-2 pr-6 text-right text-xs" /><span className="pointer-events-none absolute right-2 top-1 text-xs">%</span></div></label><p className="mt-1 text-[9px] text-slate-500">Sobre {currency(line.quantity * line.servicePrice)}</p><button type="button" aria-label={`Ocultar porcentagem de ${name}`} onClick={() => setExpandedDiscount(null)} className="mt-1 text-[10px] font-semibold text-avvi-blue">Concluir</button></div>}</td><td className="whitespace-nowrap px-2 py-3">{currency(Math.max(0, moneyRound(line.servicePrice * line.quantity - (line.discount ?? 0))))}</td><td><button type="button" aria-label={`Remover ${name} da conta`} onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={15} /></button></td></tr>;
+              return <tr key={line.id} className="border-b border-avvi-line"><td className="border-l-4 border-l-lime-500 px-3 py-4"><p className="font-semibold">{name}</p>{line.packageName && <span className="mt-1 block text-[10px] font-semibold text-avvi-blue">Pacote: {line.packageName}</span>}<p className="mt-1 text-xs text-orange-600">com {draft.professional?.name ?? "Profissional"}</p></td><td className="px-2 py-3"><input aria-label={`Quantidade de ${name} na conta`} type="number" min={1} step={1} required value={line.quantity} onChange={(event) => updateLine(index, { quantity: Number(event.target.value) })} className="w-16 rounded border border-slate-300 px-2 py-1 text-right" /></td><td className="px-2 py-3 align-top"><div className="relative w-28"><span className="pointer-events-none absolute left-2 top-1 text-xs text-slate-500">R$</span><input aria-label={`Preço de ${name} na conta`} type="number" min={0} step="0.01" required value={line.servicePrice} onChange={(event) => updateLine(index, { servicePrice: Number(event.target.value) })} className="w-full rounded border border-slate-300 py-1 pl-8 pr-2 text-right" /></div></td><td className="px-2 py-3 align-top"><div className="relative w-28"><span className="pointer-events-none absolute left-2 top-1 text-xs text-slate-500">R$</span><input aria-label={`Desconto de ${name} na conta`} type="number" min={0} max={moneyRound(line.servicePrice * line.quantity)} step="0.01" value={line.discount ?? 0} onFocus={() => setExpandedDiscount(line.id)} onClick={() => setExpandedDiscount(line.id)} onChange={(event) => updateLine(index, { discount: Number(event.target.value) })} className="w-full rounded border border-slate-300 py-1 pl-8 pr-2 text-right" /></div>{expandedDiscount === line.id && <div className="mt-2 w-32 rounded-md border border-avvi-line bg-avvi-soft p-2"><label className="block text-[10px] font-semibold text-slate-600">Desconto em %<div className="relative mt-1"><input aria-label={`Porcentagem de desconto de ${name}`} type="number" min={0} max={100} step="0.01" value={percentages[line.id] ?? (line.quantity * line.servicePrice > 0 ? moneyRound((line.discount ?? 0) / (line.quantity * line.servicePrice) * 100) : 0)} onChange={event => applyPercentage(index, Number(event.target.value))} className="w-full rounded border border-slate-300 bg-white py-1 pl-2 pr-6 text-right text-xs" /><span className="pointer-events-none absolute right-2 top-1 text-xs">%</span></div></label><p className="mt-1 text-[9px] text-slate-500">Sobre {currency(line.quantity * line.servicePrice)}</p><button type="button" aria-label={`Ocultar porcentagem de ${name}`} onClick={() => setExpandedDiscount(null)} className="mt-1 text-[10px] font-semibold text-avvi-blue">Concluir</button></div>}</td><td className="whitespace-nowrap px-2 py-3">{currency(Math.max(0, moneyRound(line.servicePrice * line.quantity - (line.discount ?? 0))))}</td><td><button type="button" aria-label={`Remover ${name} da conta`} onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={15} /></button></td></tr>;
             })}
           </tbody></table></div>
           {!lines.length && <p className="py-6 text-center text-sm text-slate-500">Adicione os serviços desta conta.</p>}

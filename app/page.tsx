@@ -58,6 +58,9 @@ import { AgendaView } from "@/app/components/AgendaView";
 import { PatientPhotos } from "@/app/components/PatientPhotos";
 import { AnamneseView } from "@/app/components/AnamneseView";
 import { PatientHistory } from "@/app/components/PatientHistory";
+import { ClinicalDialog } from "@/app/components/ClinicalDialog";
+import { PackagesView } from "@/app/components/PackagesView";
+import type { ServicePackage } from "@/lib/servicePackages";
 import { SearchSelect } from "@/app/components/SearchSelect";
 import { History } from "lucide-react";
 import { UltraformerView } from "@/app/components/UltraformerView";
@@ -88,10 +91,12 @@ import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 import { hasSnapshotChanges, snapshotChanges, recoverPendingChanges, recordIsPending, snapshotEntities } from "@/lib/persistence";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
 import { readBrowserSnapshot, writeBrowserSnapshot } from "@/lib/browserPersistence";
-import { canManageProfessional, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey } from "@/lib/access";
+import { tabLabel, canManageProfessional, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey } from "@/lib/access";
 import { permittedSnapshot } from "@/lib/accessSnapshot";
 import { AccountsView } from "@/app/components/AccountsView";
+import { MyAccountView } from "@/app/components/MyAccountView";
 import { StrategiesView } from "@/app/components/StrategiesView";
+import { MovementsView } from "@/app/components/MovementsView";
 import { ReportsView } from "@/app/components/ReportsView";
 import { dashboardPeriod } from "@/lib/dashboard";
 import { ProfessionalReportView } from "@/app/components/ProfessionalReportView";
@@ -99,6 +104,13 @@ import type { AppRole, AppUser } from "@/lib/access";
 
 type Tab = "Estratégias" | "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
+const sidebarGroups: { label: string; tabs: Tab[] }[] = [
+  { label: "Operação", tabs: ["Agenda", "Follow Up", "Anamnese"] },
+  { label: "Meu estabelecimento", tabs: ["Estoque", "Ultraformer MPT"] },
+  { label: "Profissional", tabs: ["Relatórios", "Relatório Profissional", "Estratégias"] },
+  { label: "Financeiro", tabs: ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos"] },
+  { label: "Cadastros", tabs: ["Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] }
+];
 const savedLoginKey = "avvi.saved.login.v1";
 
 const tabs: { id: Tab; icon: ElementType }[] = [
@@ -419,6 +431,7 @@ function readSavedLogin() {
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("Agenda");
+  const [openSidebarGroup, setOpenSidebarGroup] = useState<string | null>("Operação");
   const [viewMode, setViewMode] = useState<ViewMode>("Dia");
   const [selectedDate, setSelectedDate] = useState(() => todayKey());
   const [selectedMonth, setSelectedMonth] = useState(() => todayKey().slice(0, 7));
@@ -428,6 +441,7 @@ export default function Home() {
   const [professionals, setProfessionals] = useState<Professional[]>(seedProfessionals);
   const [procedures, setProcedures] = useState<Procedure[]>(() => mergeProcedures(seedProcedures, catalogProcedures));
   const [services, setServices] = useState<Service[]>(importedServices);
+  const [servicePackages, setServicePackages] = useState<ServicePackage[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [gifts, setGifts] = useState<GiftStockItem[]>([]);
   const [strategies, setStrategies] = useState<ProfessionalStrategy[]>([]);
@@ -473,7 +487,7 @@ export default function Home() {
   const pendingSyncs = useRef(0);
   const latestDraft = useRef<DataSnapshot | null>(null);
   const startupSnapshot = useRef<DataSnapshot>({
-    patients, professionals, procedures, services, inventory, gifts, anamneses, strategies, ultraformer_tips: ultraformerTips,
+    patients, professionals, procedures, services, service_packages: servicePackages, inventory, gifts, anamneses, strategies, ultraformer_tips: ultraformerTips,
     followup_rules: followUpRules, followup_contacts: followUpContacts, followup_logs: followUpLogs,
     appointments, financial_entries: entries, revenues, fixed_costs: costs, receipts,
     professional_receipts: professionalReceipts, monthly_goals: monthlyGoals
@@ -503,6 +517,7 @@ export default function Home() {
     if (entity === "patients") setPatients((current) => applyRemoteList(current, recordId, data as Patient, remove));
     if (entity === "professionals") setProfessionals((current) => applyRemoteList(current, recordId, data as Professional, remove));
     if (entity === "procedures") setProcedures((current) => applyRemoteList(current, recordId, data as Procedure, remove));
+    if (entity === "service_packages") setServicePackages((current) => applyRemoteList(current, recordId, data as ServicePackage, remove));
     if (entity === "services") setServices((current) => applyRemoteList(current, recordId, data as Service, remove));
     if (entity === "gifts") setGifts((current) => applyRemoteList(current, recordId, data as GiftStockItem, remove));
     if (entity === "strategies") setStrategies((current) => applyRemoteList(current, recordId, data as ProfessionalStrategy, remove));
@@ -527,6 +542,7 @@ export default function Home() {
       patients: entity === "patients" ? applyRemoteList(snapshot.patients, recordId, data as Patient, remove) : snapshot.patients,
       professionals: entity === "professionals" ? applyRemoteList(snapshot.professionals, recordId, data as Professional, remove) : snapshot.professionals,
       procedures: entity === "procedures" ? applyRemoteList(snapshot.procedures, recordId, data as Procedure, remove) : snapshot.procedures,
+      service_packages: entity === "service_packages" ? applyRemoteList(snapshot.service_packages, recordId, data as ServicePackage, remove) : snapshot.service_packages,
       services: entity === "services" ? applyRemoteList(snapshot.services, recordId, data as Service, remove) : snapshot.services,
       gifts: entity === "gifts" ? applyRemoteList(snapshot.gifts ?? [], recordId, data as GiftStockItem, remove) : snapshot.gifts,
       strategies: entity === "strategies" ? applyRemoteList(snapshot.strategies, recordId, data as ProfessionalStrategy, remove) : snapshot.strategies,
@@ -598,6 +614,7 @@ export default function Home() {
         setMonthlyGoals(snapshot.monthly_goals);
       }
       setServices(snapshot?.services ?? importedServices);
+      setServicePackages(snapshot?.service_packages ?? []);
       setInventory(snapshot?.inventory ?? []);
       setGifts(snapshot?.gifts ?? []);
       setStrategies(snapshot?.strategies ?? []);
@@ -620,6 +637,7 @@ export default function Home() {
           dbProfessionalsState,
           dbProceduresState,
           dbServicesState,
+          dbServicePackagesState,
           dbInventoryState,
           dbGiftsState,
           dbStrategiesState,
@@ -640,6 +658,7 @@ export default function Home() {
           selectEntityState("professionals"),
           selectEntityState("procedures"),
           selectEntityState("services"),
+          selectEntityState("service_packages"),
           selectEntityState("inventory"),
           selectEntityState("gifts"),
           selectEntityState("strategies"),
@@ -680,12 +699,13 @@ export default function Home() {
         const initialCosts = mergeCosts(seedFixedCosts, importedCosts);
         const initialReceipts = seedReceipts;
         const initialGoals = [makeMonthlyGoal(todayKey().slice(0, 7), seedProfessionals)];
-        const isEmptyDatabase = userRole === "admin" && !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbInventory.length && !dbGiftsState.records.length && !dbStrategiesState.records.length && !dbAnamnesesState.records.length && !dbUltraformerState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
+        const isEmptyDatabase = userRole === "admin" && !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbServicePackagesState.records.length && !dbInventory.length && !dbGiftsState.records.length && !dbStrategiesState.records.length && !dbAnamnesesState.records.length && !dbUltraformerState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
         const remoteSnapshot: DataSnapshot = {
           patients: isEmptyDatabase ? initialPatients : dbPatients,
           professionals: isEmptyDatabase ? initialProfessionals : dbProfessionals,
           procedures: isEmptyDatabase ? initialProcedures : dbProcedures,
           services: dbServices,
+          service_packages: dbServicePackagesState.records,
           inventory: dbInventory,
           gifts: dbGiftsState.records,
           strategies: dbStrategiesState.records,
@@ -710,6 +730,7 @@ export default function Home() {
             ...savedLocalSnapshot.data,
             procedures: savedLocalSnapshot.data.procedures,
             services: savedLocalSnapshot.data.services ?? importedServices,
+            service_packages: savedLocalSnapshot.data.service_packages ?? [],
             inventory: savedLocalSnapshot.data.inventory ?? [],
             gifts: savedLocalSnapshot.data.gifts ?? [],
             strategies: savedLocalSnapshot.data.strategies ?? [],
@@ -733,7 +754,7 @@ export default function Home() {
         // Compare against actual stored rows, including genuinely empty categories.
         lastSyncedSnapshot.current = {
           patients: dbPatients, professionals: dbProfessionals, procedures: dbProceduresState.records,
-          services: dbServices, inventory: dbInventory, gifts: dbGiftsState.records, strategies: dbStrategiesState.records, anamneses: dbAnamnesesState.records, ultraformer_tips: dbUltraformerState.records,
+          services: dbServices, service_packages: dbServicePackagesState.records, inventory: dbInventory, gifts: dbGiftsState.records, strategies: dbStrategiesState.records, anamneses: dbAnamnesesState.records, ultraformer_tips: dbUltraformerState.records,
           followup_rules: dbFollowUpRulesState.records, followup_contacts: dbFollowUpContactsState.records,
           followup_logs: dbFollowUpLogsState.records, appointments: dbAppointments,
           financial_entries: dbEntries, revenues: dbRevenues, fixed_costs: dbCosts,
@@ -744,6 +765,7 @@ export default function Home() {
         setProfessionals(hydratedSnapshot.professionals);
         setProcedures(hydratedSnapshot.procedures);
         setServices(hydratedSnapshot.services);
+        setServicePackages(hydratedSnapshot.service_packages);
         setInventory(hydratedSnapshot.inventory);
         setGifts(hydratedSnapshot.gifts ?? []);
         setStrategies(hydratedSnapshot.strategies ?? []);
@@ -803,6 +825,7 @@ export default function Home() {
       professionals,
       procedures,
       services,
+      service_packages: servicePackages,
       inventory,
       gifts,
       anamneses,
@@ -853,7 +876,7 @@ export default function Home() {
         pendingSyncs.current -= 1;
         setIsSyncing(pendingSyncs.current > 0);
       });
-  }, [patients, professionals, procedures, services, inventory, gifts, anamneses, strategies, ultraformerTips, followUpRules, followUpContacts, followUpLogs, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
+  }, [patients, professionals, procedures, services, servicePackages, inventory, gifts, anamneses, strategies, ultraformerTips, followUpRules, followUpContacts, followUpLogs, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
 
   function retrySaving() {
     if (cloudLoaded.current) setSyncRetry((current) => current + 1);
@@ -893,7 +916,7 @@ export default function Home() {
     setProcedures(startupSnapshot.current.procedures); setServices(startupSnapshot.current.services);
     setInventory([]); setGifts([]); setAppointments(startupSnapshot.current.appointments); setCosts(startupSnapshot.current.fixed_costs);
     setFollowUpRules([]); setFollowUpContacts([]); setFollowUpLogs([]);
-    setActiveTab((tabs.find(tab => canAccessTab(user, tab.id))?.id ?? "Agenda")); setIsAuthenticated(true);
+    const firstTab = tabs.find(tab => canAccessTab(user, tab.id))?.id ?? "Agenda"; setActiveTab(firstTab); setOpenSidebarGroup(sidebarGroups.find(group => group.tabs.includes(firstTab))?.label ?? null); setIsAuthenticated(true);
   }
   useEffect(() => {
     let active = true;
@@ -919,6 +942,18 @@ export default function Home() {
       if (rememberPassword) window.localStorage.setItem(savedLoginKey, JSON.stringify(loginForm));
       else window.localStorage.removeItem(savedLoginKey);
     } catch { setLoginError("Não foi possível acessar o servidor. Tente novamente."); }
+  }
+  async function handleOwnPasswordChanged(user: AppUser) {
+    // Password rotation preserves this browser's current draft under the new
+    // session revision before hydration switches its cache key.
+    if (latestDraft.current) {
+      try { await writeBrowserSnapshot(latestDraft.current, lastSyncedSnapshot.current, userSnapshotKey(user)); }
+      catch { throw new Error("Senha alterada, mas não foi possível guardar a cópia neste navegador. Mantenha esta janela aberta e confira o salvamento na nuvem."); }
+    }
+    const saved = readSavedLogin();
+    if (saved?.login === currentUser.login) { window.localStorage.removeItem(savedLoginKey); setRememberPassword(false); }
+    setLoginForm({ login: user.login, password: "" });
+    setDatabaseAccess(user); setCurrentUser(user);
   }
   async function handleLogout() {
     if (isSyncing) return;
@@ -953,7 +988,7 @@ export default function Home() {
     return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", check); };
   }, [isAuthenticated]);
   const availableTabs = tabs.filter((tab) => canAccessTab(currentUser, tab.id));
-  function changeTab(tab: Tab) { if (canAccessTab(currentUser, tab)) setActiveTab(tab); }
+  function changeTab(tab: Tab) { if (canAccessTab(currentUser, tab)) { setActiveTab(tab); setOpenSidebarGroup(sidebarGroups.find(group => group.tabs.includes(tab))?.label ?? null); } }
 
   function openSlot(hour: number, professionalId: string, durationMinutes = 30) {
     setAppointmentError("");
@@ -1133,7 +1168,7 @@ export default function Home() {
       procedureId: undefined, manualProcedure: first?.manualProcedure, quantity: first?.quantity ?? 1,
       servicePrice: first?.servicePrice ?? 0, productCost: 0, machineFee: 0,
       commercialDiscount: result.discount, discountSplit: checkoutDraft.discountSplit,
-      professionalPercent: checkoutCommission(professional?.commissionPercent ?? 0,result.clinicPatient),
+      professionalPercent: result.lines.some(line => line.packageId) ? professionalPercentForEntry({ procedureLines: result.lines, servicePrice: first?.servicePrice ?? 0, quantity: first?.quantity ?? 1, professionalPercent: checkoutCommission(professional?.commissionPercent ?? 0,result.clinicPatient) }) : checkoutCommission(professional?.commissionPercent ?? 0,result.clinicPatient),
       date: currentAppointment.startsAt.slice(0, 10), notes: checkoutDraft.notes,
       payments: result.payments.map((payment) => ({ ...payment, discount: 0,
         fee: payment.method === "Crédito" ? calculateCardFee(payment.amount, payment.cardBrand, payment.installments)
@@ -1599,51 +1634,13 @@ export default function Home() {
               <p className="mt-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-avvi-blue">Gestão integrada</p>
             </div>
             <nav aria-label="Menu principal" className="avvi-sidebar-nav min-h-0 flex-1">
-              <SidebarGroup label="Operação">
-                {availableTabs.filter((tab) => ["Agenda", "Estoque", "Follow Up", "Estratégias", "Anamnese", "Ultraformer MPT", "Relatórios"].includes(tab.id)).map((tab) => {
-                  const Icon = tab.icon;
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => changeTab(tab.id)}
-                      className={`avvi-sidebar-link flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
-                    >
-                      <Icon size={15} />
-                      <span>{tab.id}</span>
-                    </button>
-                  );
-                })}
-              </SidebarGroup>
-              <SidebarGroup label="Financeiro">
-                {availableTabs.filter((tab) => ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos"].includes(tab.id)).map((tab) => {
-                  const Icon = tab.icon;
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => changeTab(tab.id)}
-                      className={`avvi-sidebar-link flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
-                    >
-                      <Icon size={15} />
-                      <span>{tab.id}</span>
-                    </button>
-                  );
-                })}
-              </SidebarGroup>
-              <SidebarGroup label="Cadastros">
-                {availableTabs.filter((tab) => ["Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"].includes(tab.id)).map((tab) => {
-                const Icon = tab.icon;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => changeTab(tab.id)}
-                    className={`avvi-sidebar-link flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}
-                  >
-                    <Icon size={15} />
-                    <span>{tab.id}</span>
-                  </button>
-                );
-                })}
-              </SidebarGroup>
+              {sidebarGroups.map(group => {
+                const items = group.tabs.flatMap(value => availableTabs.filter(tab => tab.id === value));
+                if (!items.length) return null;
+                return <SidebarGroup key={group.label} label={group.label} open={openSidebarGroup === group.label} onToggle={() => setOpenSidebarGroup(current => current === group.label ? null : group.label)}>
+                  {items.map(tab => { const Icon = tab.icon; return <button key={tab.id} onClick={() => changeTab(tab.id)} aria-current={activeTab === tab.id ? "page" : undefined} className={`avvi-sidebar-link flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}><Icon size={15}/><span>{tabLabel(tab.id)}</span></button>; })}
+                </SidebarGroup>;
+              })}
             </nav>
             <div className="avvi-sidebar-footer shrink-0">
               <div aria-label="Perfil do usuário" title={`${currentUser.name || currentUser.login} · ${userRole === "admin" ? "Administrador" : "Usuário padrão"}`} className="truncate rounded border border-[#eadcc4] bg-avvi-soft px-2 text-[10px] font-semibold leading-[20px] text-slate-600">
@@ -1671,7 +1668,7 @@ export default function Home() {
           <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
             {!isDataReady ? "Carregando dados…" : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : hasPendingChanges || syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
           </div>
-          {activeTab === "Agenda" ? <select aria-label="Navegar pelo sistema" value={activeTab} onChange={(event) => changeTab(event.target.value as Tab)} className="mb-2 shrink-0 rounded border border-avvi-line bg-white p-1.5 text-xs lg:hidden">{availableTabs.map((tab) => <option key={tab.id}>{tab.id}</option>)}</select> : <MobileTabs activeTab={activeTab} setActiveTab={changeTab} allowedTabs={availableTabs} />}
+          {activeTab === "Agenda" ? <select aria-label="Navegar pelo sistema" value={activeTab} onChange={(event) => changeTab(event.target.value as Tab)} className="mb-2 shrink-0 rounded border border-avvi-line bg-white p-1.5 text-xs lg:hidden">{availableTabs.map((tab) => <option key={tab.id} value={tab.id}>{tabLabel(tab.id)}</option>)}</select> : <MobileTabs activeTab={activeTab} setActiveTab={changeTab} allowedTabs={availableTabs} />}
 
           {canAccessTab(currentUser, "Agenda") && activeTab === "Agenda" && (
             <AgendaView
@@ -1700,7 +1697,7 @@ export default function Home() {
 
           {activeTab === "Follow Up" && <FollowUpView tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={accounting.appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
 
-          {userRole === "admin" && activeTab === "Contas" && <AccountsView professionals={professionals} />}
+          {canAccessTab(currentUser, "Contas") && activeTab === "Contas" && (userRole === "admin" ? <AccountsView professionals={professionals} /> : <MyAccountView professionals={professionals} onPasswordChanged={handleOwnPasswordChanged} />)}
           {canAccessTab(currentUser, "Relatórios") && activeTab === "Relatórios" && <ReportsView appointments={accounting.appointments} entries={accounting.entries} professionals={professionals} procedures={procedures} services={services} revenues={accountingRevenues} />}
 
           {canAccessTab(currentUser, "Estratégias") && activeTab === "Estratégias" && <StrategiesView user={currentUser} professionals={professionals} records={strategies} setRecords={setStrategies} entries={accounting.entries} appointments={accounting.appointments} services={services} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />}
@@ -1733,14 +1730,8 @@ export default function Home() {
           {canAccessTab(currentUser, "Nota Fiscal") && activeTab === "Nota Fiscal" && <InvoiceView appointments={accounting.appointments} patients={patients} professionals={professionals} services={services} entries={accounting.entries} onCpfChange={(patientId,cpf)=>setPatients(current=>current.map(patient=>patient.id===patientId?{...patient,cpf}:patient))} onChange={(appointmentId,invoice)=>setAppointments(current=>current.map(item=>item.id===appointmentId?{...item,invoice}:item))}/>}
 
           {canAccessTab(currentUser, "Receitas") && activeTab === "Receitas" && (
-            <RevenuesView
-              revenues={accountingRevenues}
-              setRevenues={next => setRevenues(current => [...next, ...current.filter(item => accounting.entryIds.has(item.sourceFinancialEntryId))])}
-              patients={patients}
-              setPatients={setPatients}
-              selectedMonth={selectedMonth}
-              setSelectedMonth={setSelectedMonth}
-            />
+            <MovementsView appointments={accounting.appointments} entries={accounting.entries} revenues={accountingRevenues} patients={patients} professionals={professionals} services={services} selectedMonth={selectedMonth} onOpenAccount={viewClosedAccount}/>
+
           )}
 
           {canAccessTab(currentUser, "Recibos de Pagamento") && activeTab === "Recibos de Pagamento" && (
@@ -1801,7 +1792,7 @@ export default function Home() {
           )}
 
           {activeTab === "Cadastro de Serviços" && (
-            <ServicesView services={services} setServices={setServices} />
+            <ServicesView services={services} setServices={setServices} packages={servicePackages} setPackages={setServicePackages} />
           )}
 
           {activeTab === "Cadastro de Profissionais" && (
@@ -1868,7 +1859,7 @@ export default function Home() {
       {accountSummary && <AccountSummary draft={accountSummary.draft} closedAt={accountSummary.closedAt} change={accountSummary.change} procedures={procedures} onClose={() => setAccountSummary(null)} />}
 
       {checkoutDraft && <AccountCheckout key={`${checkoutDraft.appointment.id}-${checkoutDraft.entryId ?? "new"}`}
-        draft={checkoutDraft} gifts={gifts} procedures={procedures} services={services} appointments={appointments}
+        draft={checkoutDraft} gifts={gifts} procedures={procedures} services={services} packages={servicePackages} appointments={appointments}
         onCancel={() => { const appointmentId = checkoutDraft.appointment.id; setCheckoutDraft(null); openAppointment(appointmentId); }}
         onDelete={checkoutDraft.appointment.accountClosed ? () => deleteClosedAccount(checkoutDraft.appointment.id) : undefined}
         onConfirm={finishCheckout} />}
@@ -1916,7 +1907,7 @@ function Header({ activeTab, compact = false }: { activeTab: Tab; compact?: bool
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           {!compact && <p className="text-xs font-semibold uppercase tracking-[0.16em] text-avvi-blue">AVVI Clínica</p>}
-          <h2 className={`${compact ? "text-lg" : "text-2xl"} font-bold text-avvi-ink`}>{activeTab}</h2>
+          <h2 className={`${compact ? "text-lg" : "text-2xl"} font-bold text-avvi-ink`}>{tabLabel(activeTab)}</h2>
         </div>
         <div className={`flex items-center gap-2 rounded-xl bg-avvi-soft font-semibold text-avvi-blue ${compact ? "px-2 py-1 text-[10px]" : "px-3 py-2 text-sm"}`}>
           <CheckCircle2 size={16} />
@@ -1932,7 +1923,7 @@ function MobileTabs({ activeTab, setActiveTab, allowedTabs }: { activeTab: Tab; 
     <div className="mb-4 flex gap-2 overflow-x-auto lg:hidden">
       {allowedTabs.map((tab) => (
         <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm ${activeTab === tab.id ? "bg-avvi-blue text-white" : "bg-white/90 text-slate-600"}`}>
-          {tab.id}
+          {tabLabel(tab.id)}
         </button>
       ))}
     </div>
@@ -2007,168 +1998,6 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
 }
 
 type RevenuePaymentMethod = "Dinheiro" | "Crédito" | "Débito" | "Pix" | "Crédito Futuro";
-
-function makeRevenueForm() {
-  return {
-    clientName: "",
-    date: todayKey(),
-    serviceValue: 0,
-    serviceQuantity: 1,
-    discount: 0,
-    paymentMethod: "Pix" as RevenuePaymentMethod,
-    clientCreditAdded: 0
-  };
-}
-
-function calculateRevenueTotal(form: ReturnType<typeof makeRevenueForm>) {
-  if (form.paymentMethod === "Crédito Futuro") return 0;
-  const serviceTotal = (Number(form.serviceValue) || 0) * (Number(form.serviceQuantity) || 0);
-  return Math.max(0, serviceTotal - (Number(form.discount) || 0));
-}
-
-function RevenuesView({ revenues, setRevenues, patients, setPatients, selectedMonth, setSelectedMonth }: { revenues: RevenueEntry[]; setRevenues: (items: RevenueEntry[]) => void; patients: Patient[]; setPatients: (items: Patient[]) => void; selectedMonth: string; setSelectedMonth: (value: string) => void }) {
-  const [form, setForm] = useState(makeRevenueForm());
-  const initialPeriod = monthPeriod(selectedMonth);
-  const [periodStart, setPeriodStart] = useState(initialPeriod.start);
-  const [periodEnd, setPeriodEnd] = useState(initialPeriod.end);
-  const rows = revenues.filter((revenue) => isDateInPeriod(revenue.paymentDate, periodStart, periodEnd));
-  const totalGross = rows.reduce((sum, revenue) => sum + revenue.total, 0);
-  const totalDiscounts = rows.reduce((sum, revenue) => sum + revenue.discount, 0);
-  const totalClientCreditAdded = rows.reduce((sum, revenue) => sum + revenue.clientCreditAddedTotal, 0);
-  const totalClientCreditUsed = rows.reduce((sum, revenue) => sum + revenue.clientCreditUsedTotal, 0);
-  const serviceTotal = (Number(form.serviceValue) || 0) * (Number(form.serviceQuantity) || 0);
-  const totalPaid = calculateRevenueTotal(form);
-
-  function saveRevenue() {
-    const paid = calculateRevenueTotal(form);
-    const isClientCreditPayment = form.paymentMethod === "Crédito Futuro";
-    const futureCreditUsed = isClientCreditPayment ? Math.abs(serviceTotal - (Number(form.discount) || 0)) : 0;
-    const revenue: RevenueEntry = {
-      id: id("revenue"),
-      serviceDate: form.date,
-      paymentDate: form.date,
-      paymentTime: format(new Date(), "HH:mm"),
-      type: "Receita",
-      clientName: form.clientName.trim() || "Cliente não informado",
-      total: paid,
-      serviceQuantity: Number(form.serviceQuantity) || 0,
-      serviceTotal,
-      clientCreditTotal: Number(form.clientCreditAdded) || 0,
-      clientCreditAddedTotal: Number(form.clientCreditAdded) || 0,
-      clientCreditUsedTotal: isClientCreditPayment ? -futureCreditUsed : 0,
-      discount: -Math.abs(Number(form.discount) || 0),
-      discountReason: "",
-      creditTotal: form.paymentMethod === "Crédito" ? paid : 0,
-      debitTotal: form.paymentMethod === "Débito" ? paid : 0,
-      cashTotal: form.paymentMethod === "Dinheiro" ? paid : 0,
-      pixTotal: form.paymentMethod === "Pix" ? paid : 0
-    };
-    setRevenues([revenue, ...revenues]);
-    const patientNameKey = normalizeName(form.clientName);
-    if (patientNameKey && ((Number(form.clientCreditAdded) || 0) || futureCreditUsed)) {
-      const hasPatient = patients.some((patient) => normalizeName(patient.name) === patientNameKey);
-      const updatedPatients = patients.map((patient) => normalizeName(patient.name) === patientNameKey ? {
-        ...patient,
-        futureCredit: Math.max(0, (Number(patient.futureCredit) || 0) + (Number(form.clientCreditAdded) || 0) - futureCreditUsed)
-      } : patient);
-      setPatients(hasPatient ? updatedPatients : [{
-        ...makePatientForm(),
-        id: id("patient"),
-        name: form.clientName.trim(),
-        futureCredit: Math.max(0, (Number(form.clientCreditAdded) || 0) - futureCreditUsed),
-        notes: "Paciente criado pelo cadastro de receitas."
-      }, ...updatedPatients]);
-    }
-    setForm(makeRevenueForm());
-  }
-
-  function selectPeriodMonth(month: string) {
-    const period = monthPeriod(month);
-    setSelectedMonth(month);
-    setPeriodStart(period.start);
-    setPeriodEnd(period.end);
-  }
-
-  return (
-    <div className="space-y-4">
-      <Panel>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-xl font-bold">Receitas</h3>
-            <p className="text-sm text-slate-500">Cadastro manual de receitas da clínica.</p>
-          </div>
-          <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{revenues.length} receitas cadastradas</span>
-        </div>
-        <div className="mt-4">
-          <PeriodFilter start={periodStart} end={periodEnd} month={selectedMonth} onStartChange={setPeriodStart} onEndChange={setPeriodEnd} onMonthChange={selectPeriodMonth} />
-        </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-4">
-          <FormField label="Cliente">
-            <input className="input" value={form.clientName} onChange={(event) => setForm({ ...form, clientName: event.target.value })} placeholder="Nome do cliente" />
-          </FormField>
-          <FormField label="Data">
-            <input type="date" className="input" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} />
-          </FormField>
-          <FormField label="Valor do serviço">
-            <MoneyInput value={form.serviceValue} onChange={(value) => setForm({ ...form, serviceValue: value })} />
-          </FormField>
-          <FormField label="Quantidade de serviços">
-            <input type="number" min={1} className="input" value={form.serviceQuantity} onChange={(event) => setForm({ ...form, serviceQuantity: Number(event.target.value) })} />
-          </FormField>
-          <FormField label="Desconto">
-            <MoneyInput value={form.discount} onChange={(value) => setForm({ ...form, discount: value })} />
-          </FormField>
-          <FormField label="Forma de pagamento">
-            <select className="input" value={form.paymentMethod} onChange={(event) => setForm({ ...form, paymentMethod: event.target.value as RevenuePaymentMethod })}>
-              {(["Dinheiro", "Crédito", "Débito", "Pix", "Crédito Futuro"] as RevenuePaymentMethod[]).map((method) => <option key={method}>{method}</option>)}
-            </select>
-          </FormField>
-          <FormField label="Adicionar crédito futuro">
-            <MoneyInput value={form.clientCreditAdded} onChange={(value) => setForm({ ...form, clientCreditAdded: value })} />
-          </FormField>
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-            <p className="text-xs font-bold uppercase text-amber-700">Total pago automático</p>
-            <p className="mt-1 text-2xl font-bold text-slate-950">{currency(totalPaid)}</p>
-            <p className="mt-1 text-xs text-slate-500">Desconto: {currency(-Math.abs(Number(form.discount) || 0))} · Crédito futuro: {form.paymentMethod === "Crédito Futuro" ? currency(-Math.abs(serviceTotal - (Number(form.discount) || 0))) : currency(Number(form.clientCreditAdded) || 0)}</p>
-          </div>
-          <div className="lg:col-span-4">
-            <button onClick={saveRevenue} className="rounded-md bg-avvi-blue px-4 py-2 font-bold text-white"><Save className="mr-2 inline" size={16} />Salvar receita</button>
-          </div>
-        </div>
-      </Panel>
-
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard title="Total pago" value={currency(totalGross)} meta={`${rows.length} receita(s) cadastrada(s)`} tone="green" delta="Soma dos totais pagos" />
-        <MetricCard title="Crédito futuro gerado" value={currency(totalClientCreditAdded)} meta="Crédito adicionado para uso futuro" tone="blue" delta="Cadastro manual" />
-        <MetricCard title="Crédito futuro utilizado" value={currency(totalClientCreditUsed)} meta="Não entra como custo/despesa" tone="blue" delta="Baixa do saldo do cliente" />
-        <MetricCard title="Descontos" value={currency(totalDiscounts)} meta="Sempre indicado com sinal negativo" tone="red" delta="Somatório cadastrado" />
-      </div>
-
-      <Panel>
-        <DataTable
-          headers={["Data", "Cliente", "Qtd. Serviços", "Valor Serviço", "Desconto", "Crédito Futuro Adicionado", "Crédito Futuro Utilizado", "Dinheiro", "Crédito", "Débito", "Pix", "Total", "Ações"]}
-          rows={rows.map((revenue) => [
-            `${formatDate(revenue.paymentDate)} ${revenue.paymentTime}`,
-            revenue.clientName,
-            String(revenue.serviceQuantity),
-            currency(revenue.serviceTotal),
-            currency(revenue.discount),
-            currency(revenue.clientCreditAddedTotal),
-            currency(revenue.clientCreditUsedTotal),
-            currency(revenue.cashTotal),
-            currency(revenue.creditTotal),
-            currency(revenue.debitTotal),
-            currency(revenue.pixTotal),
-            currency(revenue.total),
-            <button key={revenue.id} onClick={() => setRevenues(revenues.filter((item) => item.id !== revenue.id))} className="rounded-md border border-red-100 p-2 text-avvi-red hover:bg-red-50" title="Excluir receita">
-              <Trash2 size={14} />
-            </button>
-          ])}
-        />
-      </Panel>
-    </div>
-  );
-}
 
 function FinancialView(props: {
   entryForm: ReturnType<typeof makeEntryForm>;
@@ -2737,7 +2566,9 @@ function makeServiceForm(): Service {
   return { id: "", name: "", description: "", durationMinutes: 60, category: "", price: 0, priceType: "fixed", active: true };
 }
 
-function ServicesView({ services, setServices }: { services: Service[]; setServices: Dispatch<SetStateAction<Service[]>> }) {
+function ServicesView({ services, setServices, packages, setPackages }: { services: Service[]; setServices: Dispatch<SetStateAction<Service[]>>; packages: ServicePackage[]; setPackages: Dispatch<SetStateAction<ServicePackage[]>> }) {
+  const [tab, setTab] = useState("services");
+  const [open, setOpen] = useState(false);
   const [serviceForm, setServiceForm] = useState<Service>(makeServiceForm);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -2758,20 +2589,16 @@ function ServicesView({ services, setServices }: { services: Service[]; setServi
     const saved: Service = { ...serviceForm, id: serviceForm.id || id("service"), name: serviceForm.name.trim(),
       description: serviceForm.description.trim(), category: serviceForm.category.trim(), price: Math.round(serviceForm.price * 100) / 100 };
     setServices((current) => serviceForm.id ? current.map((service) => service.id === serviceForm.id ? saved : service) : [saved, ...current]);
+    setOpen(false);
     setServiceForm(makeServiceForm());
     setError("");
   }
 
   return (
     <div className="space-y-4">
-      <Panel>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-bold">{serviceForm.id ? "Editar serviço" : "Cadastro de serviços"}</h3>
-            <p className="text-sm text-slate-500">Cadastre os serviços da clínica e selecione-os nos agendamentos.</p>
-          </div>
-          <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{services.length} serviços</span>
-        </div>
+      <div role="tablist" aria-label="Catálogo de serviços" className="flex gap-2">{[["services", "Serviços"], ["packages", "Pacotes"]].map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)} className={`rounded-md px-5 py-2 text-sm font-bold ${tab === value ? "bg-avvi-blue text-white" : "border border-avvi-line bg-white text-slate-600"}`}>{label}</button>)}</div>
+      {tab === "packages" ? <PackagesView services={services} records={packages} setRecords={setPackages}/> : <>
+      {open && <ClinicalDialog title={serviceForm.id ? "Editar serviço" : "Novo serviço"} onClose={() => setOpen(false)}>
         <form onSubmit={saveService}>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <FormField label="Nome"><input className="input" required value={serviceForm.name} onChange={(event) => setServiceForm({ ...serviceForm, name: event.target.value })} /></FormField>
@@ -2793,13 +2620,14 @@ function ServicesView({ services, setServices }: { services: Service[]; setServi
           {error && <p role="alert" className="mt-3 text-sm font-bold text-avvi-red">{error}</p>}
           <div className="mt-4 flex gap-3">
             <button type="submit" className="rounded-md bg-avvi-blue px-5 py-2 font-bold text-white"><Save className="mr-2 inline" size={16} />Salvar serviço</button>
-            {serviceForm.id && <button type="button" className="rounded-md border border-avvi-line px-4 py-2 text-sm font-bold" onClick={() => { setServiceForm(makeServiceForm()); setError(""); }}>Cancelar edição</button>}
+            {<button type="button" className="rounded-md border border-avvi-line px-4 py-2 text-sm font-bold" onClick={() => { setOpen(false); }}>Cancelar</button>}
           </div>
         </form>
-      </Panel>
+      </ClinicalDialog>}
       <Panel>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-lg font-bold">Serviços cadastrados</h3>
+          <div className="flex items-center gap-3"><h3 className="text-lg font-bold">Serviços cadastrados</h3><span className="text-xs text-slate-500">{services.length}</span></div>
+          <button type="button" onClick={() => { setServiceForm(makeServiceForm()); setError(""); setOpen(true); }} className="flex items-center gap-2 rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white"><Plus size={16}/>Mais serviços</button>
           <input aria-label="Buscar serviços" className="input max-w-sm" placeholder="Buscar nome ou categoria" value={query} onChange={(event) => setQuery(event.target.value)} />
         </div>
         <DataTable headers={["Serviço", "Categoria", "Duração", "Preço", "Status", "Ações"]} rows={sortedServices.map((service) => [
@@ -2808,12 +2636,12 @@ function ServicesView({ services, setServices }: { services: Service[]; setServi
           <span key={`${service.id}-price`} className="whitespace-nowrap text-base font-bold text-avvi-blue">{service.priceType === "from" ? "A partir de " : ""}{currency(service.price)}</span>,
           service.active ? "Ativo" : "Inativo",
           <div key={`${service.id}-actions`} className="flex items-center gap-2">
-            <button title="Editar serviço" className="rounded-md border border-avvi-line p-2 text-avvi-blue hover:bg-avvi-soft" onClick={() => { setServiceForm({ ...service }); setError(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}><Pencil size={16} /></button>
+            <button title="Editar serviço" className="rounded-md border border-avvi-line p-2 text-avvi-blue hover:bg-avvi-soft" onClick={() => { setServiceForm({ ...service }); setError(""); setOpen(true); }}><Pencil size={16} /></button>
             <button className="rounded-md bg-avvi-soft px-3 py-2 text-sm font-bold text-avvi-blue" onClick={() => setServices((current) => current.map((item) => item.id === service.id ? { ...item, active: !item.active } : item))}>{service.active ? "Desativar" : "Ativar"}</button>
           </div>
         ])} />
         {!sortedServices.length && <p className="py-4 text-sm text-slate-500">Nenhum serviço encontrado.</p>}
-      </Panel>
+      </Panel></>}
     </div>
   );
 }
@@ -3464,13 +3292,9 @@ function Panel({ children }: { children: ReactNode }) {
   return <section className="rounded-2xl border border-white/70 bg-white/90 p-5 shadow-panel backdrop-blur">{children}</section>;
 }
 
-function SidebarGroup({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="avvi-sidebar-group">
-      <p className="mb-0.5 px-2.5 text-[9px] font-bold uppercase leading-3 tracking-[0.14em] text-slate-400">{label}</p>
-      <div className="flex flex-col gap-0.5">{children}</div>
-    </div>
-  );
+function SidebarGroup({ label, children, open, onToggle }: { label: string; children: ReactNode; open: boolean; onToggle: () => void }) {
+  const target = `sidebar-${label.replace(/\s+/g, "-")}`;
+  return <section><button type="button" aria-expanded={open} aria-controls={target} onClick={onToggle} className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-3 text-left text-xs font-bold ${open ? "bg-avvi-soft text-avvi-blue" : "text-slate-600 hover:bg-avvi-soft"}`}><span>{label}</span>{open ? <ChevronDown size={15}/> : <ChevronRight size={15}/>}</button><div id={target} hidden={!open} className="space-y-1 py-1 pl-2">{children}</div></section>;
 }
 
 function FormField({ label, children }: { label: string; children: ReactNode }) {

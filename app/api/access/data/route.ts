@@ -1,3 +1,4 @@
+import { validServicePackage } from "@/lib/servicePackages";
 import { createClient } from "@supabase/supabase-js";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
 import { canAccessProfessional, canManageProfessional, registrationOnly, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
@@ -55,6 +56,13 @@ export async function POST(request: Request) {
     const { upserts = [], removed = [] } = await request.json();
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
     const db = database();
+    const packageUpdates = upserts.filter(row => row.entity === "service_packages");
+    if (packageUpdates.length) {
+      if (!canWriteEntity(user, "service_packages")) return Response.json({ error: "Cadastro de pacotes não autorizado." }, { status: 403, headers });
+      const serviceIds = new Set((await rows("services")).map(row => row.record_id));
+      for (const row of upserts) if (row.entity === "services" && canWriteEntity(user, "services")) serviceIds.add(row.record_id);
+      for (const row of packageUpdates) if (!validServicePackage(row.data) || row.data.items.some((item: { serviceId: string }) => !serviceIds.has(item.serviceId))) return Response.json({ error: "Confira os serviços e os dados do pacote." }, { status: 400, headers });
+    }
     const strategyUpdates = upserts.filter(row => row.entity === "strategies");
     if (strategyUpdates.length) {
       if (!canWriteEntity(user,"strategies")) return Response.json({error:"Acesso às estratégias não autorizado."},{status:403,headers});
@@ -112,6 +120,7 @@ export async function POST(request: Request) {
     const receiptSources = new Set<string>(canWriteEntity(user, "professional_receipts") ? upserts.filter(row => row.entity === "professional_receipts").map(row => row.record_id) : []);
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
+      if (row.entity === "service_packages" && !validServicePackage(row.data)) return Response.json({ error: "Dados do pacote inválidos." }, { status: 400, headers });
       if (row.entity === "appointments" && row.data.invoice !== undefined && (!validInvoice(row.data.invoice) || row.data.invoice.localPdf)) return Response.json({error:"Anexo fiscal inválido."},{status:400,headers});
       if (row.entity === "professionals" && row.data.showInAgenda !== undefined && typeof row.data.showInAgenda !== "boolean") return Response.json({ error: "Visibilidade na agenda inválida." }, { status: 400, headers });
       if (row.entity === "professionals" && row.data.closedShifts !== undefined && !validClosedShifts(row.data.closedShifts)) return Response.json({ error: "Turnos de agenda inválidos." }, { status: 400, headers });

@@ -107,6 +107,10 @@ export type PaymentItem = {
 export type ProcedureLine = {
   id: string;
   serviceId?: string;
+  packageId?: string;
+  packageName?: string;
+  packageCommissionPercent?: number;
+  packageValidityMonths?: number;
   discount?: number;
   procedureId?: string;
   manualProcedure?: string;
