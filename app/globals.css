@@ -103,3 +103,29 @@ button {
 .ultraformer-name { font-size: clamp(11px, 1.7dvh, 14px); line-height: 1.2; }
 .ultraformer-balance { font-size: clamp(14px, 2.5dvh, 20px); line-height: 1.2; }
 .ultraformer-rows button { max-height: 100%; padding-top: clamp(2px, .7dvh, 8px); padding-bottom: clamp(2px, .7dvh, 8px); }
+
+/* Keep movement values within the available panel width at every screen size. */
+.movement-layout { container-type: inline-size; width: 100%; min-width: 0; }
+.movement-table { font-variant-numeric: tabular-nums; }
+.movement-table th, .movement-table td { overflow-wrap: anywhere; }
+.movement-table .movement-amount { font-size: clamp(8px, .68vw, 11px); }
+@container (max-width: 1000px) {
+  .movement-table, .movement-table tbody, .movement-table tfoot { display: block; width: 100%; }
+  .movement-table thead { display: none; }
+  .movement-table tr { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px 12px; padding: 12px; margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 10px; }
+  .movement-table th, .movement-table td { width: auto; min-width: 0; border: 0; padding: 4px 0; background: transparent; }
+  .movement-table .movement-name { grid-column: 1 / -1; font-size: 12px; }
+  .movement-table .movement-context { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11px; }
+  .movement-table .movement-context p { margin: 0; }
+  .movement-table .movement-amount { text-align: left; font-size: 12px; }
+  .movement-table .movement-amount::before { content: attr(data-label); display: block; margin-bottom: 4px; color: #64748b; font-size: 10px; font-weight: 400; }
+  .movement-table .movement-action { grid-column: 1 / -1; text-align: right; }
+  .movement-table .movement-action:empty { display: none; }
+}
+@container (max-width: 650px) {
+  .movement-table tr { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 8px; padding: 10px; }
+  .movement-table .movement-amount { font-size: 11px; }
+}
+@container (max-width: 350px) {
+  .movement-table tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

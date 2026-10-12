@@ -1,4 +1,5 @@
 "use client";
+import { canMoveStock } from "@/lib/access";
 
 import { Fragment } from "react";
 import type { Dispatch, ElementType, ReactNode, SetStateAction } from "react";
@@ -1703,7 +1704,7 @@ export default function Home() {
           {canAccessTab(currentUser, "Estratégias") && activeTab === "Estratégias" && <StrategiesView user={currentUser} professionals={professionals} records={strategies} setRecords={setStrategies} entries={accounting.entries} appointments={accounting.appointments} services={services} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />}
           {canAccessTab(currentUser, "Anamnese") && activeTab === "Anamnese" && <AnamneseView user={currentUser} patients={patients} professionals={professionals} records={anamneses} setRecords={setAnamneses} onPatientChange={patient => setPatients(current => current.map(item => item.id === patient.id ? {...item, photos: patient.photos} : item))} />}
           {canAccessTab(currentUser, "Ultraformer MPT") && activeTab === "Ultraformer MPT" && <UltraformerView user={currentUser} tips={ultraformerTips} setTips={setUltraformerTips} patients={patients} professionals={professionals} />}
-          {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={accounting.appointments} entries={accounting.entries} patients={patients} professionals={professionals} />}
+          {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection canMove={canMoveStock(currentUser)} gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={accounting.appointments} entries={accounting.entries} patients={patients} professionals={professionals} />}
 
           {canAccessTab(currentUser, "Lançamento de Procedimentos") && activeTab === "Lançamento de Procedimentos" && (
             <FinancialView
@@ -2627,7 +2628,7 @@ function ServicesView({ services, setServices, packages, setPackages }: { servic
       <Panel>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3"><h3 className="text-lg font-bold">Serviços cadastrados</h3><span className="text-xs text-slate-500">{services.length}</span></div>
-          <button type="button" onClick={() => { setServiceForm(makeServiceForm()); setError(""); setOpen(true); }} className="flex items-center gap-2 rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white"><Plus size={16}/>Mais serviços</button>
+          <button type="button" onClick={() => { setServiceForm(makeServiceForm()); setError(""); setOpen(true); }} className="flex items-center gap-2 rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white"><Plus size={16}/>Serviços</button>
           <input aria-label="Buscar serviços" className="input max-w-sm" placeholder="Buscar nome ou categoria" value={query} onChange={(event) => setQuery(event.target.value)} />
         </div>
         <DataTable headers={["Serviço", "Categoria", "Duração", "Preço", "Status", "Ações"]} rows={sortedServices.map((service) => [

@@ -1,6 +1,13 @@
 export type AppRole = "admin" | "standard";
 export const appTabs = ["Agenda", "Estoque", "Follow Up", "Estratégias", "Anamnese", "Ultraformer MPT", "Relatórios", "Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] as const;
 export type AppTab = typeof appTabs[number];
+// Stored in the existing account permissions array; it is not a navigation tab.
+export const stockMovementPermission = "Estoque: movimentação";
+export const accountPermissions: readonly string[] = [...appTabs, stockMovementPermission];
+export function canMoveStock(access: AppRole | AppUser) {
+  return (typeof access === "string" ? access : access.role) === "admin" ||
+    (typeof access !== "string" && canAccessTab(access, "Estoque") && !!access.tabs?.includes(stockMovementPermission));
+}
 export type AppUser = { id?: string; name?: string; login: string; role: AppRole; tabs?: string[]; revision?: number; professionalReport?: { professionalIds: string[] }; professionalRegistration?: { professionalIds: string[] } };
 export type ProfessionalScope = { professionalIds: string[] };
 export const professionalAccessTabs = ["Relatório Profissional", "Cadastro de Profissionais", "Estratégias"];
@@ -52,7 +59,10 @@ const writeTabs: Record<string, string[]> = {
 };
 export const standardEntities = Object.keys(writeTabs).filter(entity => writeTabs[entity].some(tab => standardTabs.includes(tab)));
 export function canReadEntity(access: Access, entity: string) { return (readTabs[entity] ?? []).some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
-export function canWriteEntity(access: Access, entity: string) { return (writeTabs[entity] ?? []).some(tab => canAccessTab(access, tab)); }
+export function canWriteEntity(access: Access, entity: string) {
+  if (["inventory", "gifts"].includes(entity)) return canMoveStock(access) || canAccessTab(access, "Agenda");
+  return (writeTabs[entity] ?? []).some(tab => canAccessTab(access, tab));
+}
 export function userSnapshotKey(user: AppUser) {
   if (user.login === "admin" && (!user.id || user.id === "primary-admin")) return "avvi.data.snapshot.v1";
   if (user.login === "avviclinica" && (!user.id || user.id === "builtin-standard") && !user.revision) return "avvi.data.snapshot.standard.v1";

@@ -1,7 +1,8 @@
 import { validServicePackage } from "@/lib/servicePackages";
 import { createClient } from "@supabase/supabase-js";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
-import { canAccessProfessional, canManageProfessional, registrationOnly, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
+import { canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
+import { checkoutStockUpdates } from "@/lib/stockAccess";
 import { stockHistoryEntry } from "@/lib/accessSnapshot";
 import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAvailability";
 import { isUltraformerTip, usageOnlyTipUpdate } from "@/lib/ultraformer";
@@ -56,6 +57,12 @@ export async function POST(request: Request) {
     const { upserts = [], removed = [] } = await request.json();
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
     const db = database();
+    const selectedStockProducts = upserts.filter(row => row.entity === "inventory" && row.data?.visibleInStock === true);
+    if (selectedStockProducts.length) {
+      const productIds = new Set((await rows("procedures")).map(row => row.record_id));
+      for (const row of upserts) if (row.entity === "procedures" && canWriteEntity(user, "procedures")) productIds.add(row.record_id);
+      if (selectedStockProducts.some(row => !productIds.has(row.data.procedureId))) return Response.json({ error: "Selecione um produto do Cadastro de Procedimentos." }, { status: 400, headers });
+    }
     const packageUpdates = upserts.filter(row => row.entity === "service_packages");
     if (packageUpdates.length) {
       if (!canWriteEntity(user, "service_packages")) return Response.json({ error: "Cadastro de pacotes não autorizado." }, { status: 403, headers });
@@ -95,7 +102,18 @@ export async function POST(request: Request) {
       }
     }
     const appointmentUpdates = upserts.filter((row) => row.entity === "appointments").map((row) => row.data as Appointment);
-    const stored = appointmentUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
+    const stockUpdates = upserts.filter(row => ["inventory", "gifts"].includes(row.entity));
+    const stockRestricted = user.role === "standard" && !canMoveStock(user);
+    const deletedAppointments = removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids);
+    const stored = appointmentUpdates.length || stockRestricted && stockUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
+    if (stockRestricted) {
+      if (removed.some(item => ["inventory", "gifts"].includes(item.entity) && item.ids?.length)) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
+      if (stockUpdates.length) {
+        if (!canAccessTab(user, "Agenda")) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
+        const [inventory, gifts] = await Promise.all([rows("inventory"), rows("gifts")]);
+        if (!checkoutStockUpdates(inventory.map(row => row.data as unknown as import("@/lib/types").InventoryItem), gifts.map(row => row.data as unknown as import("@/lib/types").GiftStockItem), stored, appointmentUpdates, deletedAppointments, stockUpdates)) return Response.json({ error: "Sem permissão para ajustar o estoque. A baixa automática deve corresponder ao fechamento da conta." }, { status: 403, headers });
+      }
+    }
     const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt));
     if (moved.length) {
       const professionals = (await rows("professionals")).map(row => row.data as unknown as import("@/lib/types").Professional);
@@ -121,6 +139,7 @@ export async function POST(request: Request) {
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
       if (row.entity === "service_packages" && !validServicePackage(row.data)) return Response.json({ error: "Dados do pacote inválidos." }, { status: 400, headers });
+      if (row.entity === "inventory" && row.data.visibleInStock !== undefined && typeof row.data.visibleInStock !== "boolean") return Response.json({ error: "Visibilidade do produto no estoque inválida." }, { status: 400, headers });
       if (row.entity === "appointments" && row.data.invoice !== undefined && (!validInvoice(row.data.invoice) || row.data.invoice.localPdf)) return Response.json({error:"Anexo fiscal inválido."},{status:400,headers});
       if (row.entity === "professionals" && row.data.showInAgenda !== undefined && typeof row.data.showInAgenda !== "boolean") return Response.json({ error: "Visibilidade na agenda inválida." }, { status: 400, headers });
       if (row.entity === "professionals" && row.data.closedShifts !== undefined && !validClosedShifts(row.data.closedShifts)) return Response.json({ error: "Turnos de agenda inválidos." }, { status: 400, headers });

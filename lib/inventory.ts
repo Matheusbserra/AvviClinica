@@ -1,4 +1,11 @@
-import type { Appointment, InventoryItem, ProcedureLine } from "./types";
+import type { Appointment, InventoryItem, Procedure, ProcedureLine } from "./types";
+
+export function stockProductVisible(procedure: Pick<Procedure, "id" | "name">, inventory: InventoryItem[]) {
+  const saved = inventory.find(item => item.procedureId === procedure.id);
+  if (saved?.visibleInStock !== undefined) return saved.visibleInStock;
+  const name = procedure.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ");
+  return ["bioestimulador", "botox", "combo", "fios de pdo", "fios pdo", "enzima", "pdo espiculado", "pdo multilaser", "liala peel", "preenchedor", "preenchimento", "protocolo"].some(category => name.includes(category));
+}
 
 // Persist the quantities applied to each appointment so reopening only applies the difference.
 export function applyCheckoutInventory(inventory: InventoryItem[], previous: Appointment["stockConsumption"], lines: Pick<ProcedureLine, "procedureId" | "quantity">[]) {
@@ -14,7 +21,7 @@ export function applyCheckoutInventory(inventory: InventoryItem[], previous: App
     if (!difference) continue;
     const index = next.findIndex((item) => item.procedureId === procedureId);
     const existing = next[index];
-    const item = { id: existing?.id ?? procedureId, procedureId, quantity: (existing?.quantity ?? 0) - difference };
+    const item = { ...existing, id: existing?.id ?? procedureId, procedureId, quantity: (existing?.quantity ?? 0) - difference };
     if (index < 0) next.push(item); else next[index] = item;
   }
   return { inventory: next, consumption };

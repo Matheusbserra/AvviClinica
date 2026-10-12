@@ -92,6 +92,7 @@ export type InventoryItem = {
   id: string;
   procedureId: string;
   quantity: number;
+  visibleInStock?: boolean;
 };
 
 export type PaymentItem = {
@@ -161,7 +162,7 @@ export type ClosedAccount = FinancialEntry & {
 
 export type AppointmentService = { id: string; serviceId: string; name: string; price: number; priceType: Service["priceType"]; durationMinutes: number };
 
-export type InvoiceAttachment = { issued: boolean; updatedAt?: string; filename?: string; pdfPath?: string; localPdf?: string };
+export type InvoiceAttachment = { issued: boolean; visibility?: "hidden" | "visible"; updatedAt?: string; filename?: string; pdfPath?: string; localPdf?: string };
 
 export type Appointment = {
   invoice?: InvoiceAttachment;

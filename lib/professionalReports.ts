@@ -5,16 +5,23 @@ import type { Appointment, FinancialEntry, Patient, Procedure, Professional, Ser
 import type { MonthlyGoals } from "./database";
 
 export type IndividualRanking = { id: string; name: string; value: number };
+export type MonthlyProfessionalInsights = {
+  month: string; averageTicket: number; previousTicket: number | null;
+  ticketChange: number | null; ticketChangePercent: number | null;
+  patientCount: number; monthlyPatientAverage: number | null;
+  patientChange: number | null; historyMonths: number; newPatientCount: number;
+};
 export type ProfessionalReport = {
   professional: Professional; goal: number; totalPaid: number; totalProfit: number;
   companyRevenue: number; professionalValue: number; count: number; serviceCount: number; closedPatientCount: number; averageTicket: number;
   services: IndividualRanking[]; patientRevenue: IndividualRanking[];
   products: IndividualRanking[]; patientServices: IndividualRanking[];
+  monthlyInsights?: MonthlyProfessionalInsights;
 };
 
 // Financial totals retain the existing ledger calculation. Service quantities
 // come from attended appointments and explicitly linked services, never products.
-export function professionalReports(input: {
+function periodProfessionalReports(input: {
   start: string; end: string; entries: FinancialEntry[]; appointments: Appointment[];
   professionals: Professional[]; patients: Patient[]; services: Service[]; procedures?: Procedure[]; monthlyGoals: MonthlyGoals[];
 }) {
@@ -94,4 +101,61 @@ export function professionalReports(input: {
     return { professional, goal, ...totals, serviceCount, closedPatientCount: closedPatientIds.size, averageTicket: closedPatientIds.size ? totals.totalPaid / closedPatientIds.size : 0, services: top(serviceUsage), patientRevenue: top(revenue), products, patientServices: top(patientUsage) };
   }).sort((a, b) => b.totalPaid - a.totalPaid || a.professional.name.localeCompare(b.professional.name, "pt-BR"));
   return { valid, reports };
+}
+
+export function professionalReports(input: Parameters<typeof periodProfessionalReports>[0]) {
+  const result = periodProfessionalReports(input);
+  if (!result.valid) return result;
+  // In date-range mode the indicators explicitly identify the last calendar
+  // month in the range. Range totals and rankings retain their original period.
+  const month = input.end.slice(0, 7), period = reportMonthPeriod(month)!;
+  const previousMonths = Array.from({ length: 6 }, (_, index) => {
+    const date = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 2 - index, 1));
+    return date.toISOString().slice(0, 7);
+  });
+  const current = input.start === period.start && input.end === period.end ? result : periodProfessionalReports({ ...input, ...period });
+  const history = previousMonths.map(value => ({ month: value, reports: periodProfessionalReports({ ...input, ...reportMonthPeriod(value)! }).reports }));
+  const eligible = excludeZeroAccounts(input.appointments, input.entries, input.services);
+  const entries = new Map(eligible.entries.map(item => [item.id, item]));
+  const appointments = new Map(eligible.appointments.map(item => [item.id, item]));
+  const firstVisits = new Map<string, Map<string, string>>();
+  const firstMonths = new Map<string, string>();
+  const addVisit = (professionalId: string, patientId: string | undefined, date: string) => {
+    date = date.slice(0, 10);
+    if (!validReportDate(date)) return;
+    const activityMonth = date.slice(0, 7);
+    if (!firstMonths.has(professionalId) || activityMonth < firstMonths.get(professionalId)!) firstMonths.set(professionalId, activityMonth);
+    if (!patientId) return;
+    const visits = firstVisits.get(professionalId) ?? new Map<string, string>();
+    if (!visits.has(patientId) || date < visits.get(patientId)!) visits.set(patientId, date);
+    firstVisits.set(professionalId, visits);
+  };
+  for (const appointment of eligible.appointments) {
+    const legacy = entries.get(appointment.financialEntryId ?? "");
+    if (appointment.accountClosed || (appointment.accountClosed !== false && (appointment.closedAccount || legacy?.accountClosed)))
+      addVisit(appointment.professionalId, appointment.patientId || appointment.closedAccount?.patientId || legacy?.patientId, appointment.startsAt);
+  }
+  for (const entry of eligible.entries) if (entry.accountClosed)
+    addVisit(entry.professionalId, entry.patientId || appointments.get(entry.appointmentId ?? "")?.patientId, appointments.get(entry.appointmentId ?? "")?.startsAt || entry.date);
+  const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+  for (const item of result.reports) {
+    const id = item.professional.id, selected = current.reports.find(row => row.professional.id === id)!;
+    const previous = history[0].reports.find(row => row.professional.id === id)!;
+    const firstMonth = firstMonths.get(id);
+    const availableHistory = firstMonth ? history.filter(value => value.month >= firstMonth) : [];
+    const monthlyPatientAverage = availableHistory.length
+      ? availableHistory.reduce((sum, value) => sum + (value.reports.find(row => row.professional.id === id)?.closedPatientCount ?? 0), 0) / availableHistory.length : null;
+    const previousTicket = previous.closedPatientCount > 0 ? previous.averageTicket : null;
+    item.monthlyInsights = {
+      month, averageTicket: round(selected.averageTicket), previousTicket: previousTicket === null ? null : round(previousTicket),
+      ticketChange: previousTicket === null ? null : round(selected.averageTicket - previousTicket),
+      ticketChangePercent: previousTicket === null || previousTicket === 0 ? null : round((selected.averageTicket - previousTicket) / previousTicket * 100),
+      patientCount: selected.closedPatientCount,
+      monthlyPatientAverage: monthlyPatientAverage === null ? null : round(monthlyPatientAverage),
+      patientChange: monthlyPatientAverage === null ? null : round(selected.closedPatientCount - monthlyPatientAverage),
+      historyMonths: availableHistory.length,
+      newPatientCount: [...(firstVisits.get(id)?.values() ?? [])].filter(date => date >= period.start && date <= period.end).length,
+    };
+  }
+  return result;
 }

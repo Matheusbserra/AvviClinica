@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { BarChart3, ChevronDown, Eye, EyeOff, Trophy } from "lucide-react";
+import { BarChart3, ChevronDown, Eye, EyeOff, Trophy, TrendingUp, TrendingDown, Minus, UserPlus } from "lucide-react";
 import { currency, percent } from "@/lib/calculations";
 import { reportMonthPeriod } from "@/lib/reports";
 import { professionalReports } from "@/lib/professionalReports";
+import type { MonthlyProfessionalInsights } from "@/lib/professionalReports";
 import { professionalScope, hasLimitedProfessionalReport } from "@/lib/access";
 import type { AppUser } from "@/lib/access";
 import type { LimitedProfessionalReport, LimitedRanking } from "@/lib/professionalReportAccess";
@@ -70,6 +71,7 @@ export function ProfessionalReportView(props: {
           </button>
           <div className="px-5 pb-5">
             <div className="rounded-xl bg-avvi-soft/50 p-3"><div className="flex flex-wrap justify-between gap-2 text-sm"><span className="text-slate-600">Total pago pelos clientes</span><strong>{currency(item.totalPaid)}</strong></div><div className="mt-3 flex justify-between gap-2 text-xs text-slate-500"><span>Meta: {currency(item.goal)}</span><strong>{percent(progress)}</strong></div><div aria-hidden className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-avvi-blue" style={{ width: `${progress}%` }}/></div></div>
+            {item.monthlyInsights && <MonthlyInsights name={name} values={item.monthlyInsights}/>}
             {limited && <div className="mt-3 rounded-xl border border-avvi-line p-3 text-sm"><FinancialLine label="Ticket médio" value={item.averageTicket ?? 0} tone="slate"/><p className="mt-2 text-[11px] text-slate-500">Total pago ÷ {item.closedPatientCount} {item.closedPatientCount === 1 ? "paciente com conta fechada" : "pacientes com conta fechada"} no período. Cada paciente conta uma vez.</p></div>}
             {!limited && <button type="button" className="mt-3 flex items-center gap-2 text-sm font-semibold text-avvi-blue disabled:opacity-70" disabled={showAllFinancials} aria-expanded={showValues} aria-controls={`professional-financials-${id}`} onClick={() => setVisibleFinancials(toggle(visibleFinancials, id))}>{showValues ? <EyeOff size={16}/> : <Eye size={16}/>} {showValues ? "Ocultar valores financeiros" : "Ver valores financeiros"}</button>}
             {showValues && <div id={`professional-financials-${id}`} aria-label={`Valores financeiros de ${name}`} role="region" className="mt-3 space-y-3 rounded-xl border border-avvi-line p-4 text-sm"><FinancialLine label="Lucro total" value={item.totalProfit ?? 0} tone="green"/><FinancialLine label="Receita da empresa" value={item.companyRevenue ?? 0} tone="gold"/><FinancialLine label="Valor recebido pelo profissional" value={item.professionalValue ?? 0} tone="blue"/><FinancialLine label="Ticket médio" value={item.averageTicket ?? 0} tone="slate"/><p className="text-[11px] text-slate-500">Total pago ÷ {item.closedPatientCount} {item.closedPatientCount === 1 ? "paciente com conta fechada" : "pacientes com conta fechada"} no período. Cada paciente conta uma vez.</p></div>}
@@ -81,6 +83,28 @@ export function ProfessionalReportView(props: {
     </div>
     {!pending && !error && !data.reports.length && <p className="rounded-xl bg-white p-6 text-center text-sm text-slate-500">{limited ? "Nenhum profissional autorizado disponível." : "Nenhum profissional cadastrado."}</p>}
   </div>;
+}
+function MonthlyInsights({name, values}: {name: string; values: MonthlyProfessionalInsights}) {
+  const number = (value: number) => value.toLocaleString("pt-BR", {maximumFractionDigits: 2});
+  const month = new Intl.DateTimeFormat("pt-BR", {month: "long", year: "numeric"}).format(new Date(`${values.month}-01T12:00:00`));
+  const ticket = values.ticketChangePercent === null ? "Sem base no mês anterior" : `${values.ticketChangePercent > 0 ? "+" : values.ticketChangePercent < 0 ? "−" : ""}${number(Math.abs(values.ticketChangePercent))}%`;
+  return <div role="region" aria-label={`Indicadores mensais de ${name}`} className="mt-3 rounded-xl border border-avvi-line p-3">
+    <p className="mb-2 text-[10px] font-semibold capitalize text-slate-500">{month}</p>
+    <div className="space-y-2 text-xs">
+      <InsightLine label="Ticket médio vs. mês anterior" change={values.ticketChange} value={ticket}/>
+      <div title={`Média de pacientes únicos em ${values.historyMonths} meses anteriores, até seis meses. Meses sem atendimento dentro do histórico contam como zero.`}>
+        <InsightLine label="Pacientes atendidos" change={values.patientChange} value={number(values.patientCount)}/>
+        <p className="mt-1 text-right text-[11px] text-slate-500">{values.monthlyPatientAverage === null ? "Sem média anterior" : `Média dos meses anteriores: ${number(values.monthlyPatientAverage)}`}</p>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2" title="Primeira conta fechada e não zerada com esta profissional."><span className="text-slate-600">Pacientes novos</span><strong className="inline-flex items-center gap-1 text-avvi-blue"><UserPlus size={14}/>{values.newPatientCount}</strong></div>
+    </div>
+  </div>;
+}
+function InsightLine({label, change, value, title}: {label: string; change: number | null; value: string; title?: string}) {
+  const color = change === null || change === 0 ? "text-slate-500" : change > 0 ? "text-green-600" : "text-red-600";
+  return <div className="flex flex-wrap items-center justify-between gap-2" title={title}><span className="text-slate-600">{label}</span><strong className={`inline-flex items-center gap-1 ${color}`} data-testid={`insight-${label}`}>
+    {change === null || change === 0 ? <Minus size={14} className="shrink-0"/> : change > 0 ? <TrendingUp size={14} className="shrink-0"/> : <TrendingDown size={14} className="shrink-0"/>}{value}
+  </strong></div>;
 }
 function FinancialLine({ label, value, tone }: { label: string; value: number; tone: "green" | "gold" | "blue" | "slate" }) {
   const colors = { green: "text-avvi-green", gold: "text-avvi-gold", blue: "text-blue-600", slate: "text-avvi-ink" };

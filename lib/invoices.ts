@@ -4,6 +4,12 @@ import {zeroClosedAppointment} from "./calculations";
 import {moneyRound} from "./checkout";
 export const invoiceBucket="avvi-invoices";
 export const invoiceMaxBytes=3*1024*1024;
+// The requested historical cutoff is fixed, rather than advancing every month.
+export const invoiceStartDate = "2026-10-01";
+export function invoiceVisible(appointment: Appointment) {
+ return appointment.invoice?.visibility === "visible" ||
+   (appointment.invoice?.visibility !== "hidden" && appointment.startsAt.slice(0,10) >= invoiceStartDate);
+}
 export function excludedInvoiceProfessional(professional?: Pick<Professional,"id"|"name">) {
  if(!professional)return true;
  const name=professional.name.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/^(dra?\.?|doutora?)\s+/g,"").trim();
@@ -21,7 +27,7 @@ export function invoiceRows(appointments: Appointment[],patients:Patient[],profe
 export function validInvoice(value: unknown): value is InvoiceAttachment {
  if(!value||typeof value!=="object")return false;
  const v=value as Record<string,unknown>;
- return Object.keys(v).every(key=>["issued","updatedAt","filename","pdfPath","localPdf"].includes(key))&&typeof v.issued==="boolean"&&(v.pdfPath===undefined||(typeof v.pdfPath==="string"&&/^[a-f0-9]+\/[a-f0-9-]{36}\.pdf$/.test(v.pdfPath)))&&["updatedAt","filename","pdfPath","localPdf"].every(key=>v[key]===undefined||typeof v[key]==="string");
+ return Object.keys(v).every(key=>["issued","visibility","updatedAt","filename","pdfPath","localPdf"].includes(key))&&typeof v.issued==="boolean"&&(v.visibility===undefined||v.visibility==="hidden"||v.visibility==="visible")&&(v.pdfPath===undefined||(typeof v.pdfPath==="string"&&/^[a-f0-9]+\/[a-f0-9-]{36}\.pdf$/.test(v.pdfPath)))&&["updatedAt","filename","pdfPath","localPdf"].every(key=>v[key]===undefined||typeof v[key]==="string");
 }
 export function invoiceOnlyUpdate(previous:Appointment|undefined,next:Appointment) {
  if(!previous||!validInvoice(next.invoice))return false;

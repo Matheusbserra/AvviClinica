@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
-import { appTabs, standardTabs, professionalAccessTabs, professionalScope, canAccessTab } from "./access";
+import { appTabs, accountPermissions, standardTabs, professionalAccessTabs, professionalScope, canAccessTab } from "./access";
 import type { AppRole, AppUser } from "./access";
 import { legacyStandard } from "./accessServer";
 export type StoredAccount = { id: string; login: string; name: string; role: AppRole; tabs: string[]; salt: string; password_hash: string; password_ciphertext: string | null; version: number; professional_report?: { professionalIds: string[] } | null; professional_registration?: { professionalIds: string[] } | null };
@@ -13,7 +13,7 @@ const builtin: StoredAccount = { id: "builtin-standard", login: "avviclinica", n
 export function accountUser(account: StoredAccount): AppUser {
   const clean = (scope: StoredAccount["professional_report"]) => scope ? { professionalIds: Array.isArray(scope.professionalIds) ? scope.professionalIds.filter(id => typeof id === "string") : [] } : undefined;
   const scope = professionalScope({ login: account.login, role: account.role, professionalReport: clean(account.professional_report), professionalRegistration: clean(account.professional_registration) });
-  return { id: account.id, login: account.login, name: account.name, role: account.role, tabs: account.role === "admin" ? [...appTabs] : account.tabs.filter(tab => appTabs.includes(tab as typeof appTabs[number])), revision: account.version, ...(scope ? { professionalReport: scope, professionalRegistration: scope } : {}) };
+  return { id: account.id, login: account.login, name: account.name, role: account.role, tabs: account.role === "admin" ? [...appTabs] : account.tabs.filter(tab => accountPermissions.includes(tab)), revision: account.version, ...(scope ? { professionalReport: scope, professionalRegistration: scope } : {}) };
 }
 function cryptKey() {
   const secret = process.env.AVVI_SESSION_SECRET;
@@ -82,7 +82,7 @@ export async function saveAccount(input: { id?: string; login?: string; name?: s
     if (all.some(item => item.login === login && item.id !== current?.id)) throw new AccountError("Este login já está cadastrado.", 409);
     const password = input.password ?? "";
     if ((!current && password.length < 8) || (password && (password.length < 8 || password.length > 256))) throw new AccountError("A senha deve ter de 8 a 256 caracteres.");
-    if (!Array.isArray(input.tabs) || input.tabs.some(tab => typeof tab !== "string" || !appTabs.includes(tab as typeof appTabs[number]))) throw new AccountError("Permissões inválidas.");
+    if (!Array.isArray(input.tabs) || input.tabs.some(tab => typeof tab !== "string" || !accountPermissions.includes(tab))) throw new AccountError("Permissões inválidas.");
     const tabs = input.role === "admin" ? [...appTabs] : [...new Set(input.tabs as string[])];
     const validateScope = (value: unknown) => {
       if (value === null) return null;
