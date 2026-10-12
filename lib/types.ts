@@ -285,3 +285,11 @@ export type FollowUpMessage = { id: string; leadId: string; direction: "incoming
 
 export type UltraformerUsage = { registeredBy?: { id: string; login: string; name: string }; id: string; date: string; quantity: number; patientId: string; patientName: string; professionalId: string; professionalName: string; createdAt: string };
 export type UltraformerTip = { id: string; name: string; depth: string; kind: "linear" | "booster"; color: string; initialShots: number; usages: UltraformerUsage[] };
+
+export type StrategyMetric = "revenue" | "patients" | "services" | "averageTicket" | "productivity" | "custom";
+export type ProfessionalStrategy = {
+  id: string; professionalId: string; title: string; metric: StrategyMetric;
+  start: string; end: string; target: number; manualProgress: number; notes: string;
+  createdAt: string; updatedAt: string;
+  createdBy: { login: string; name: string }; updatedBy: { login: string; name: string };
+};

@@ -1,9 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
-import { canManageProfessional, registrationOnly, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
+import { canAccessProfessional, canManageProfessional, registrationOnly, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { stockHistoryEntry } from "@/lib/accessSnapshot";
 import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAvailability";
 import { isUltraformerTip, usageOnlyTipUpdate } from "@/lib/ultraformer";
+import { validStrategy } from "@/lib/strategyDefinitions";
 import { validAnamnese } from "@/lib/anamnese";
 import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice } from "@/lib/invoices";
 import { entityNames } from "@/lib/database";
@@ -31,7 +32,7 @@ export async function GET(request: Request) {
   if (!entityNames.includes(entity as EntityName) || !canReadEntity(user, entity)) return Response.json({ error: "Esta informação é restrita ao administrador." }, { status: 403, headers });
   try {
     const records = await rows(entity);
-    const permitted = entity === "professionals" && registrationOnly(user) && user.professionalRegistration ? records.filter(row => user.professionalRegistration!.professionalIds.includes(row.record_id)) : records;
+    const permitted = entity === "strategies" ? records.filter(row => canAccessProfessional(user, String(row.data.professionalId))) : entity === "professionals" && registrationOnly(user) ? records.filter(row => canAccessProfessional(user, row.record_id)) : records;
     const data = permitted.map((row) => {
       if (user.role === "admin") return row.data;
       if (entity === "professionals") {
@@ -54,6 +55,20 @@ export async function POST(request: Request) {
     const { upserts = [], removed = [] } = await request.json();
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
     const db = database();
+    const strategyUpdates = upserts.filter(row => row.entity === "strategies");
+    if (strategyUpdates.length) {
+      if (!canWriteEntity(user,"strategies")) return Response.json({error:"Acesso às estratégias não autorizado."},{status:403,headers});
+      const [existing,professionals]=await Promise.all([rows("strategies"),rows("professionals")]);
+      const professionalIds=new Set(professionals.map(row=>row.record_id));
+      for(const row of upserts)if(row.entity==="professionals"&&canWriteEntity(user,"professionals")&&canManageProfessional(user,row.record_id))professionalIds.add(row.record_id);
+      for (const row of strategyUpdates) {
+        if(!validStrategy(row.data)||!professionalIds.has(row.data.professionalId))return Response.json({error:"Meta, período ou profissional da estratégia inválido."},{status:400,headers});
+        const prior=existing.find(item=>item.record_id===row.record_id)?.data;
+        if (!canAccessProfessional(user, row.data.professionalId) || prior && !canAccessProfessional(user, String(prior.professionalId))) return Response.json({error:"Estratégia deste profissional não autorizada."},{status:403,headers});
+        const author={login:user.login,name:user.name?.trim()||user.login},now=new Date().toISOString();
+        row.data={...row.data,createdAt:prior?.createdAt??now,createdBy:prior?.createdBy??author,updatedAt:now,updatedBy:author};
+      }
+    }
     const clinicalUpdates = upserts.filter(row => row.entity === "anamneses");
     if (clinicalUpdates.length) {
       if (!canWriteEntity(user, "anamneses")) return Response.json({ error: "Acesso à anamnese não autorizado." }, { status: 403, headers });
@@ -149,6 +164,10 @@ export async function POST(request: Request) {
     for (const item of removed) {
       if (!entityNames.includes(item.entity) || !Array.isArray(item.ids) || item.ids.some((id: unknown) => typeof id !== "string")) return Response.json({ error: "Exclusão inválida." }, { status: 400, headers });
       if (user.role === "standard" && item.entity === "ultraformer_tips" && item.ids.length) return Response.json({ error: "Somente o administrador pode excluir ponteiras ou utilizações." }, { status: 403, headers });
+      if (item.entity === "strategies" && user.role === "standard" && item.ids.length) {
+        const existing = await rows("strategies");
+        if (existing.some(row => item.ids.includes(row.record_id) && !canAccessProfessional(user, String(row.data.professionalId)))) return Response.json({ error: "Exclusão de estratégia deste profissional não autorizada." }, { status: 403, headers });
+      }
       if (item.entity === "professionals" && item.ids.some((id: string) => !canManageProfessional(user, id))) return Response.json({ error: "Exclusão deste profissional não autorizada." }, { status: 403, headers });
       if (user.role === "standard" && !canWriteEntity(user, item.entity)) {
         if (!canAccessTab(user, "Agenda") || !["financial_entries", "revenues", "fixed_costs"].includes(item.entity)) return Response.json({ error: "Exclusão financeira restrita ao administrador." }, { status: 403, headers });

@@ -1,7 +1,21 @@
 export type AppRole = "admin" | "standard";
-export const appTabs = ["Agenda", "Estoque", "Follow Up", "Anamnese", "Ultraformer MPT", "Relatórios", "Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] as const;
+export const appTabs = ["Agenda", "Estoque", "Follow Up", "Estratégias", "Anamnese", "Ultraformer MPT", "Relatórios", "Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] as const;
 export type AppTab = typeof appTabs[number];
 export type AppUser = { id?: string; name?: string; login: string; role: AppRole; tabs?: string[]; revision?: number; professionalReport?: { professionalIds: string[] }; professionalRegistration?: { professionalIds: string[] } };
+export type ProfessionalScope = { professionalIds: string[] };
+export const professionalAccessTabs = ["Relatório Profissional", "Cadastro de Profissionais", "Estratégias"];
+// Older accounts had two independent selections. Their intersection preserves
+// restrictions while the account editor now saves one selection for all three tabs.
+export function professionalScope(user: AppUser): ProfessionalScope | null {
+  if (user.role === "admin") return null;
+  const scopes = [user.professionalReport, user.professionalRegistration].filter((scope): scope is ProfessionalScope => !!scope);
+  if (!scopes.length) return null;
+  return { professionalIds: [...new Set(scopes[0].professionalIds)].filter(id => scopes.every(scope => scope.professionalIds.includes(id))) };
+}
+export function canAccessProfessional(user: AppUser, professionalId: string) {
+  const scope = professionalScope(user);
+  return !scope || scope.professionalIds.includes(professionalId);
+}
 export const standardTabs: string[] = ["Agenda", "Estoque", "Follow Up", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes"];
 type Access = AppRole | AppUser;
 export function canAccessTab(access: Access, tab: string) {
@@ -9,13 +23,14 @@ export function canAccessTab(access: Access, tab: string) {
   if (!appTabs.includes(tab as AppTab)) return false;
   return role === "admin" || (tab !== "Contas" && (typeof access === "string" ? standardTabs : access.tabs ?? standardTabs).includes(tab));
 }
-export function hasLimitedProfessionalReport(access: Access) { return typeof access !== "string" && access.role !== "admin" && !!access.professionalReport; }
+export function hasLimitedProfessionalReport(access: Access) { return typeof access !== "string" && !!professionalScope(access); }
 export function hasFinancialAccess(access: Access) { return ["Dashboard", "Metas", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional"].some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
 const readTabs: Record<string, string[]> = {
+  strategies: ["Estratégias"],
   anamneses: ["Anamnese"],
   ultraformer_tips: ["Ultraformer MPT"],
   patients: ["Anamnese", "Dashboard", "Metas", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Cadastro de Pacientes", "Recibos de Pagamento", "Relatório Profissional", "Nota Fiscal"],
-  professionals: ["Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Cadastro de Profissionais", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento", "Nota Fiscal"],
+  professionals: ["Estratégias", "Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Cadastro de Profissionais", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento", "Nota Fiscal"],
   procedures: ["Agenda", "Estoque", "Relatórios", "Relatório Profissional", "Lançamento de Procedimentos", "Cadastro de Procedimentos"],
   services: ["Dashboard", "Metas", "Agenda", "Follow Up", "Relatórios", "Cadastro de Serviços", "Relatório Profissional", "Nota Fiscal"],
   inventory: ["Agenda", "Estoque"], gifts: ["Agenda", "Estoque"], appointments: ["Dashboard", "Metas", "Agenda", "Estoque", "Follow Up", "Relatórios", "Cadastro de Pacientes", "Relatório Profissional", "Nota Fiscal"],
@@ -25,6 +40,7 @@ const readTabs: Record<string, string[]> = {
   followup_rules: ["Follow Up"], followup_contacts: ["Follow Up"], followup_logs: ["Follow Up"]
 };
 const writeTabs: Record<string, string[]> = {
+  strategies: ["Estratégias"],
   anamneses: ["Anamnese"],
   ultraformer_tips: ["Ultraformer MPT"],
   patients: ["Cadastro de Pacientes", "Agenda"], professionals: ["Cadastro de Profissionais"], procedures: ["Cadastro de Procedimentos"], services: ["Cadastro de Serviços"],
@@ -42,7 +58,7 @@ export function userSnapshotKey(user: AppUser) {
 }
 
 export function canManageProfessional(user: AppUser, professionalId: string) {
-  return canAccessTab(user, "Cadastro de Profissionais") && (user.role === "admin" || !user.professionalRegistration || user.professionalRegistration.professionalIds.includes(professionalId));
+  return canAccessTab(user, "Cadastro de Profissionais") && canAccessProfessional(user, professionalId);
 }
 export function registrationOnly(user: AppUser) {
   return user.role === "standard" && !["Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento"].some(tab => canAccessTab(user, tab));

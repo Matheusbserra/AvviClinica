@@ -40,6 +40,17 @@ try {
  const complete=await accounts.saveAccount({id:changed.id,revision:changed.revision,name:"Ana restrita",login:changed.login,password:"",role:"standard",tabs:["Relatório Profissional"],professionalReport:null});
  assert.equal(complete.professionalReport,undefined);assert.equal(access.hasFinancialAccess(complete),true);
  const promoted=await accounts.saveAccount({id:complete.id,revision:complete.revision,name:"Ana restrita",login:complete.login,password:"",role:"admin",tabs:[],professionalReport:{professionalIds:["ana"]}});assert.equal(promoted.professionalReport,undefined);
+ // A single selection applies to all three tabs and survives switching to Strategies alone.
+ const shared=await accounts.saveAccount({name:"Profissional",login:"shared-scope",password:"senha-qa-2026",role:"standard",tabs:access.professionalAccessTabs,professionalAccess:{professionalIds:["ana","ana"]}});
+ assert.deepEqual(shared.professionalReport,{professionalIds:["ana"]});assert.deepEqual(shared.professionalRegistration,shared.professionalReport);
+ assert.equal(access.canManageProfessional(shared,"ana"),true);assert.equal(access.canManageProfessional(shared,"samia"),false);assert.equal(access.hasFinancialAccess(shared),false);
+ const strategiesOnly=await accounts.saveAccount({id:shared.id,revision:shared.revision,name:shared.name,login:shared.login,password:"",role:"standard",tabs:["Estratégias"]});
+ assert.deepEqual(access.professionalScope(strategiesOnly),{professionalIds:["ana"]});assert.equal(access.canAccessTab(strategiesOnly,"Relatório Profissional"),false);
+ assert.equal(access.canAccessProfessional(strategiesOnly,"ana"),true);assert.equal(access.canAccessProfessional(strategiesOnly,"samia"),false);
+ const allProfessionals=await accounts.saveAccount({...strategiesOnly,id:strategiesOnly.id,professionalAccess:null});assert.equal(access.professionalScope(allProfessionals),null);
+ const legacy=accounts.accountUser({id:"legacy",login:"legacy",role:"standard",name:"Legado",tabs:access.professionalAccessTabs,version:1,professional_report:{professionalIds:["ana","bia"]},professional_registration:{professionalIds:["ana","samia"]}});
+ assert.deepEqual(access.professionalScope(legacy),{professionalIds:["ana"]});assert.deepEqual(legacy.professionalReport,legacy.professionalRegistration);
+ await assert.rejects(accounts.saveAccount({name:"Sem profissional",login:"empty-strategy",password:"senha-qa-2026",role:"standard",tabs:["Estratégias"],professionalAccess:{professionalIds:[]}}),error=>error.status===400);
  // A configured cloud never falls back to local file storage or old credentials after a network failure.
  process.env.NEXT_PUBLIC_SUPABASE_URL="http://database.test";process.env.SUPABASE_SERVICE_ROLE_KEY="qa-service";globalThis.fetch=async()=>new Response(JSON.stringify({message:"offline"}),{status:503,headers:{"Content-Type":"application/json"}});
  await assert.rejects(auth.authenticateUser("avviclinica","avviclinica2026"));assert.equal(await auth.resolveAccess(request(defaultEdited)),null);
@@ -77,5 +88,11 @@ try {
  const cloudEdited=await accounts.saveAccount({id:cloudUser.id,revision:cloudUser.revision,name:"Conta editada",login:"cloud-user",password:"changed-cloud-password-2026",role:"standard",tabs:["Estoque"]});
  assert.equal(await accounts.authenticateManaged("cloud-user","cloud-password-2026"),null);assert.equal((await accounts.authenticateManaged("cloud-user","changed-cloud-password-2026")).revision,cloudEdited.revision);
  assert.equal((await accounts.listAccounts()).accounts.find(a=>a.id===cloudUser.id).password,"changed-cloud-password-2026");
+ // Existing cloud columns are mirrored without a migration; authentication and
+ // listing return the same selection for reports, registration and strategies.
+ cloudRows.get(cloudUser.id).professional_registration=null;
+ const cloudScoped=await accounts.saveAccount({...cloudEdited,id:cloudEdited.id,tabs:access.professionalAccessTabs,professionalAccess:{professionalIds:["ana"]}});
+ assert.deepEqual(cloudRows.get(cloudUser.id).professional_report,{professionalIds:["ana"]});assert.deepEqual(cloudRows.get(cloudUser.id).professional_registration,{professionalIds:["ana"]});
+ const cloudAuthenticated=await accounts.authenticateManaged("cloud-user","changed-cloud-password-2026");assert.deepEqual(access.professionalScope(cloudAuthenticated),{professionalIds:["ana"]});assert.deepEqual(cloudAuthenticated.professionalReport,cloudAuthenticated.professionalRegistration);assert.equal(cloudAuthenticated.revision,cloudScoped.revision);
  console.log("PASS: Immutable primary admin, existing user, private encrypted passwords, new users, exact custom tabs and API permissions, duplicate login, rename/password/role editing, promotion, stale edit rejection, session revocation and cloud failure closed; specific safe diagnostics for API keys, project mismatch, schema permissions and missing columns; legacy and modern private keys; root/REST/auth URLs yield the exact REST path for listing, creation, editing and login. Isolated files and mocked network only.");
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

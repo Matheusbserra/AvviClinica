@@ -11,7 +11,7 @@ async function accessRequest(url: string, init?: RequestInit) {
   if (!response.ok) throw new Error(data.error ?? "Acesso não autorizado.");
   return data;
 }
-import type { Appointment, FinancialEntry, FixedCost, Patient, Procedure, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, AnamneseRecord } from "./types";
+import type { Appointment, FinancialEntry, FixedCost, Patient, Procedure, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, AnamneseRecord, ProfessionalStrategy } from "./types";
 
 export type MonthlyGoals = { month: string; companyGoal: number; professionalGoals: Record<string, number> };
 
@@ -22,6 +22,7 @@ export type EntityName =
   | "services"
   | "inventory"
   | "gifts"
+  | "strategies"
   | "anamneses"
   | "ultraformer_tips"
   | "followup_rules"
@@ -42,6 +43,7 @@ export type EntityPayloadMap = {
   services: Service;
   inventory: InventoryItem;
   gifts: GiftStockItem;
+  strategies: ProfessionalStrategy;
   anamneses: AnamneseRecord;
   ultraformer_tips: UltraformerTip;
   followup_rules: FollowUpRule;
@@ -63,6 +65,7 @@ export const entityNames: EntityName[] = [
   "services",
   "inventory",
   "gifts",
+  "strategies",
   "anamneses",
   "ultraformer_tips",
   "followup_rules",

@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
-import { appTabs, standardTabs } from "./access";
+import { appTabs, standardTabs, professionalAccessTabs, professionalScope } from "./access";
 import type { AppRole, AppUser } from "./access";
 import { legacyStandard } from "./accessServer";
 export type StoredAccount = { id: string; login: string; name: string; role: AppRole; tabs: string[]; salt: string; password_hash: string; password_ciphertext: string | null; version: number; professional_report?: { professionalIds: string[] } | null; professional_registration?: { professionalIds: string[] } | null };
@@ -10,7 +10,11 @@ export type ManagedAccount = AppUser & { id: string; name: string; tabs: string[
 export class AccountError extends Error { constructor(message: string, public status = 400) { super(message); } }
 const primary: ManagedAccount = { id: "primary-admin", login: "admin", name: "Administrador principal", role: "admin", tabs: [...appTabs], revision: 0, locked: true, password: null };
 const builtin: StoredAccount = { id: "builtin-standard", login: "avviclinica", name: "AvviClínica", role: "standard", tabs: [...standardTabs], salt: legacyStandard.salt, password_hash: legacyStandard.hash, password_ciphertext: null, version: 0 };
-export function accountUser(account: StoredAccount): AppUser { return { id: account.id, login: account.login, name: account.name, role: account.role, tabs: account.role === "admin" ? [...appTabs] : account.tabs.filter(tab => tab !== "Contas" && appTabs.includes(tab as typeof appTabs[number])), revision: account.version, ...(account.role !== "admin" && account.professional_report ? { professionalReport: { professionalIds: Array.isArray(account.professional_report.professionalIds) ? account.professional_report.professionalIds.filter(id => typeof id === "string") : [] } } : {}), ...(account.role !== "admin" && account.professional_registration ? { professionalRegistration: { professionalIds: Array.isArray(account.professional_registration.professionalIds) ? account.professional_registration.professionalIds.filter(id => typeof id === "string") : [] } } : {}) }; }
+export function accountUser(account: StoredAccount): AppUser {
+  const clean = (scope: StoredAccount["professional_report"]) => scope ? { professionalIds: Array.isArray(scope.professionalIds) ? scope.professionalIds.filter(id => typeof id === "string") : [] } : undefined;
+  const scope = professionalScope({ login: account.login, role: account.role, professionalReport: clean(account.professional_report), professionalRegistration: clean(account.professional_registration) });
+  return { id: account.id, login: account.login, name: account.name, role: account.role, tabs: account.role === "admin" ? [...appTabs] : account.tabs.filter(tab => tab !== "Contas" && appTabs.includes(tab as typeof appTabs[number])), revision: account.version, ...(scope ? { professionalReport: scope, professionalRegistration: scope } : {}) };
+}
 function cryptKey() {
   const secret = process.env.AVVI_SESSION_SECRET;
   if (!secret || secret.length < 32) throw new AccountError("Configure AVVI_SESSION_SECRET na hospedagem.", 503);
@@ -63,7 +67,7 @@ export async function listAccounts(): Promise<{ accounts: ManagedAccount[]; mode
   return { accounts: [primary, ...all.map(item => ({ ...accountUser(item), id: item.id, name: item.name, tabs: item.role === "admin" ? [...appTabs] : item.tabs, revision: item.version, locked: false, password: item.password_ciphertext ? decrypt(item.password_ciphertext) : item.id === builtin.id ? "avviclinica2026" : null }))], mode: accountStorageMode(), editable, message };
 }
 let localQueue: Promise<unknown> = Promise.resolve();
-export async function saveAccount(input: { id?: string; login?: string; name?: string; password?: string; role?: AppRole; tabs?: unknown; revision?: number; professionalReport?: unknown; professionalRegistration?: unknown }) {
+export async function saveAccount(input: { id?: string; login?: string; name?: string; password?: string; role?: AppRole; tabs?: unknown; revision?: number; professionalAccess?: unknown; professionalReport?: unknown; professionalRegistration?: unknown }) {
   if (input.id === primary.id || (typeof input.login === "string" && input.login.trim().toLowerCase() === "admin")) throw new AccountError("O administrador principal é fixo e não pode ser alterado.", 403);
   if (typeof input.login !== "string" || typeof input.name !== "string" || (input.password !== undefined && typeof input.password !== "string") || (input.id !== undefined && typeof input.id !== "string")) throw new AccountError("Informe nome, login e senha válidos.");
   const operation = async () => {
@@ -80,22 +84,28 @@ export async function saveAccount(input: { id?: string; login?: string; name?: s
     if ((!current && password.length < 8) || (password && (password.length < 8 || password.length > 256))) throw new AccountError("A senha deve ter de 8 a 256 caracteres.");
     if (!Array.isArray(input.tabs) || input.tabs.some(tab => typeof tab !== "string" || !appTabs.includes(tab as typeof appTabs[number]))) throw new AccountError("Permissões inválidas.");
     const tabs = input.role === "admin" ? [...appTabs] : [...new Set(input.tabs as string[])].filter(tab => tab !== "Contas");
-    let professionalReport = input.professionalReport === undefined ? current?.professional_report ?? null : input.professionalReport;
-    if (input.role === "admin" || !tabs.includes("Relatório Profissional")) professionalReport = null;
-    if (professionalReport !== null) {
-      const scope = professionalReport as { professionalIds?: unknown };
-      if (typeof scope !== "object" || !Array.isArray(scope.professionalIds) || !scope.professionalIds.length || scope.professionalIds.length > 500 || scope.professionalIds.some(id => typeof id !== "string" || !id.trim() || id.length > 150)) throw new AccountError("Selecione pelo menos um profissional para o relatório limitado.");
-      professionalReport = { professionalIds: [...new Set(scope.professionalIds as string[])] };
+    const validateScope = (value: unknown) => {
+      if (value === null) return null;
+      const scope = value as { professionalIds?: unknown };
+      if (!scope || typeof scope !== "object" || !Array.isArray(scope.professionalIds) || !scope.professionalIds.length || scope.professionalIds.length > 500 || scope.professionalIds.some(id => typeof id !== "string" || !id.trim() || id.length > 150)) throw new AccountError("Selecione pelo menos um profissional para o acesso limitado.");
+      return { professionalIds: [...new Set(scope.professionalIds as string[])] };
+    };
+    let scope: { professionalIds: string[] } | null = null;
+    if (input.role !== "admin" && professionalAccessTabs.some(tab => tabs.includes(tab))) {
+      if (input.professionalAccess !== undefined) scope = validateScope(input.professionalAccess);
+      else if (input.professionalReport !== undefined || input.professionalRegistration !== undefined) {
+        const report = input.professionalReport === undefined ? current?.professional_report ?? null : input.professionalReport;
+        const registration = input.professionalRegistration === undefined ? current?.professional_registration ?? null : input.professionalRegistration;
+        // Combine legacy fields without expanding an existing restriction.
+        scope = professionalScope({ login, role: "standard", professionalReport: validateScope(report) ?? undefined, professionalRegistration: validateScope(registration) ?? undefined });
+        if (scope && !scope.professionalIds.length) throw new AccountError("As seleções antigas não têm um profissional em comum. Escolha os profissionais para o acesso unificado.");
+      } else scope = current ? professionalScope(accountUser(current)) : null;
     }
-    let professionalRegistration = input.professionalRegistration === undefined ? current?.professional_registration ?? null : input.professionalRegistration;
-    if (input.role === "admin" || !tabs.includes("Cadastro de Profissionais")) professionalRegistration = null;
-    if (professionalRegistration !== null) {
-      const scope = professionalRegistration as { professionalIds?: unknown };
-      if (typeof scope !== "object" || !Array.isArray(scope.professionalIds) || !scope.professionalIds.length || scope.professionalIds.length > 500 || scope.professionalIds.some(id => typeof id !== "string" || !id.trim() || id.length > 150)) throw new AccountError("Selecione pelo menos um profissional para o cadastro limitado.");
-      professionalRegistration = { professionalIds: [...new Set(scope.professionalIds as string[])] };
-    }
+    // Reuse the existing report column; no additional database migration. Mirror
+    // the old registration column only when it already exists on the stored row.
+    const professionalReport = scope, professionalRegistration = scope;
     const salt = password ? randomBytes(16).toString("hex") : current!.salt;
-    const row: StoredAccount = { id: current?.id ?? randomUUID(), login, name, role: input.role!, tabs, professional_report: professionalReport as StoredAccount["professional_report"], ...(professionalRegistration !== null || current?.professional_registration ? { professional_registration: professionalRegistration as StoredAccount["professional_registration"] } : {}), salt, password_hash: password ? scryptSync(password, salt, 64).toString("hex") : current!.password_hash, password_ciphertext: password ? encrypt(password) : current!.password_ciphertext ?? (current?.id === builtin.id ? encrypt("avviclinica2026") : null), version: (current?.version ?? 0) + 1 };
+    const row: StoredAccount = { id: current?.id ?? randomUUID(), login, name, role: input.role!, tabs, professional_report: professionalReport as StoredAccount["professional_report"], ...(current && "professional_registration" in current ? { professional_registration: professionalRegistration as StoredAccount["professional_registration"] } : {}), salt, password_hash: password ? scryptSync(password, salt, 64).toString("hex") : current!.password_hash, password_ciphertext: password ? encrypt(password) : current!.password_ciphertext ?? (current?.id === builtin.id ? encrypt("avviclinica2026") : null), version: (current?.version ?? 0) + 1 };
     if (accountStorageMode() === "local") { const next = [...stored.filter(item => item.id !== row.id), row], file = localFile(); await mkdir(path.dirname(file), { recursive: true }); const temporary = file + "." + randomUUID() + ".tmp"; await writeFile(temporary, JSON.stringify(next), { mode: 0o600 }); await rename(temporary, file); }
     else { const db = cloud(), exists = stored.some(item => item.id === row.id); const query = exists ? db.from("avvi_user_accounts").update({ ...row, updated_at: new Date().toISOString() }).eq("id", row.id).eq("version", current!.version) : db.from("avvi_user_accounts").insert(row); const { data, error, status } = await query.select("id"); if (error) throw databaseFailure(error, status, "salvar"); if (!data?.length) throw new AccountError("Este usuário foi alterado em outra janela. Atualize a lista.", 409); }
     return accountUser(row);

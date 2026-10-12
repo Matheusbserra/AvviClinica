@@ -27,4 +27,4 @@ writeSnapshot(storage,draft,draft);assert.equal(hasSnapshotChanges(readSnapshot(
 values.set(snapshotKey,JSON.stringify({data:{patients:[{id:"legacy"}]}}));assert.deepEqual(readSnapshot(storage).data.gifts,[]);assert.deepEqual(readSnapshot(storage).data.ultraformer_tips,[]);assert.deepEqual(readSnapshot(storage).data.anamneses,[]);
 values.set(snapshotKey,"invalid");assert.throws(()=>readSnapshot(storage));
 assert.throws(()=>writeSnapshot({setItem(){throw new Error("QuotaExceededError");}},draft,baseline));
-console.log("PASS: All 18 entity types recover pending edits, insertions and deletions; preserve other-browser records; ignore record ordering; retain acknowledged baseline; support old local copies and report invalid/full storage.");
+console.log(`PASS: All ${snapshotEntities.length} entity types recover pending edits, insertions and deletions; preserve other-browser records; ignore record ordering; retain acknowledged baseline; support old local copies and report invalid/full storage.`);

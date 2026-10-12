@@ -5,7 +5,7 @@ import { BarChart3, ChevronDown, Eye, EyeOff, Trophy } from "lucide-react";
 import { currency, percent } from "@/lib/calculations";
 import { reportMonthPeriod } from "@/lib/reports";
 import { professionalReports } from "@/lib/professionalReports";
-import { hasLimitedProfessionalReport } from "@/lib/access";
+import { professionalScope, hasLimitedProfessionalReport } from "@/lib/access";
 import type { AppUser } from "@/lib/access";
 import type { LimitedProfessionalReport, LimitedRanking } from "@/lib/professionalReportAccess";
 type ReportItem = LimitedProfessionalReport & { totalProfit?: number; companyRevenue?: number; professionalValue?: number; averageTicket?: number; closedPatientCount?: number };
@@ -24,7 +24,7 @@ export function ProfessionalReportView(props: {
   const period = mode === "month" ? reportMonthPeriod(props.selectedMonth) ?? { start: "", end: "" } : { start, end };
   const { start: periodStart, end: periodEnd } = period;
   const limited = hasLimitedProfessionalReport(props.user);
-  const scopeKey = JSON.stringify([props.user.id ?? props.user.login, props.user.revision, props.user.professionalReport?.professionalIds]);
+  const scopeKey = JSON.stringify([props.user.id ?? props.user.login, props.user.revision, professionalScope(props.user)?.professionalIds]);
   const queryKey = JSON.stringify([scopeKey, periodStart, periodEnd]);
   const [remote, setRemote] = useState<{ key: string; valid: boolean; reports: LimitedProfessionalReport[]; error?: string } | null>(null);
   const fullData = useMemo(() => limited ? { valid: true, reports: [] } : professionalReports({ ...props, start: periodStart, end: periodEnd }), [props, limited, periodStart, periodEnd]);
