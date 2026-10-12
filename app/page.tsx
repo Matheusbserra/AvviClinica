@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { Fragment } from "react";
 import type { Dispatch, ElementType, ReactNode, SetStateAction } from "react";
@@ -55,6 +55,11 @@ import { ProfessionalShifts } from "@/app/components/ProfessionalShifts";
 import { appointmentAvailabilityError, isAbsence, newAbsences, slotTime } from "@/lib/agendaAvailability";
 import type { AgendaSlot } from "@/lib/agendaAvailability";
 import { AgendaView } from "@/app/components/AgendaView";
+import { PatientPhotos } from "@/app/components/PatientPhotos";
+import { AnamneseView } from "@/app/components/AnamneseView";
+import { PatientHistory } from "@/app/components/PatientHistory";
+import { SearchSelect } from "@/app/components/SearchSelect";
+import { History } from "lucide-react";
 import { UltraformerView } from "@/app/components/UltraformerView";
 import { InventorySection } from "@/app/components/GiftInventoryView";
 import { applyCheckoutGifts } from "@/lib/gifts";
@@ -62,6 +67,9 @@ import { AccountSummary } from "@/app/components/AccountSummary";
 import { AccountCheckout } from "@/app/components/AccountCheckout";
 import type { CheckoutDraft, CheckoutResult } from "@/app/components/AccountCheckout";
 import { checkoutAllowsNoProducts, distributeCheckoutDiscount, restoreCheckoutItems } from "@/lib/checkout";
+import { originalAppointmentNotes } from "@/lib/appointmentNotes";
+import { checkoutCommission } from "@/lib/checkout";
+import { InvoiceView } from "@/app/components/InvoiceView";
 import { procedureEntryFromAccount } from "@/lib/accountProcedures";
 import { applyCheckoutInventory } from "@/lib/inventory";
 import { importedServices } from "@/lib/importedServices";
@@ -72,10 +80,10 @@ import { importedClients } from "@/lib/importedClients";
 import { importedRevenues } from "@/lib/importedRevenues";
 import { importedCosts } from "@/lib/importedCosts";
 import { applyProcedureCostOverrides } from "@/lib/procedureCosts";
-import { calculateEntry, currency, monthKey, percent, splitDiscountImpact, summarizeMonth } from "@/lib/calculations";
+import { calculateEntry, currency, excludeZeroAccounts, monthKey, percent, splitDiscountImpact, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { appDataTableMissing, selectEntityState, syncEntityDiffs, setDatabaseAccess, isProtectedDatabase } from "@/lib/database";
-import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, ViewMode } from "@/lib/types";
+import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, AnamneseRecord, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 import { hasSnapshotChanges, snapshotChanges, recoverPendingChanges, recordIsPending, snapshotEntities } from "@/lib/persistence";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
@@ -84,10 +92,11 @@ import { canManageProfessional, canAccessTab, canReadEntity, canWriteEntity, has
 import { permittedSnapshot } from "@/lib/accessSnapshot";
 import { AccountsView } from "@/app/components/AccountsView";
 import { ReportsView } from "@/app/components/ReportsView";
+import { dashboardPeriod } from "@/lib/dashboard";
 import { ProfessionalReportView } from "@/app/components/ProfessionalReportView";
 import type { AppRole, AppUser } from "@/lib/access";
 
-type Tab = "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
+type Tab = "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
 const savedLoginKey = "avvi.saved.login.v1";
 
@@ -95,6 +104,7 @@ const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
   { id: "Estoque", icon: WalletCards },
   { id: "Follow Up", icon: MessageCircle },
+  { id: "Anamnese", icon: FileText },
   { id: "Ultraformer MPT", icon: Activity },
   { id: "Relatórios", icon: BarChart3 },
   { id: "Dashboard", icon: LayoutDashboard },
@@ -103,6 +113,7 @@ const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Pagamento Profissional", icon: HandCoins },
   { id: "Relatório Profissional", icon: BarChart3 },
   { id: "Recibos de Pagamento", icon: ReceiptText },
+  { id: "Nota Fiscal", icon: FileText },
   { id: "Cadastro de Procedimentos", icon: Stethoscope },
   { id: "Cadastro de Serviços", icon: CircleDollarSign },
   { id: "Cadastro de Profissionais", icon: UserPlus },
@@ -259,7 +270,8 @@ function calculateDebitFee(amount: number) {
 
 function makeRevenueFromFinancialEntry(entry: FinancialEntry, patientName: string): RevenueEntry {
   const summary = calculateEntry(entry);
-  const nonFuturePayments = entry.payments.filter((payment) => payment.method !== "Crédito Futuro");
+  const creditPayments = (entry as ClosedAccount).creditPayments ?? [];
+  const nonFuturePayments = [...entry.payments,...creditPayments].filter((payment) => payment.method !== "Crédito Futuro");
   const totalPaid = Math.max(0, nonFuturePayments.reduce((sum, payment) => sum + Number(payment.amount), 0));
   const futureCreditUsedValue = entry.payments.filter((payment) => payment.method === "Crédito Futuro").reduce((sum, payment) => sum + Number(payment.amount), 0);
   return {
@@ -274,7 +286,7 @@ function makeRevenueFromFinancialEntry(entry: FinancialEntry, patientName: strin
     serviceQuantity: entry.procedureLines?.reduce((sum, line) => sum + Number(line.quantity || 0), 0) || entry.quantity,
     serviceTotal: summary.grossRevenue,
     clientCreditTotal: 0,
-    clientCreditAddedTotal: 0,
+    clientCreditAddedTotal: (entry as ClosedAccount).creditAdded ?? 0,
     clientCreditUsedTotal: futureCreditUsedValue ? -Math.abs(futureCreditUsedValue) : 0,
     discount: summary.discount ? -Math.abs(summary.discount) : 0,
     discountReason: "",
@@ -286,7 +298,7 @@ function makeRevenueFromFinancialEntry(entry: FinancialEntry, patientName: strin
 }
 
 function makeMachineFeeCost(entry: FinancialEntry, patientName: string): FixedCost | null {
-  const fee = calculateEntry(entry).machineFee;
+  const fee = calculateEntry(entry).machineFee + ((entry as ClosedAccount).creditPayments??[]).reduce((sum,payment)=>sum+(Number(payment.fee)||0),0);
   if (!fee) return null;
   return {
     id: `taxa-maquininha-${entry.id}`,
@@ -416,6 +428,8 @@ export default function Home() {
   const [services, setServices] = useState<Service[]>(importedServices);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [gifts, setGifts] = useState<GiftStockItem[]>([]);
+  const [anamneses, setAnamneses] = useState<AnamneseRecord[]>([]);
+  const [historyPatientId, setHistoryPatientId] = useState<string | null>(null);
   const [ultraformerTips, setUltraformerTips] = useState<UltraformerTip[]>([]);
   const [followUpTab, setFollowUpTab] = useState("Conversas");
   const [followUpRules, setFollowUpRules] = useState<FollowUpRule[]>([]);
@@ -456,7 +470,7 @@ export default function Home() {
   const pendingSyncs = useRef(0);
   const latestDraft = useRef<DataSnapshot | null>(null);
   const startupSnapshot = useRef<DataSnapshot>({
-    patients, professionals, procedures, services, inventory, gifts, ultraformer_tips: ultraformerTips,
+    patients, professionals, procedures, services, inventory, gifts, anamneses, ultraformer_tips: ultraformerTips,
     followup_rules: followUpRules, followup_contacts: followUpContacts, followup_logs: followUpLogs,
     appointments, financial_entries: entries, revenues, fixed_costs: costs, receipts,
     professional_receipts: professionalReceipts, monthly_goals: monthlyGoals
@@ -474,9 +488,9 @@ export default function Home() {
 
   const agendaProfessionals = professionals.filter(professional => professional.showInAgenda !== false);
   const visibleProfessionals = agendaProfessionals.some(professional => professional.id === professionalFilter) ? agendaProfessionals.filter(professional => professional.id === professionalFilter) : agendaProfessionals;
-  const currentMonthSummary = useMemo(() => summarizeMonth(revenues, costs, selectedMonth), [revenues, costs, selectedMonth]);
-  const previousMonthKey = previousMonth(selectedMonth);
-  const previousSummary = useMemo(() => summarizeMonth(revenues, costs, previousMonthKey), [revenues, costs, previousMonthKey]);
+  const accounting = useMemo(() => excludeZeroAccounts(appointments, entries, services), [appointments, entries, services]);
+  const accountingRevenues = revenues.filter(item => !accounting.entryIds.has(item.sourceFinancialEntryId));
+  const accountingCosts = costs.filter(item => !accounting.entryIds.has(item.sourceFinancialEntryId));
 
   function applyRemoteRecord(entity: string, eventType: string, recordId: string, data: unknown) {
     if (!cloudLoaded.current || !snapshotEntities.includes(entity as typeof snapshotEntities[number])) return;
@@ -488,6 +502,7 @@ export default function Home() {
     if (entity === "procedures") setProcedures((current) => applyRemoteList(current, recordId, data as Procedure, remove));
     if (entity === "services") setServices((current) => applyRemoteList(current, recordId, data as Service, remove));
     if (entity === "gifts") setGifts((current) => applyRemoteList(current, recordId, data as GiftStockItem, remove));
+    if (entity === "anamneses") setAnamneses((current) => applyRemoteList(current, recordId, data as AnamneseRecord, remove));
     if (entity === "ultraformer_tips") setUltraformerTips((current) => applyRemoteList(current, recordId, data as UltraformerTip, remove));
     if (entity === "inventory") setInventory((current) => applyRemoteList(current, recordId, data as InventoryItem, remove));
     if (entity === "followup_rules") setFollowUpRules((current) => applyRemoteList(current, recordId, data as FollowUpRule, remove));
@@ -510,6 +525,7 @@ export default function Home() {
       procedures: entity === "procedures" ? applyRemoteList(snapshot.procedures, recordId, data as Procedure, remove) : snapshot.procedures,
       services: entity === "services" ? applyRemoteList(snapshot.services, recordId, data as Service, remove) : snapshot.services,
       gifts: entity === "gifts" ? applyRemoteList(snapshot.gifts ?? [], recordId, data as GiftStockItem, remove) : snapshot.gifts,
+      anamneses: entity === "anamneses" ? applyRemoteList(snapshot.anamneses, recordId, data as AnamneseRecord, remove) : snapshot.anamneses,
       ultraformer_tips: entity === "ultraformer_tips" ? applyRemoteList(snapshot.ultraformer_tips, recordId, data as UltraformerTip, remove) : snapshot.ultraformer_tips,
       inventory: entity === "inventory" ? applyRemoteList(snapshot.inventory, recordId, data as InventoryItem, remove) : snapshot.inventory,
       followup_rules: entity === "followup_rules" ? applyRemoteList(snapshot.followup_rules ?? [], recordId, data as FollowUpRule, remove) : snapshot.followup_rules,
@@ -579,6 +595,7 @@ export default function Home() {
       setServices(snapshot?.services ?? importedServices);
       setInventory(snapshot?.inventory ?? []);
       setGifts(snapshot?.gifts ?? []);
+      setAnamneses(snapshot?.anamneses ?? []);
       setUltraformerTips(snapshot?.ultraformer_tips ?? []);
       setFollowUpRules(snapshot?.followup_rules ?? []);
       setFollowUpContacts(snapshot?.followup_contacts ?? []);
@@ -599,6 +616,7 @@ export default function Home() {
           dbServicesState,
           dbInventoryState,
           dbGiftsState,
+          dbAnamnesesState,
           dbUltraformerState,
           dbFollowUpRulesState,
           dbFollowUpContactsState,
@@ -617,6 +635,7 @@ export default function Home() {
           selectEntityState("services"),
           selectEntityState("inventory"),
           selectEntityState("gifts"),
+          selectEntityState("anamneses"),
           selectEntityState("ultraformer_tips"),
           selectEntityState("followup_rules"),
           selectEntityState("followup_contacts"),
@@ -653,7 +672,7 @@ export default function Home() {
         const initialCosts = mergeCosts(seedFixedCosts, importedCosts);
         const initialReceipts = seedReceipts;
         const initialGoals = [makeMonthlyGoal(todayKey().slice(0, 7), seedProfessionals)];
-        const isEmptyDatabase = userRole === "admin" && !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbInventory.length && !dbGiftsState.records.length && !dbUltraformerState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
+        const isEmptyDatabase = userRole === "admin" && !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbInventory.length && !dbGiftsState.records.length && !dbAnamnesesState.records.length && !dbUltraformerState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
         const remoteSnapshot: DataSnapshot = {
           patients: isEmptyDatabase ? initialPatients : dbPatients,
           professionals: isEmptyDatabase ? initialProfessionals : dbProfessionals,
@@ -661,6 +680,7 @@ export default function Home() {
           services: dbServices,
           inventory: dbInventory,
           gifts: dbGiftsState.records,
+          anamneses: dbAnamnesesState.records,
           ultraformer_tips: dbUltraformerState.records,
           followup_rules: dbFollowUpRulesState.records,
           followup_contacts: dbFollowUpContactsState.records,
@@ -683,6 +703,7 @@ export default function Home() {
             services: savedLocalSnapshot.data.services ?? importedServices,
             inventory: savedLocalSnapshot.data.inventory ?? [],
             gifts: savedLocalSnapshot.data.gifts ?? [],
+            anamneses: savedLocalSnapshot.data.anamneses ?? [],
             ultraformer_tips: savedLocalSnapshot.data.ultraformer_tips ?? [],
             followup_rules: savedLocalSnapshot.data.followup_rules ?? [],
             followup_contacts: savedLocalSnapshot.data.followup_contacts ?? [],
@@ -702,7 +723,7 @@ export default function Home() {
         // Compare against actual stored rows, including genuinely empty categories.
         lastSyncedSnapshot.current = {
           patients: dbPatients, professionals: dbProfessionals, procedures: dbProceduresState.records,
-          services: dbServices, inventory: dbInventory, gifts: dbGiftsState.records, ultraformer_tips: dbUltraformerState.records,
+          services: dbServices, inventory: dbInventory, gifts: dbGiftsState.records, anamneses: dbAnamnesesState.records, ultraformer_tips: dbUltraformerState.records,
           followup_rules: dbFollowUpRulesState.records, followup_contacts: dbFollowUpContactsState.records,
           followup_logs: dbFollowUpLogsState.records, appointments: dbAppointments,
           financial_entries: dbEntries, revenues: dbRevenues, fixed_costs: dbCosts,
@@ -715,6 +736,7 @@ export default function Home() {
         setServices(hydratedSnapshot.services);
         setInventory(hydratedSnapshot.inventory);
         setGifts(hydratedSnapshot.gifts ?? []);
+        setAnamneses(hydratedSnapshot.anamneses ?? []);
         setUltraformerTips(hydratedSnapshot.ultraformer_tips ?? []);
         setFollowUpRules(hydratedSnapshot.followup_rules);
         setFollowUpContacts(hydratedSnapshot.followup_contacts);
@@ -772,6 +794,7 @@ export default function Home() {
       services,
       inventory,
       gifts,
+      anamneses,
       ultraformer_tips: ultraformerTips,
       followup_rules: followUpRules,
       followup_contacts: followUpContacts,
@@ -818,7 +841,7 @@ export default function Home() {
         pendingSyncs.current -= 1;
         setIsSyncing(pendingSyncs.current > 0);
       });
-  }, [patients, professionals, procedures, services, inventory, gifts, ultraformerTips, followUpRules, followUpContacts, followUpLogs, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
+  }, [patients, professionals, procedures, services, inventory, gifts, anamneses, ultraformerTips, followUpRules, followUpContacts, followUpLogs, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
 
   function retrySaving() {
     if (cloudLoaded.current) setSyncRetry((current) => current + 1);
@@ -852,6 +875,7 @@ export default function Home() {
     setIsDataReady(false); setHasPendingChanges(false); setStorageError(""); setLastSavedAt("");
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
     setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
+    setAnamneses([]); setHistoryPatientId(null);
     setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
     setPatients(startupSnapshot.current.patients); setProfessionals(startupSnapshot.current.professionals);
     setProcedures(startupSnapshot.current.procedures); setServices(startupSnapshot.current.services);
@@ -892,6 +916,7 @@ export default function Home() {
     window.sessionStorage.removeItem("avvi.session");
     setIsAuthenticated(false); setIsDataReady(false); setUserRole("standard"); setCurrentUser({ login: "", role: "standard", tabs: [] }); setDatabaseAccess("standard");
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
+    setAnamneses([]); setHistoryPatientId(null);
     setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
     setSelectedSlot(null); setSelectedAppointmentId(null); setCheckoutDraft(null); setAccountSummary(null);
     setLoginForm(rememberPassword ? loginForm : { login: "", password: "" });
@@ -907,7 +932,7 @@ export default function Home() {
         const data = await response.json();
         if (active && !data.user) {
           setIsAuthenticated(false); setIsDataReady(false); setCurrentUser({ login: "", role: "standard", tabs: [] }); setUserRole("standard"); setDatabaseAccess("standard");
-          setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
+          setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null); setAnamneses([]); setHistoryPatientId(null);
           setLoginError("Seu acesso foi atualizado. Entre novamente para usar as permissões atuais.");
         }
       } catch { /* A temporary network failure does not discard the local pending draft. */ }
@@ -957,7 +982,7 @@ export default function Home() {
       durationMinutes: Math.max(1, Math.round((parseISO(appointment.endsAt).getTime() - startsAt.getTime()) / 60000)) || 60,
       status: appointment.status,
       eventType: appointment.eventType,
-      notes: appointment.notes
+      notes: originalAppointmentNotes(appointment.notes)
     });
   }
 
@@ -1050,8 +1075,8 @@ export default function Home() {
     return { appointment, client: { ...client }, professional: professionals.find((item) => item.id === appointment.professionalId),
       lines: distributeCheckoutDiscount(restoredItems.lines, existing?.commercialDiscount ?? 0), products: restoredItems.products, gifts: appointment.closedAccount?.gifts?.map((gift) => ({ ...gift })) ?? [],
       payments: existing?.payments.map((payment) => ({ ...payment })) ?? [], entryId: existing?.id,
-      discountSplit: existing?.discountSplit ?? "Empresa e profissional dividem", notes: existing?.notes ?? appointment.notes,
-      previousFutureCredit: futureCreditUsed(existing) };
+      discountSplit: existing?.discountSplit ?? "Empresa e profissional dividem", notes: originalAppointmentNotes(existing?.notes ?? appointment.notes),
+      storedCreditPayments: appointment.closedAccount?.creditPayments, previousCreditAdded: appointment.closedAccount?.creditAdded ?? 0, clinicPatient: appointment.closedAccount?.clinicPatient, previousFutureCredit: futureCreditUsed(existing) };
   }
 
   function openAccountFromAgenda(appointmentId: string) {
@@ -1083,18 +1108,20 @@ export default function Home() {
     const currentAppointment = appointments.find((appointment) => appointment.id === checkoutDraft.appointment.id);
     if (!currentAppointment?.patientId) return;
     const previousAccount = currentAppointment.closedAccount ?? entries.find((entry) => !entry.sourceAccountId && entry.accountClosed && entry.id === checkoutDraft.entryId);
+    const creditBalance=Number(patients.find(patient=>patient.id===currentAppointment.patientId)?.futureCredit)||0;
+    if(creditBalance+futureCreditUsed(previousAccount)-(currentAppointment.closedAccount?.creditAdded??0)+result.creditAdded-result.payments.filter(payment=>payment.method==="Crédito Futuro").reduce((sum,payment)=>sum+payment.amount,0)<-0.001){window.alert("O crédito deste fechamento já foi utilizado. Estorne primeiro a conta em que ele foi usado.");return;}
     const accountId = previousAccount?.id ?? id("account");
     const professional = professionals.find((item) => item.id === currentAppointment.professionalId);
     const first = result.lines[0];
     const account: ClosedAccount = {
       id: accountId, appointmentId: currentAppointment.id, patientId: currentAppointment.patientId,
       professionalId: currentAppointment.professionalId, accountClosed: true, balanceDue: result.balanceDue,
-      closedAt: new Date().toISOString(), change: result.change,
+      closedAt: new Date().toISOString(), change: result.change, creditAdded: result.creditAdded, creditPayments: result.creditPayments.map(payment=>({...payment,fee:payment.method === "Crédito" ? calculateCardFee(payment.amount,payment.cardBrand,payment.installments) : payment.method === "Débito" ? calculateDebitFee(payment.amount) : 0})), clinicPatient: result.clinicPatient,
       procedureLines: result.lines.map((line) => ({ ...line })), products: result.products.map((product) => ({ ...product })), gifts: result.gifts.map((gift) => ({ ...gift })),
       procedureId: undefined, manualProcedure: first?.manualProcedure, quantity: first?.quantity ?? 1,
       servicePrice: first?.servicePrice ?? 0, productCost: 0, machineFee: 0,
       commercialDiscount: result.discount, discountSplit: checkoutDraft.discountSplit,
-      professionalPercent: professional?.commissionPercent ?? 0,
+      professionalPercent: checkoutCommission(professional?.commissionPercent ?? 0,result.clinicPatient),
       date: currentAppointment.startsAt.slice(0, 10), notes: checkoutDraft.notes,
       payments: result.payments.map((payment) => ({ ...payment, discount: 0,
         fee: payment.method === "Crédito" ? calculateCardFee(payment.amount, payment.cardBrand, payment.installments)
@@ -1102,20 +1129,20 @@ export default function Home() {
     };
     // Generate once. Editing either record afterward never overwrites the other.
     const generated = entries.find((entry) => entry.sourceAccountId === accountId);
-    const procedureEntry = generated ?? procedureEntryFromAccount(account, procedures, professional);
+    const procedureEntry = result.total > 0 ? generated ?? procedureEntryFromAccount(account, procedures, professional) : undefined;
     account.generatedEntryId = procedureEntry?.id;
     const legacyEntryId = !currentAppointment.closedAccount ? previousAccount?.id : undefined;
     setEntries((current) => {
-      const preserved = current.filter((entry) => entry.id !== legacyEntryId);
+      const preserved = current.filter((entry) => entry.id !== legacyEntryId && (result.total > 0 || entry.sourceAccountId !== accountId));
       return procedureEntry && !preserved.some((entry) => entry.id === procedureEntry.id) ? [procedureEntry, ...preserved] : preserved;
     });
-    const stockUpdate = applyCheckoutInventory(inventory, currentAppointment.stockConsumption, result.products);
+    const stockUpdate = applyCheckoutInventory(inventory, currentAppointment.stockConsumption, result.total > 0 ? result.products : []);
     setInventory(stockUpdate.inventory);
-    const giftUpdate = applyCheckoutGifts(gifts, currentAppointment.giftConsumption ?? currentAppointment.closedAccount?.gifts, result.gifts);
+    const giftUpdate = applyCheckoutGifts(gifts, currentAppointment.giftConsumption ?? currentAppointment.closedAccount?.gifts, result.total > 0 ? result.gifts : []);
     setGifts(giftUpdate.gifts);
     const creditAdjustments = new Map<string, number>();
-    if (previousAccount) creditAdjustments.set(previousAccount.patientId, futureCreditUsed(previousAccount));
-    creditAdjustments.set(account.patientId, (creditAdjustments.get(account.patientId) ?? 0) - futureCreditUsed(account));
+    if (previousAccount) creditAdjustments.set(previousAccount.patientId, futureCreditUsed(previousAccount)-(currentAppointment.closedAccount?.creditAdded ?? 0));
+    creditAdjustments.set(account.patientId, (creditAdjustments.get(account.patientId) ?? 0) - futureCreditUsed(account) + result.creditAdded);
     setPatients((current) => current.map((patient) => {
       const adjustment = creditAdjustments.get(patient.id) ?? 0;
       if (patient.id !== account.patientId && !adjustment) return patient;
@@ -1125,7 +1152,7 @@ export default function Home() {
     }));
     const revenue = makeRevenueFromFinancialEntry(account, result.client.name);
     const fee = makeMachineFeeCost(account, result.client.name);
-    setRevenues((current) => [revenue, ...current.filter((item) => item.sourceFinancialEntryId !== accountId)]);
+    setRevenues((current) => [...(result.total > 0 || result.creditAdded > 0 ? [revenue] : []), ...current.filter((item) => item.sourceFinancialEntryId !== accountId)]);
     setCosts((current) => { const preserved = current.filter((item) => item.sourceFinancialEntryId !== accountId); return fee ? [fee, ...preserved] : preserved; });
     setAppointments((current) => current.map((appointment) => appointment.id === currentAppointment.id
       ? { ...appointment, status: "Finalizado", financialEntryId: procedureEntry?.id, closedAccount: account,
@@ -1138,6 +1165,8 @@ export default function Home() {
     const appointment = appointments.find((item) => item.id === appointmentId);
     if (!appointment?.accountClosed) return;
     const account = appointment.closedAccount ?? entries.find((entry) => entry.accountClosed && entry.id === appointment.financialEntryId);
+    const existingCredit = Number(patients.find(item=>item.id===(account?.patientId??appointment.patientId))?.futureCredit)||0;
+    if(existingCredit+futureCreditUsed(account)<(appointment.closedAccount?.creditAdded??0)){window.alert("O crédito deste fechamento já foi utilizado. Estorne primeiro a conta em que ele foi usado.");return;}
     const linked = entries.filter((entry) => account ? entry.sourceAccountId === account.id || entry.id === account.id || entry.id === appointment.closedAccount?.generatedEntryId : entry.id === appointment.financialEntryId);
     const removedIds = new Set(linked.map((entry) => entry.id));
     if (account) removedIds.add(account.id);
@@ -1147,10 +1176,10 @@ export default function Home() {
     const consumed = appointment.stockConsumption ?? account?.products ?? [];
     setInventory(applyCheckoutInventory(inventory, consumed, []).inventory);
     setGifts(applyCheckoutGifts(gifts, appointment.giftConsumption ?? appointment.closedAccount?.gifts, []).gifts);
-    const credit = futureCreditUsed(account) + linked.filter((entry) => !entry.sourceAccountId && entry.id !== account?.id).reduce((sum, entry) => sum + futureCreditUsed(entry), 0);
+    const credit = futureCreditUsed(account) - (appointment.closedAccount?.creditAdded ?? 0) + linked.filter((entry) => !entry.sourceAccountId && entry.id !== account?.id).reduce((sum, entry) => sum + futureCreditUsed(entry), 0);
     if (credit) setPatients((current) => current.map((patient) => patient.id === (account?.patientId ?? appointment.patientId) ? { ...patient, futureCredit: (Number(patient.futureCredit) || 0) + credit } : patient));
     setAppointments((current) => current.map((item) => item.id === appointment.id
-      ? { ...item, status: "Agendado", accountClosed: false, closedAccount: undefined, financialEntryId: undefined, stockConsumption: [], giftConsumption: [] } : item));
+      ? { ...item, status: "Agendado", accountClosed: false, closedAccount: undefined, financialEntryId: undefined, stockConsumption: [], giftConsumption: [], invoice: undefined } : item));
     setAppointmentForm((current) => ({ ...current, status: "Agendado" }));
     setCheckoutDraft(null);
   }
@@ -1266,7 +1295,7 @@ export default function Home() {
 
   function exportExcel() {
     import("xlsx").then((xlsx) => {
-      const rows = filteredEntries(entries, selectedMonth, professionalFilter).map((entry) => {
+      const rows = filteredEntries(accounting.entries, selectedMonth, professionalFilter).map((entry) => {
         const summary = calculateEntry(entry);
         return {
           Data: formatDate(entry.date),
@@ -1388,7 +1417,7 @@ export default function Home() {
   }
 
   async function generateProfessionalReceipt() {
-    const selectedEntries = entries.filter((entry) => selectedProfessionalEntryIds.includes(entry.id));
+    const selectedEntries = accounting.entries.filter((entry) => selectedProfessionalEntryIds.includes(entry.id));
     if (!selectedEntries.length) return;
     const alreadyReceipted = professionalReceipts.flatMap((receipt) => receipt.entryIds);
     const duplicatedEntry = selectedEntries.find((entry) => alreadyReceipted.includes(entry.id));
@@ -1559,7 +1588,7 @@ export default function Home() {
             </div>
             <nav aria-label="Menu principal" className="avvi-sidebar-nav min-h-0 flex-1">
               <SidebarGroup label="Operação">
-                {availableTabs.filter((tab) => ["Agenda", "Estoque", "Follow Up", "Ultraformer MPT", "Relatórios"].includes(tab.id)).map((tab) => {
+                {availableTabs.filter((tab) => ["Agenda", "Estoque", "Follow Up", "Anamnese", "Ultraformer MPT", "Relatórios"].includes(tab.id)).map((tab) => {
                   const Icon = tab.icon;
                   return (
                     <button
@@ -1574,7 +1603,7 @@ export default function Home() {
                 })}
               </SidebarGroup>
               <SidebarGroup label="Financeiro">
-                {availableTabs.filter((tab) => ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Custos"].includes(tab.id)).map((tab) => {
+                {availableTabs.filter((tab) => ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos"].includes(tab.id)).map((tab) => {
                   const Icon = tab.icon;
                   return (
                     <button
@@ -1657,13 +1686,14 @@ export default function Home() {
             />
           )}
 
-          {activeTab === "Follow Up" && <FollowUpView tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
+          {activeTab === "Follow Up" && <FollowUpView tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={accounting.appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
 
           {userRole === "admin" && activeTab === "Contas" && <AccountsView professionals={professionals} />}
-          {canAccessTab(currentUser, "Relatórios") && activeTab === "Relatórios" && <ReportsView appointments={appointments} entries={entries} professionals={professionals} procedures={procedures} services={services} revenues={revenues} />}
+          {canAccessTab(currentUser, "Relatórios") && activeTab === "Relatórios" && <ReportsView appointments={accounting.appointments} entries={accounting.entries} professionals={professionals} procedures={procedures} services={services} revenues={accountingRevenues} />}
 
+          {canAccessTab(currentUser, "Anamnese") && activeTab === "Anamnese" && <AnamneseView user={currentUser} patients={patients} professionals={professionals} records={anamneses} setRecords={setAnamneses} onPatientChange={patient => setPatients(current => current.map(item => item.id === patient.id ? {...item, photos: patient.photos} : item))} />}
           {canAccessTab(currentUser, "Ultraformer MPT") && activeTab === "Ultraformer MPT" && <UltraformerView user={currentUser} tips={ultraformerTips} setTips={setUltraformerTips} patients={patients} professionals={professionals} />}
-          {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={appointments} entries={entries} patients={patients} professionals={professionals} />}
+          {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={accounting.appointments} entries={accounting.entries} patients={patients} professionals={professionals} />}
 
           {canAccessTab(currentUser, "Lançamento de Procedimentos") && activeTab === "Lançamento de Procedimentos" && (
             <FinancialView
@@ -1673,7 +1703,7 @@ export default function Home() {
               patients={patients}
               procedures={procedures}
               professionals={professionals}
-              entries={entries}
+              entries={accounting.entries}
               setEntries={setEntries}
               deleteEntry={deleteEntry}
               selectedMonth={selectedMonth}
@@ -1687,10 +1717,12 @@ export default function Home() {
             />
           )}
 
+          {canAccessTab(currentUser, "Nota Fiscal") && activeTab === "Nota Fiscal" && <InvoiceView appointments={accounting.appointments} patients={patients} professionals={professionals} services={services} entries={accounting.entries} onCpfChange={(patientId,cpf)=>setPatients(current=>current.map(patient=>patient.id===patientId?{...patient,cpf}:patient))} onChange={(appointmentId,invoice)=>setAppointments(current=>current.map(item=>item.id===appointmentId?{...item,invoice}:item))}/>}
+
           {canAccessTab(currentUser, "Receitas") && activeTab === "Receitas" && (
             <RevenuesView
-              revenues={revenues}
-              setRevenues={setRevenues}
+              revenues={accountingRevenues}
+              setRevenues={next => setRevenues(current => [...next, ...current.filter(item => accounting.entryIds.has(item.sourceFinancialEntryId))])}
               patients={patients}
               setPatients={setPatients}
               selectedMonth={selectedMonth}
@@ -1712,7 +1744,7 @@ export default function Home() {
 
           {canAccessTab(currentUser, "Pagamento Profissional") && activeTab === "Pagamento Profissional" && (
             <ProfessionalPaymentView
-              entries={entries}
+              entries={accounting.entries}
               professionals={professionals}
               selectedMonth={selectedMonth}
               setSelectedMonth={setSelectedMonth}
@@ -1733,14 +1765,15 @@ export default function Home() {
           {canAccessTab(currentUser, "Relatório Profissional") && activeTab === "Relatório Profissional" && (
             <ProfessionalReportView
               user={currentUser}
-              entries={entries}
+              entries={accounting.entries}
               professionals={professionals}
               selectedMonth={selectedMonth}
               setSelectedMonth={setSelectedMonth}
               monthlyGoals={monthlyGoals}
-              appointments={appointments}
+              appointments={accounting.appointments}
               patients={patients}
               services={services}
+              procedures={procedures}
             />
           )}
 
@@ -1785,16 +1818,16 @@ export default function Home() {
               selectedMonth={selectedMonth}
               setSelectedMonth={setSelectedMonth}
               professionals={professionals}
-              entries={entries}
-              revenues={revenues}
-              costs={costs}
+              entries={accounting.entries}
+              revenues={accountingRevenues}
+              costs={accountingCosts}
               monthlyGoals={monthlyGoals}
               setMonthlyGoals={setMonthlyGoals}
             />
           )}
 
           {activeTab === "Custos" && (
-            <CostsView costForm={costForm} setCostForm={setCostForm} costs={costs} setCosts={setCosts} saveCost={saveCost} />
+            <CostsView costForm={costForm} setCostForm={setCostForm} costs={accountingCosts} setCosts={setCosts} saveCost={saveCost} />
           )}
 
           {canAccessTab(currentUser, "Dashboard") && activeTab === "Dashboard" && (
@@ -1805,13 +1838,14 @@ export default function Home() {
               setProfessionalFilter={setProfessionalFilter}
               reportFilter={reportFilter}
               setReportFilter={setReportFilter}
-              entries={entries}
-              revenues={revenues}
-              costs={costs}
+              entries={accounting.entries}
+              revenues={accountingRevenues}
+              costs={accountingCosts}
               professionals={professionals}
               monthlyGoals={monthlyGoals}
-              currentMonthSummary={currentMonthSummary}
-              previousSummary={previousSummary}
+              appointments={accounting.appointments}
+              patients={patients}
+              services={services}
               professionalName={professionalName}
             />
           )}
@@ -1846,6 +1880,7 @@ export default function Home() {
             <AppointmentForm
               form={appointmentForm}
               setForm={setAppointmentForm}
+              openHistory={() => appointmentForm.patientId && setHistoryPatientId(appointmentForm.patientId)}
               patients={patients}
               services={services}
               professionals={professionals}
@@ -1857,6 +1892,7 @@ export default function Home() {
           </div>
         </div>
       )}
+      {historyPatientId && patients.find(patient => patient.id === historyPatientId) && <PatientHistory patient={patients.find(patient => patient.id === historyPatientId)!} appointments={appointments} professionals={professionals} services={services} procedures={procedures} onClose={() => setHistoryPatientId(null)} />}
     </main>
   );
 }
@@ -1890,7 +1926,7 @@ function MobileTabs({ activeTab, setActiveTab, allowedTabs }: { activeTab: Tab; 
   );
 }
 
-function AppointmentForm({ form, setForm, patients, services, professionals, saveAppointment, openCheckout, deleteAccount, error }: { form: ReturnType<typeof makeAppointmentForm>; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; services: Service[]; professionals: Professional[]; saveAppointment: () => void; openCheckout: () => void; deleteAccount?: () => void; error: string }) {
+function AppointmentForm({ form, setForm, patients, services, professionals, saveAppointment, openCheckout, openHistory, deleteAccount, error }: { form: ReturnType<typeof makeAppointmentForm>; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; services: Service[]; professionals: Professional[]; saveAppointment: () => void; openCheckout: () => void; openHistory: () => void; deleteAccount?: () => void; error: string }) {
   const hasServices = !!form.serviceId || form.additionalServices.some(item => item.serviceId);
   function updateServices(patch: Partial<typeof form>) {
     const next = { ...form, ...patch };
@@ -1910,12 +1946,12 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
           {statuses.map((status) => <option key={status}>{status}</option>)}
         </select>
       </FormField>
-      <FormField label="Paciente cadastrado">
-        <select value={form.patientId} onChange={(event) => setForm({ ...form, patientId: event.target.value })} className="input">
-          <option value="">Novo paciente</option>
-          {patients.map((patient) => <option key={patient.id} value={patient.id}>{patient.name}</option>)}
-        </select>
-      </FormField>
+      <div><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-600">Paciente cadastrado</span><button type="button" disabled={!form.patientId} aria-label="Histórico do paciente" onClick={openHistory} className="flex items-center gap-1 text-xs font-semibold text-avvi-blue disabled:opacity-40"><History size={15}/>Histórico</button></div>
+        <SearchSelect label="Paciente cadastrado" options={[{id: "", name: "Novo paciente"}, ...patients]} value={form.patientId} onChange={patientId => {
+          const patient = patients.find(item => item.id === patientId);
+          setForm({...form, patientId, patientName: patient?.name ?? "", phone: patient?.phone ?? "", cpf: patient?.cpf ?? "", birthDate: patient?.birthDate ?? "", patientNotes: patient?.notes ?? ""});
+        }}/>
+      </div>
       <FormField label="Nome do paciente">
         <input value={form.patientName} onChange={(event) => setForm({ ...form, patientName: event.target.value })} className="input" placeholder="Nome completo" />
       </FormField>
@@ -2994,6 +3030,7 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
 function PatientsView({ patientForm, setPatientForm, patients, setPatients, professionals, appointments }: { patientForm: Patient; setPatientForm: (form: Patient) => void; patients: Patient[]; setPatients: (patients: Patient[]) => void; professionals: Professional[]; appointments: Appointment[] }) {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [showScheduleInfo, setShowScheduleInfo] = useState(false);
+  const [photoPatientId, setPhotoPatientId] = useState<string | null>(null);
 
   function savePatient() {
     setPatients(savePatientRecord(patientForm, patients));
@@ -3090,10 +3127,11 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
             professionals.find((professional) => professional.id === patient.professionalId)?.name || "-",
             currency(Number(patient.futureCredit) || 0),
             patient.notes || "-",
-            <ActionButtons key={patient.id} onEdit={() => openEditPatient(patient)} onDelete={() => setPatients(patients.filter((item) => item.id !== patient.id))} />
+            <div key={patient.id} className="flex items-center gap-2"><button type="button" aria-label={`Fotos de ${patient.name}`} onClick={() => setPhotoPatientId(patient.id)} className="text-xs font-semibold text-avvi-blue">Fotos ({patient.photos?.length ?? 0})</button><ActionButtons onEdit={() => openEditPatient(patient)} onDelete={() => setPatients(patients.filter((item) => item.id !== patient.id))} /></div>
           ])}
         />
       </Panel>
+      {photoPatientId && patients.find(patient => patient.id === photoPatientId) && <PatientPhotos patient={patients.find(patient => patient.id === photoPatientId)!} onChange={patient => setPatients(patients.map(item => item.id === patient.id ? {...item, photos: patient.photos} : item))} onClose={() => setPhotoPatientId(null)} />}
     </div>
   );
 }
@@ -3272,33 +3310,38 @@ function DashboardView(props: {
   reportFilter: string;
   setReportFilter: (value: string) => void;
   entries: FinancialEntry[];
+  appointments: Appointment[];
+  patients: Patient[];
+  services: Service[];
   revenues: RevenueEntry[];
   costs: FixedCost[];
   professionals: Professional[];
   monthlyGoals: MonthlyGoals[];
-  currentMonthSummary: ReturnType<typeof summarizeMonth>;
-  previousSummary: ReturnType<typeof summarizeMonth>;
   professionalName: (id?: string) => string;
 }) {
   const initialPeriod = monthPeriod(props.selectedMonth);
   const [periodStart, setPeriodStart] = useState(initialPeriod.start);
   const [periodEnd, setPeriodEnd] = useState(initialPeriod.end);
-  const periodSummary = summarizePeriod(props.revenues, props.costs, periodStart, periodEnd);
+  const periodData = dashboardPeriod({ ...props, start: periodStart, end: periodEnd });
+  const periodSummary = periodData.summary;
   const elapsed = monthProgress(props.selectedMonth);
   const activeGoal = getMonthlyGoal(props.monthlyGoals, props.selectedMonth, props.professionals);
   const annual = Array.from({ length: 12 }, (_, index) => {
     const key = `${props.selectedMonth.slice(0, 4)}-${String(index + 1).padStart(2, "0")}`;
-    const summary = summarizeMonth(props.revenues, props.costs, key);
+    const summary = dashboardPeriod({ ...props, ...monthPeriod(key) }).summary;
     return { month: format(parseISO(`${key}-01`), "MMM", { locale: ptBR }), Receita: summary.revenue, Resultado: summary.result };
   });
+  const reports = periodData.reports;
+  const priorPeriod = monthPeriod(previousMonth(props.selectedMonth));
+  const priorData = dashboardPeriod({ ...props, ...priorPeriod });
+  const priorReports = priorData.reports;
   const cards = props.professionals.filter((professional) => props.professionalFilter === "todos" || professional.id === props.professionalFilter).map((professional) => {
-    const professionalEntryIds = new Set(props.entries.filter((entry) => entry.professionalId === professional.id).map((entry) => entry.id));
-    const revenue = props.revenues.filter((revenue) => isDateInPeriod(revenue.paymentDate, periodStart, periodEnd) && revenue.sourceFinancialEntryId && professionalEntryIds.has(revenue.sourceFinancialEntryId)).reduce((sum, revenue) => sum + revenue.total, 0);
+    const revenue = reports.find(report => report.professional.id === professional.id)?.totalPaid ?? 0;
     const goal = getProfessionalGoal(props.monthlyGoals, props.selectedMonth, professional);
     const progress = goal ? (revenue / goal) * 100 : 0;
     const expected = goal * elapsed;
     const trend = revenue - expected;
-    const lastRevenue = props.revenues.filter((revenue) => monthKey(revenue.paymentDate) === previousMonth(props.selectedMonth) && revenue.sourceFinancialEntryId && professionalEntryIds.has(revenue.sourceFinancialEntryId)).reduce((sum, revenue) => sum + revenue.total, 0);
+    const lastRevenue = priorReports.find(report => report.professional.id === professional.id)?.totalPaid ?? 0;
     return { professional, revenue, goal, progress, missing: Math.max(0, goal - revenue), trend, lastRevenue };
   });
   const barData = [{ name: "Receita Total", realizado: periodSummary.revenue, meta: activeGoal.companyGoal }, ...cards.map((card) => ({ name: card.professional.name, realizado: card.revenue, meta: card.goal }))];
@@ -3337,11 +3380,12 @@ function DashboardView(props: {
       </Panel>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard title="Resultado financeiro" value={currency(periodSummary.result)} meta={`Meta empresa: ${currency(activeGoal.companyGoal)}`} tone="blue" delta={compare(periodSummary.result, props.previousSummary.result)} />
-        <MetricCard title="Total receitas" value={currency(periodSummary.revenue)} meta={`${percent((periodSummary.revenue / Math.max(1, activeGoal.companyGoal)) * 100)} da meta`} tone="green" delta={compare(periodSummary.revenue, props.previousSummary.revenue)} />
-        <MetricCard title="Total despesas" value={currency(periodSummary.expenses)} meta={`Progresso do mês: ${percent(elapsed * 100)}`} tone="red" delta={compare(periodSummary.expenses, props.previousSummary.expenses)} />
+        <MetricCard title="Resultado financeiro" value={currency(periodSummary.result)} meta={`Meta empresa: ${currency(activeGoal.companyGoal)}`} tone="blue" delta={compare(periodSummary.result, priorData.summary.result)} />
+        <MetricCard title="Total receitas" value={currency(periodSummary.revenue)} meta={`${percent((periodSummary.revenue / Math.max(1, activeGoal.companyGoal)) * 100)} da meta`} tone="green" delta={compare(periodSummary.revenue, priorData.summary.revenue)} />
+        <MetricCard title="Total despesas" value={currency(periodSummary.expenses)} meta={`Progresso do mês: ${percent(elapsed * 100)}`} tone="red" delta={compare(periodSummary.expenses, priorData.summary.expenses)} />
       </div>
 
+      {periodSummary.independentRevenue !== 0 && <p className="text-xs text-slate-500">Receitas avulsas incluídas no total: {currency(periodSummary.independentRevenue)}</p>}
       <div className="grid gap-4 lg:grid-cols-4">
         {cards.map((card) => (
           <Panel key={card.professional.id}>

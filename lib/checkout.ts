@@ -68,3 +68,19 @@ export function restoreCheckoutItems(lines: ProcedureLine[], storedProducts: Pro
   });
   return { lines: restoredLines, products: [...products.values()] };
 }
+
+export function checkoutCommission(percentage: number, clinicPatient: boolean) {
+  const normal=Math.min(100,Math.max(0,percentage)); return clinicPatient?100-normal:normal;
+}
+// Split the new money retained as credit from service revenue, preserving payment methods.
+export function settleCheckoutPayments(payments: PaymentItem[], excess: number, asCredit: boolean) {
+  let remaining=moneyRound(excess); const creditPayments: PaymentItem[]=[];
+  const settled=payments.map(payment=>{
+    if(remaining<=0||payment.method==="Crédito Futuro"||(!asCredit&&payment.method!=="Dinheiro"))return {...payment};
+    const amount=moneyRound(Math.min(remaining,payment.amount));remaining=moneyRound(remaining-amount);
+    if(asCredit&&amount>0)creditPayments.push({...payment,id:`credit-${payment.id}`,amount});
+    return {...payment,amount:moneyRound(payment.amount-amount)};
+  });
+  if(remaining>0)throw new Error(asCredit?"O excedente precisa ser pago com dinheiro novo, sem usar crédito futuro.":"Troco é permitido somente em dinheiro.");
+  return {payments:settled,creditPayments,creditAdded:asCredit?moneyRound(excess):0,change:asCredit?0:moneyRound(excess)};
+}

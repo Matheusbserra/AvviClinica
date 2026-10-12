@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import ts from 'typescript';
-const source=ts.transpileModule(fs.readFileSync('lib/leadFunnel.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
+const calculations=ts.transpileModule(fs.readFileSync("lib/calculations.ts","utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
+const calculationUrl="data:text/javascript;base64,"+Buffer.from(calculations).toString("base64");
+const source=ts.transpileModule(fs.readFileSync('lib/leadFunnel.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText.replace('"./calculations"',JSON.stringify(calculationUrl));
 const {leadAge,automaticLeadStage,stageForLead,leadStages}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 const lead={id:'whatsapp-5598999990000',name:'Lead',phone:'5598999990000',firstContactAt:'2026-10-08T03:00:00Z',lastContactAt:'2026-10-08T03:00:00Z',lastMessage:'Olá',lastMessageId:'m'};
 const now=new Date('2026-10-08T20:00:00Z');
@@ -14,4 +16,5 @@ for(const status of ['Cancelado','Faltou','Reagendado'])assert.equal(automaticLe
 assert.equal(automaticLeadStage(lead,[patient],[{...booked,accountClosed:true},{...booked,id:'new',startsAt:'2026-10-09T10:00:00'}],now),'scheduled');
 assert.equal(stageForLead({...lead,manualStage:'cold'},[patient],[booked],now),'cold');assert.equal(stageForLead({...lead,manualStage:undefined},[patient],[booked],now),'scheduled');
 assert.equal(automaticLeadStage({...lead,patientId:'p',phone:'000'},[patient],[booked],now),'scheduled');
+assert.equal(automaticLeadStage(lead,[patient],[{...booked,accountClosed:true,closedAccount:{payments:[]}}],now),"entry");
 console.log('PASS: Five funnel stages, São Paulo day boundaries, day 7/8, linked agenda, account closure, canceled appointments, newer booking priority, manual override/reset.');

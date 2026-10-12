@@ -1,5 +1,5 @@
 export type AppRole = "admin" | "standard";
-export const appTabs = ["Agenda", "Estoque", "Follow Up", "Ultraformer MPT", "Relatórios", "Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] as const;
+export const appTabs = ["Agenda", "Estoque", "Follow Up", "Anamnese", "Ultraformer MPT", "Relatórios", "Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] as const;
 export type AppTab = typeof appTabs[number];
 export type AppUser = { id?: string; name?: string; login: string; role: AppRole; tabs?: string[]; revision?: number; professionalReport?: { professionalIds: string[] }; professionalRegistration?: { professionalIds: string[] } };
 export const standardTabs: string[] = ["Agenda", "Estoque", "Follow Up", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes"];
@@ -10,20 +10,22 @@ export function canAccessTab(access: Access, tab: string) {
   return role === "admin" || (tab !== "Contas" && (typeof access === "string" ? standardTabs : access.tabs ?? standardTabs).includes(tab));
 }
 export function hasLimitedProfessionalReport(access: Access) { return typeof access !== "string" && access.role !== "admin" && !!access.professionalReport; }
-export function hasFinancialAccess(access: Access) { return ["Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional"].some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
+export function hasFinancialAccess(access: Access) { return ["Dashboard", "Metas", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional"].some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
 const readTabs: Record<string, string[]> = {
+  anamneses: ["Anamnese"],
   ultraformer_tips: ["Ultraformer MPT"],
-  patients: ["Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Cadastro de Pacientes", "Recibos de Pagamento", "Relatório Profissional"],
-  professionals: ["Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Cadastro de Profissionais", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento"],
-  procedures: ["Agenda", "Estoque", "Relatórios", "Lançamento de Procedimentos", "Cadastro de Procedimentos"],
-  services: ["Agenda", "Follow Up", "Relatórios", "Cadastro de Serviços", "Relatório Profissional"],
-  inventory: ["Agenda", "Estoque"], gifts: ["Agenda", "Estoque"], appointments: ["Agenda", "Estoque", "Follow Up", "Relatórios", "Cadastro de Pacientes", "Relatório Profissional"],
+  patients: ["Anamnese", "Dashboard", "Metas", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Cadastro de Pacientes", "Recibos de Pagamento", "Relatório Profissional", "Nota Fiscal"],
+  professionals: ["Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Cadastro de Profissionais", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento", "Nota Fiscal"],
+  procedures: ["Agenda", "Estoque", "Relatórios", "Relatório Profissional", "Lançamento de Procedimentos", "Cadastro de Procedimentos"],
+  services: ["Dashboard", "Metas", "Agenda", "Follow Up", "Relatórios", "Cadastro de Serviços", "Relatório Profissional", "Nota Fiscal"],
+  inventory: ["Agenda", "Estoque"], gifts: ["Agenda", "Estoque"], appointments: ["Dashboard", "Metas", "Agenda", "Estoque", "Follow Up", "Relatórios", "Cadastro de Pacientes", "Relatório Profissional", "Nota Fiscal"],
   fixed_costs: ["Custos", "Dashboard", "Metas"], revenues: ["Receitas", "Dashboard", "Metas"],
   receipts: ["Recibos de Pagamento"], professional_receipts: ["Pagamento Profissional"], monthly_goals: ["Metas", "Dashboard", "Relatório Profissional"],
   financial_entries: ["Agenda", "Estoque", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Dashboard", "Metas"],
   followup_rules: ["Follow Up"], followup_contacts: ["Follow Up"], followup_logs: ["Follow Up"]
 };
 const writeTabs: Record<string, string[]> = {
+  anamneses: ["Anamnese"],
   ultraformer_tips: ["Ultraformer MPT"],
   patients: ["Cadastro de Pacientes", "Agenda"], professionals: ["Cadastro de Profissionais"], procedures: ["Cadastro de Procedimentos"], services: ["Cadastro de Serviços"],
   inventory: ["Estoque", "Agenda"], gifts: ["Estoque", "Agenda"], appointments: ["Agenda"], fixed_costs: ["Custos"], revenues: ["Receitas"],
@@ -43,5 +45,5 @@ export function canManageProfessional(user: AppUser, professionalId: string) {
   return canAccessTab(user, "Cadastro de Profissionais") && (user.role === "admin" || !user.professionalRegistration || user.professionalRegistration.professionalIds.includes(professionalId));
 }
 export function registrationOnly(user: AppUser) {
-  return user.role === "standard" && !["Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento"].some(tab => canAccessTab(user, tab));
+  return user.role === "standard" && !["Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento"].some(tab => canAccessTab(user, tab));
 }

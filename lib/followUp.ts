@@ -1,3 +1,4 @@
+import { zeroClosedAppointment } from "./calculations";
 import { appointmentServices } from "./appointmentServices";
 import { validateConversationFlow } from "./conversationFlow";
 import type { Appointment, Patient, Service, Professional, FollowUpRule, FollowUpContact, FollowUpLog } from "./types";
@@ -77,6 +78,7 @@ export function followUpCandidates(rules: FollowUpRule[], context: FollowUpConte
       }
     } else if (rule.trigger === "appointment_before" || rule.trigger === "appointment_after") {
       for (const appointment of context.appointments) {
+        if (zeroClosedAppointment(appointment, [], context.services)) continue;
         if (["Cancelado", "Faltou", "Reagendado"].includes(appointment.status)) continue;
         if (rule.trigger === "appointment_after" && appointment.status !== "Finalizado") continue;
         if (rule.trigger === "appointment_before" && appointment.status === "Finalizado") continue;

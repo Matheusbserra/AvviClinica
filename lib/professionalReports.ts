@@ -1,7 +1,7 @@
-import { calculateEntry } from "./calculations";
+import { calculateEntry, excludeZeroAccounts } from "./calculations";
 import { appointmentServices } from "./appointmentServices";
-import { reportCapacity, reportMonthPeriod, validReportDate } from "./reports";
-import type { Appointment, FinancialEntry, Patient, Professional, Service } from "./types";
+import { clinicRankings, reportCapacity, reportMonthPeriod, validReportDate } from "./reports";
+import type { Appointment, FinancialEntry, Patient, Procedure, Professional, Service } from "./types";
 import type { MonthlyGoals } from "./database";
 
 export type IndividualRanking = { id: string; name: string; value: number };
@@ -9,15 +9,16 @@ export type ProfessionalReport = {
   professional: Professional; goal: number; totalPaid: number; totalProfit: number;
   companyRevenue: number; professionalValue: number; count: number; serviceCount: number; closedPatientCount: number; averageTicket: number;
   services: IndividualRanking[]; patientRevenue: IndividualRanking[];
-  patientProfit: IndividualRanking[]; patientServices: IndividualRanking[];
+  products: IndividualRanking[]; patientServices: IndividualRanking[];
 };
 
 // Financial totals retain the existing ledger calculation. Service quantities
 // come from attended appointments and explicitly linked services, never products.
 export function professionalReports(input: {
   start: string; end: string; entries: FinancialEntry[]; appointments: Appointment[];
-  professionals: Professional[]; patients: Patient[]; services: Service[]; monthlyGoals: MonthlyGoals[];
+  professionals: Professional[]; patients: Patient[]; services: Service[]; procedures?: Procedure[]; monthlyGoals: MonthlyGoals[];
 }) {
+  input = { ...input, ...excludeZeroAccounts(input.appointments, input.entries, input.services) };
   const valid = reportCapacity(input.start, input.end).valid;
   const inPeriod = (date: string) => valid && validReportDate(date.slice(0, 10)) && date.slice(0, 10) >= input.start && date.slice(0, 10) <= input.end;
   const patients = new Map(input.patients.map(patient => [patient.id, patient.name]));
@@ -28,7 +29,7 @@ export function professionalReports(input: {
   const number = (value: number) => Number.isFinite(value) ? value : 0;
   const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
   const reports: ProfessionalReport[] = input.professionals.map(professional => {
-    const revenue = new Map<string, IndividualRanking>(), profit = new Map<string, IndividualRanking>();
+    const revenue = new Map<string, IndividualRanking>();
     const serviceUsage = new Map<string, IndividualRanking>(), patientUsage = new Map<string, IndividualRanking>();
     const add = (map: Map<string, IndividualRanking>, id: string | undefined, name: string, value: number) => {
       if (!id) return;
@@ -45,7 +46,6 @@ export function professionalReports(input: {
       const patientId = entry.patientId || appointments.get(entry.appointmentId ?? "")?.patientId;
       if (entry.accountClosed) closedPatientIds.add(patientId || "account:" + (entry.appointmentId || entry.id));
       add(revenue, patientId, patientName(patientId), summary.received);
-      add(profit, patientId, patientName(patientId), summary.baseProfit);
     }
     let serviceCount = 0;
     const countedAppointments = new Set<string>(), countedEntries = new Set<string>(), countedAccounts = new Set<string>();
@@ -84,8 +84,14 @@ export function professionalReports(input: {
       goal += input.monthlyGoals.find(item => item.month === month)?.professionalGoals[professional.id] ?? professional.monthlyGoal ?? 0;
       const last = new Date(reportMonthPeriod(month)!.end + "T12:00:00Z"); last.setUTCDate(last.getUTCDate() + 1); month = last.toISOString().slice(0, 7);
     }
-    for (const rows of [revenue, profit]) for (const row of rows.values()) row.value = round(row.value);
-    return { professional, goal, ...totals, serviceCount, closedPatientCount: closedPatientIds.size, averageTicket: closedPatientIds.size ? totals.totalPaid / closedPatientIds.size : 0, services: top(serviceUsage), patientRevenue: top(revenue), patientProfit: top(profit), patientServices: top(patientUsage) };
+    for (const rows of [revenue]) for (const row of rows.values()) row.value = round(row.value);
+    const products = clinicRankings({ start: input.start, end: input.end,
+      professionals: [professional],
+      appointments: input.appointments.filter(item => item.professionalId === professional.id),
+      entries: input.entries.filter(item => item.professionalId === professional.id),
+      services: input.services, procedures: input.procedures ?? []
+    }).procedures.slice(0, 5).map(({ id, name, quantity }) => ({ id, name, value: quantity }));
+    return { professional, goal, ...totals, serviceCount, closedPatientCount: closedPatientIds.size, averageTicket: closedPatientIds.size ? totals.totalPaid / closedPatientIds.size : 0, services: top(serviceUsage), patientRevenue: top(revenue), products, patientServices: top(patientUsage) };
   }).sort((a, b) => b.totalPaid - a.totalPaid || a.professional.name.localeCompare(b.professional.name, "pt-BR"));
   return { valid, reports };
 }

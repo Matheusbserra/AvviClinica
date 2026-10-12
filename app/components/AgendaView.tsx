@@ -35,22 +35,22 @@ type Props = {
 export function AgendaView(props: Props) {
   const [menu, setMenu] = useState<{ appointmentId: string; appointmentIds: string[]; left: number; top: number } | null>(null);
   const [hover, setHover] = useState<{ appointmentIds: string[]; left: number; top: number; bottom: number } | null>(null);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverOpenTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverRef = useRef<HTMLDivElement>(null);
-  function clearHoverTimers() { if (hoverTimer.current) clearTimeout(hoverTimer.current); if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current); }
+  function clearHoverTimers() { if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current); if (hoverOpenTimer.current) clearTimeout(hoverOpenTimer.current); }
   function closeHover() { clearHoverTimers(); setHover(null); }
   function scheduleHover(element: HTMLButtonElement, appointmentIds: string[]) {
     if (menu || slotMenu) return;
     clearHoverTimers(); setHover(null);
-    hoverTimer.current = setTimeout(() => {
+    hoverOpenTimer.current = setTimeout(() => {
       const rect = element.getBoundingClientRect();
       setHover({ appointmentIds, left: Math.max(8, Math.min(rect.left, window.innerWidth - 268)), top: rect.bottom + 6, bottom: rect.bottom });
-    }, 1500);
+    }, 500);
   }
-  function leaveHover() { if (hoverTimer.current) clearTimeout(hoverTimer.current); hoverCloseTimer.current = setTimeout(() => setHover(null), 180); }
+  function leaveHover() { if (hoverOpenTimer.current) clearTimeout(hoverOpenTimer.current); hoverCloseTimer.current = setTimeout(() => setHover(null), 180); }
   useEffect(() => {
-    function close() { if (hoverTimer.current) clearTimeout(hoverTimer.current); if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current); setHover(null); }
+    function close() { if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current); if (hoverOpenTimer.current) clearTimeout(hoverOpenTimer.current); setHover(null); }
     function escape(event: KeyboardEvent) { if (event.key === "Escape") close(); }
     window.addEventListener("resize", close); window.addEventListener("scroll", close, true); document.addEventListener("keydown", escape);
     return () => { close(); window.removeEventListener("resize", close); window.removeEventListener("scroll", close, true); document.removeEventListener("keydown", escape); };

@@ -3,7 +3,9 @@ import { resolveAccess, sameOrigin } from "@/lib/accessServer";
 import { canManageProfessional, registrationOnly, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { stockHistoryEntry } from "@/lib/accessSnapshot";
 import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAvailability";
-import { isUltraformerTip } from "@/lib/ultraformer";
+import { isUltraformerTip, usageOnlyTipUpdate } from "@/lib/ultraformer";
+import { validAnamnese } from "@/lib/anamnese";
+import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice } from "@/lib/invoices";
 import { entityNames } from "@/lib/database";
 import type { EntityName } from "@/lib/database";
 import type { Appointment, FinancialEntry } from "@/lib/types";
@@ -52,6 +54,23 @@ export async function POST(request: Request) {
     const { upserts = [], removed = [] } = await request.json();
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
     const db = database();
+    const clinicalUpdates = upserts.filter(row => row.entity === "anamneses");
+    if (clinicalUpdates.length) {
+      if (!canWriteEntity(user, "anamneses")) return Response.json({ error: "Acesso à anamnese não autorizado." }, { status: 403, headers });
+      const [existing, patients, professionals] = await Promise.all([rows("anamneses"), rows("patients"), rows("professionals")]);
+      const patientIds = new Set(patients.map(row => row.record_id)); const professionalIds = new Set(professionals.map(row => row.record_id));
+      for (const row of upserts) {
+        if (row.entity === "patients" && canWriteEntity(user, "patients")) patientIds.add(row.record_id);
+        if (row.entity === "professionals" && canWriteEntity(user, "professionals") && canManageProfessional(user, row.record_id)) professionalIds.add(row.record_id);
+      }
+      for (const row of clinicalUpdates) {
+        if (!validAnamnese(row.data) || !patientIds.has(row.data.patientId) || !professionalIds.has(row.data.professionalId)) return Response.json({ error: "Ficha, paciente ou profissional inválido." }, { status: 400, headers });
+        const prior = existing.find(item => item.record_id === row.record_id)?.data;
+        if (prior && (prior.patientId !== row.data.patientId || prior.professionalId !== row.data.professionalId)) return Response.json({ error: "O vínculo da ficha não pode ser alterado." }, { status: 400, headers });
+        const author = { login: user.login, name: user.name?.trim() || user.login }; const now = new Date().toISOString();
+        row.data = { id: row.data.id, patientId: row.data.patientId, professionalId: row.data.professionalId, date: row.data.date, templateVersion: 1, answers: row.data.answers, createdAt: prior?.createdAt ?? now, updatedAt: now, createdBy: prior?.createdBy ?? author, updatedBy: author };
+      }
+    }
     const appointmentUpdates = upserts.filter((row) => row.entity === "appointments").map((row) => row.data as Appointment);
     const stored = appointmentUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
     const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt));
@@ -78,6 +97,7 @@ export async function POST(request: Request) {
     const receiptSources = new Set<string>(canWriteEntity(user, "professional_receipts") ? upserts.filter(row => row.entity === "professional_receipts").map(row => row.record_id) : []);
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
+      if (row.entity === "appointments" && row.data.invoice !== undefined && (!validInvoice(row.data.invoice) || row.data.invoice.localPdf)) return Response.json({error:"Anexo fiscal inválido."},{status:400,headers});
       if (row.entity === "professionals" && row.data.showInAgenda !== undefined && typeof row.data.showInAgenda !== "boolean") return Response.json({ error: "Visibilidade na agenda inválida." }, { status: 400, headers });
       if (row.entity === "professionals" && row.data.closedShifts !== undefined && !validClosedShifts(row.data.closedShifts)) return Response.json({ error: "Turnos de agenda inválidos." }, { status: 400, headers });
       if (row.entity === "professionals" && !canManageProfessional(user, row.record_id)) return Response.json({ error: "Cadastro deste profissional não autorizado." }, { status: 403, headers });
@@ -86,6 +106,7 @@ export async function POST(request: Request) {
       if (row.entity === "ultraformer_tips") {
         const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "ultraformer_tips").eq("record_id", row.record_id).maybeSingle();
         if (error) throw error;
+        if (user.role === "standard" && !usageOnlyTipUpdate(previous?.data, row.data)) return Response.json({ error: "Somente o administrador pode ajustar o saldo ou alterar o histórico. Registre uma nova utilização." }, { status: 403, headers });
         const prior = new Map((previous?.data?.usages ?? []).map((usage: { id: string; registeredBy?: unknown }) => [usage.id, usage]));
         // Stamp new usages from the signed session; preserve the original author on retries and edits.
         row.data.usages = row.data.usages.map((usage: { id: string; registeredBy?: unknown }) => {
@@ -104,6 +125,20 @@ export async function POST(request: Request) {
         }
         continue;
       }
+      if (row.entity === "appointments" && canAccessTab(user,"Nota Fiscal") && invoiceOnlyUpdate(stored.find(item=>item.id===row.record_id),row.data)) continue;
+      if (row.entity === "patients" && canAccessTab(user, "Nota Fiscal")) {
+        const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "patients").eq("record_id", row.record_id).maybeSingle();
+        if (error) throw error;
+        if (cpfOnlyUpdate(previous?.data, row.data)) continue;
+      }
+      if (row.entity === "patients" && canAccessTab(user, "Anamnese")) {
+        const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "patients").eq("record_id", row.record_id).maybeSingle();
+        if (error) throw error;
+        // Photos are uploaded and attached by the private endpoint. A clinical-only
+        // profile may acknowledge that saved record, without editing the patient.
+        const stable = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a],[b]) => a.localeCompare(b))) : item);
+        if (previous && stable(previous.data) === stable(row.data)) continue;
+      }
       const accountDerivative = canAccessTab(user, "Agenda") && (row.entity === "financial_entries" ? accounts.has(row.data.sourceAccountId) && row.record_id === `procedure-account-${row.data.sourceAccountId}` && appointmentUpdates.some((item) => item.closedAccount?.generatedEntryId === row.record_id)
         : ["revenues", "fixed_costs"].includes(row.entity) && accounts.has(row.data.sourceFinancialEntryId) && row.record_id === `${row.entity === "revenues" ? "receita-entry" : "taxa-maquininha"}-${row.data.sourceFinancialEntryId}`);
       const ledgerDerivative = ["revenues", "fixed_costs"].includes(row.entity) && ledgerSources.has(row.data.sourceFinancialEntryId) && row.record_id === `${row.entity === "revenues" ? "receita-entry" : "taxa-maquininha"}-${row.data.sourceFinancialEntryId}`;
@@ -113,6 +148,7 @@ export async function POST(request: Request) {
     }
     for (const item of removed) {
       if (!entityNames.includes(item.entity) || !Array.isArray(item.ids) || item.ids.some((id: unknown) => typeof id !== "string")) return Response.json({ error: "Exclusão inválida." }, { status: 400, headers });
+      if (user.role === "standard" && item.entity === "ultraformer_tips" && item.ids.length) return Response.json({ error: "Somente o administrador pode excluir ponteiras ou utilizações." }, { status: 403, headers });
       if (item.entity === "professionals" && item.ids.some((id: string) => !canManageProfessional(user, id))) return Response.json({ error: "Exclusão deste profissional não autorizada." }, { status: 403, headers });
       if (user.role === "standard" && !canWriteEntity(user, item.entity)) {
         if (!canAccessTab(user, "Agenda") || !["financial_entries", "revenues", "fixed_costs"].includes(item.entity)) return Response.json({ error: "Exclusão financeira restrita ao administrador." }, { status: 403, headers });

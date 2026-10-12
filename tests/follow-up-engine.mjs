@@ -5,7 +5,7 @@ const compile = (file) => ts.transpileModule(fs.readFileSync(new URL(file,import
 const moduleUrl = (code) => 'data:text/javascript;base64,'+Buffer.from(code).toString('base64');
 const serviceUrl = moduleUrl(compile("../lib/appointmentServices.ts"));
 const graphUrl = moduleUrl(compile('../lib/conversationFlow.ts'));
-const { followUpCandidates, keywordMatches, newFollowUpRule, localToInstant, saoPauloInput, validateFollowUpRule, normalizedPhone } = await import(moduleUrl(compile('../lib/followUp.ts').replaceAll('"./conversationFlow"',JSON.stringify(graphUrl)).replaceAll('"./appointmentServices"',JSON.stringify(serviceUrl))));
+const { followUpCandidates, keywordMatches, newFollowUpRule, localToInstant, saoPauloInput, validateFollowUpRule, normalizedPhone } = await import(moduleUrl(compile('../lib/followUp.ts').replaceAll('"./conversationFlow"',JSON.stringify(graphUrl)).replaceAll('"./appointmentServices"',JSON.stringify(serviceUrl)).replaceAll('"./calculations"',JSON.stringify(moduleUrl(compile("../lib/calculations.ts"))))));
 const { createConversationNode, advanceConversation, resumeConversation, validateConversationFlow, branchMatches } = await import(graphUrl);
 const patient={id:'p',name:'Maria Souza',phone:'(98) 99999-0000'};
 const base={...newFollowUpRule(),id:'r',name:'Teste',active:true,keywords:['preço'],message:'Olá, {primeiro_nome}: {servico}, {profissional}, {data}, {hora}'};
@@ -21,6 +21,7 @@ assert.equal(followUpCandidates([before],{...context,appointments:[appt]},now)[0
 assert.equal(followUpCandidates([before],{...context,appointments:[{...appt,startsAt:'2026-09-09T15:00:00'}]},now).length,0);
 for(const status of ['Cancelado','Faltou','Reagendado','Finalizado'])assert.equal(followUpCandidates([before],{...context,appointments:[{...appt,status}]},now).length,0);
 const after={...base,trigger:'appointment_after',delayMinutes:1440};assert.equal(followUpCandidates([after],{...context,appointments:[appt]},now).length,0);assert.equal(followUpCandidates([after],{...context,appointments:[{...appt,status:'Finalizado'}]},now)[0].scheduledFor,'2026-10-10T19:00:00.000Z');
+assert.equal(followUpCandidates([after],{...context,appointments:[{...appt,status:"Finalizado",accountClosed:true,closedAccount:{payments:[]}}]},now).length,0);
 assert.equal(followUpCandidates([{...base,trigger:'inactivity',delayMinutes:120}],context,now)[0].scheduledFor,'2026-10-08T20:00:00.000Z');
 assert.ok(validateFollowUpRule(before,true).includes('modelo aprovado'));assert.ok(validateFollowUpRule({...before,messageType:'text'},true).includes('24 horas'));assert.equal(validateFollowUpRule({...before,templateName:'lembrete'},true),'');
 assert.equal(followUpCandidates([before],{...context,appointments:[{...appt,startsAt:'invalid'}]},now).length,0);

@@ -1,7 +1,7 @@
 import fs from "node:fs";import os from "node:os";import path from "node:path";import {pathToFileURL} from "node:url";import {createRequire} from "node:module";import assert from "node:assert/strict";import ts from "typescript";
 const require=createRequire(import.meta.url),dir=fs.mkdtempSync(path.join(os.tmpdir(),"avvi-ultraformer-cloud-"));
 try {
- const modules=["access","accessServer","accountsServer","accessSnapshot","database","supabase","persistence","ultraformer"];
+ const modules=["anamnese","access","accessServer","accountsServer","accessSnapshot","database","supabase","persistence","ultraformer","agendaAvailability","invoices","appointmentServices","checkout","calculations"];
  for(const name of [...modules,"route"]){let source=fs.readFileSync(name==="route"?"app/api/access/data/route.ts":"lib/"+name+".ts","utf8");for(const dependency of modules)source=source.replaceAll('"./'+dependency+'"','"./'+dependency+'.mjs"').replaceAll('"@/lib/'+dependency+'"','"./'+dependency+'.mjs"');source=source.replaceAll('"@supabase/supabase-js"',JSON.stringify(pathToFileURL(require.resolve("@supabase/supabase-js")).href));fs.writeFileSync(path.join(dir,name+".mjs"),ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText);}
  Object.assign(process.env,{AVVI_SESSION_SECRET:"isolated-ultraformer-test-secret-000000000",NEXT_PUBLIC_SUPABASE_URL:"https://project.supabase.co",NEXT_PUBLIC_SUPABASE_ANON_KEY:"sb_publishable_test",SUPABASE_SERVICE_ROLE_KEY:"sb_secret_test"});
  const records=new Map(),account={id:"operator",login:"operator",name:"Operadora",role:"standard",tabs:["Ultraformer MPT"],version:1,salt:"test",password_hash:"test"};let failWrites=false;
@@ -16,12 +16,21 @@ try {
  const request=(user,body)=>new Request("http://test.local/api/access/data"+(body?"":"?entity=ultraformer_tips"),{method:body?"POST":"GET",headers:{cookie:auth.accessCookie+"="+auth.signAccess(user),origin:"http://test.local","Content-Type":"application/json"},...(body?{body:JSON.stringify(body)}:{})});
  const usage={registeredBy:{id:"forged",login:"fake",name:"Nome falso"},id:"use",date:"2026-10-09",quantity:200,patientId:"patient",patientName:"Paciente",professionalId:"professional",professionalName:"Profissional",createdAt:"2026-10-09T13:00:00Z"};
  const tip=module.recordUltraformerUsage({...module.ultraformerCatalog[0],initialShots:1200},usage);const body={upserts:[{entity:"ultraformer_tips",record_id:tip.id,data:tip}],removed:[]};
+ assert.equal((await route.POST(request(operator,body))).status,403);assert.equal(records.size,0);
+ assert.equal((await route.POST(request(admin,{upserts:[{entity:"ultraformer_tips",record_id:tip.id,data:{...tip,usages:[]}}],removed:[]}))).status,200);
  assert.equal((await route.POST(request(operator,body))).status,200);assert.equal(records.size,1);
  const read=await route.GET(request(operator));assert.equal(read.status,200);const cloud=(await read.json()).records;assert.equal(module.remainingShots(cloud[0]),1000);assert.deepEqual(cloud[0].usages,[{...usage,registeredBy:{id:"operator",login:"operator",name:"Operadora"}}]);
  assert.equal((await route.POST(request(admin,body))).status,200);assert.equal(records.values().next().value.data.usages[0].registeredBy.name,"Operadora");
  assert.equal((await route.POST(request(operator,body))).status,200);assert.equal(records.size,1);assert.equal(records.values().next().value.data.usages.length,1);
+ for(const data of [{...tip,initialShots:9000},{...tip,name:"Forged"},{...tip,usages:[]},{...tip,usages:[{...usage,quantity:1}]}])assert.equal((await route.POST(request(operator,{upserts:[{entity:"ultraformer_tips",record_id:tip.id,data}],removed:[]}))).status,403);
+ assert.equal((await route.POST(request(operator,{upserts:[],removed:[{entity:"ultraformer_tips",ids:[tip.id]}]}))).status,403);
  const invalid={...body,upserts:[{...body.upserts[0],data:{...tip,usages:[{...usage,quantity:-1}]}}]};assert.equal((await route.POST(request(admin,invalid))).status,400);
  failWrites=true;assert.equal((await route.POST(request(operator,body))).status,503);failWrites=false;
+ account.tabs=["Nota Fiscal"];
+ const patient={id:"patient",name:"Patient",cpf:"",futureCredit:50};records.set("patients:patient",{entity:"patients",record_id:"patient",data:patient});
+ const cpfBody={upserts:[{entity:"patients",record_id:"patient",data:{...patient,cpf:"123.456.789-09"}}],removed:[]};
+ assert.equal((await route.POST(request(operator,cpfBody))).status,200);assert.equal(records.get("patients:patient").data.cpf,"123.456.789-09");
+ for(const change of [{name:"Forged"},{futureCredit:100},{cpf:"1"}])assert.equal((await route.POST(request(operator,{upserts:[{entity:"patients",record_id:"patient",data:{...records.get("patients:patient").data,...change}}],removed:[]}))).status,403);
  account.tabs=[];assert.equal((await route.GET(request(operator))).status,403);assert.equal((await route.POST(request(operator,body))).status,403);
  assert.equal((await route.GET(request(admin))).status,200);assert.equal((await route.GET(new Request("http://test.local/api/access/data?entity=ultraformer_tips"))).status,401);
  console.log("PASS: Real Supabase SDK through authenticated data gateway: shots and history saved together, readback, idempotent retry, invalid payload rejection, write-failure reporting, allowed/denied users and unauthenticated blocking. Mocked cloud only.");

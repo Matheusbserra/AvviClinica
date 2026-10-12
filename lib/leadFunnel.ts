@@ -1,3 +1,4 @@
+import { zeroClosedAppointment } from "./calculations";
 import type { Appointment, FollowUpLead, LeadStage, Patient } from "./types";
 export const leadStages: { id: LeadStage; title: string; description: string; color: string }[] = [
   { id: "entry", title: "Leads de Entrada", description: "Conversas iniciadas hoje", color: "#eab308" },
@@ -10,7 +11,7 @@ function phoneKey(phone: string) { const digits = phone.replace(/\D/g, ""); retu
 export function patientForLead(lead: FollowUpLead, patients: Patient[]) { return patients.find((patient) => patient.id === lead.patientId) ?? patients.find((patient) => phoneKey(patient.phone) === phoneKey(lead.phone)); }
 export function appointmentForLead(lead: FollowUpLead, patients: Patient[], appointments: Appointment[]) {
   const patient = patientForLead(lead, patients); if (!patient) return undefined;
-  return appointments.filter((appointment) => appointment.patientId === patient.id && !["Cancelado", "Faltou", "Reagendado"].includes(appointment.status)).sort((a, b) => b.startsAt.localeCompare(a.startsAt))[0];
+  return appointments.filter((appointment) => appointment.patientId === patient.id && !zeroClosedAppointment(appointment) && !["Cancelado", "Faltou", "Reagendado"].includes(appointment.status)).sort((a, b) => b.startsAt.localeCompare(a.startsAt))[0];
 }
 function dayNumber(date: Date) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date).map((part) => [part.type, part.value]));

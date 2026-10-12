@@ -1,4 +1,4 @@
-﻿import type { DiscountSplit, FinancialEntry, FixedCost, RevenueEntry } from "./types";
+﻿import type { Appointment, Service, DiscountSplit, FinancialEntry, FixedCost, RevenueEntry } from "./types";
 
 export type FinancialSummary = {
   grossRevenue: number;
@@ -91,3 +91,28 @@ export function summarizeMonth(revenues: RevenueEntry[], fixedCosts: FixedCost[]
 }
 
 
+
+// A historical import with unknown payments is not proof of a free account.
+export function zeroClosedAppointment(appointment: Appointment, entries: FinancialEntry[] = [], services: Service[] = []) {
+  const legacy = entries.find(entry => entry.id === appointment.financialEntryId && !entry.sourceAccountId);
+  const account = appointment.closedAccount ?? legacy;
+  if (appointment.accountClosed === false || (!appointment.accountClosed && !account?.accountClosed)) return false;
+  if (account && Array.isArray(account.payments)) return Math.round(account.payments.reduce((sum, payment) => sum + payment.amount, 0) * 100) === 0;
+  // Imported free evaluations/returns have an explicit zero service price even
+  // though the source did not export payment methods. Do not count them as paid visits.
+  if (appointment.historicalImport?.paymentsUnknown) {
+    const lines = appointment.services?.length ? appointment.services : appointment.serviceId ? [{ name: services.find(service => service.id === appointment.serviceId)?.name ?? "", price: appointment.servicePrice ?? services.find(service => service.id === appointment.serviceId)?.price }] : [];
+    return lines.length > 0 && lines.every(line => line.price === 0 && /avaliacao|retorno/.test(line.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()));
+  }
+  if (appointment.services?.length) return appointment.services.every(line => line.price === 0);
+  const price = appointment.servicePrice ?? services.find(service => service.id === appointment.serviceId)?.price;
+  return price === 0;
+}
+export function excludeZeroAccounts(appointments: Appointment[], entries: FinancialEntry[], services: Service[] = []) {
+  const excluded = appointments.filter(appointment => zeroClosedAppointment(appointment, entries, services));
+  const appointmentIds = new Set(excluded.map(item => item.id));
+  const entryIds = new Set(excluded.flatMap(item => [item.closedAccount?.id, item.closedAccount?.generatedEntryId, item.financialEntryId]).filter(Boolean));
+  const excludedEntry = (entry: FinancialEntry) => appointmentIds.has(entry.appointmentId ?? "") || entryIds.has(entry.id) || entryIds.has(entry.sourceAccountId) || (entry.accountClosed === true && Array.isArray(entry.payments) && Math.round(entry.payments.reduce((sum, payment) => sum + payment.amount, 0) * 100) === 0);
+  for (const entry of entries) if (excludedEntry(entry)) entryIds.add(entry.id);
+  return { appointments: appointments.filter(item => !appointmentIds.has(item.id)), entries: entries.filter(entry => !excludedEntry(entry)), entryIds };
+}

@@ -9,6 +9,13 @@ export type AppointmentStatus =
   | "Reagendado"
   | "Finalizado";
 
+export type AnamneseRecord = {
+  id: string; patientId: string; professionalId: string; date: string; templateVersion: 1;
+  answers: Record<string, string | string[]>;
+  createdAt: string; updatedAt: string;
+  createdBy: { login: string; name: string }; updatedBy: { login: string; name: string };
+};
+
 export type PaymentMethod = "Pix" | "Débito" | "Crédito" | "Dinheiro" | "Crédito Futuro" | "Transferência Bancária" | "Depósito";
 export type DiscountSplit = "Empresa assume" | "Profissional assume" | "Empresa e profissional dividem";
 export type FixedCostStatus = "Pago" | "Pendente" | "Atrasado";
@@ -35,6 +42,7 @@ export type Professional = {
 };
 
 export type Patient = {
+  photos?: PatientPhoto[];
   id: string;
   email?: string;
   name: string;
@@ -49,6 +57,8 @@ export type Patient = {
   loyaltyPoints?: number;
   notes: string;
 };
+
+export type PatientPhoto = { id: string; name: string; date: string; uploadedBy: string; path?: string; localImage?: string };
 
 export type Procedure = {
   id: string;
@@ -134,6 +144,9 @@ export type FinancialEntry = {
 
 // Billing is stored separately from the independently editable procedure ledger.
 export type ClosedAccount = FinancialEntry & {
+  clinicPatient?: boolean;
+  creditAdded?: number;
+  creditPayments?: PaymentItem[];
   gifts?: GiftUsage[];
   closedAt?: string;
   change?: number;
@@ -144,7 +157,10 @@ export type ClosedAccount = FinancialEntry & {
 
 export type AppointmentService = { id: string; serviceId: string; name: string; price: number; priceType: Service["priceType"]; durationMinutes: number };
 
+export type InvoiceAttachment = { issued: boolean; updatedAt?: string; filename?: string; pdfPath?: string; localPdf?: string };
+
 export type Appointment = {
+  invoice?: InvoiceAttachment;
   historicalImport?: {
     sourceFile: string;
     sourceFingerprint: string;

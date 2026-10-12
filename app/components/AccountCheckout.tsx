@@ -1,16 +1,17 @@
 "use client";
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, UserRound, X } from "lucide-react";
+import { SearchSelect } from "./SearchSelect";
 import { currency } from "@/lib/calculations";
-import { checkoutTotals, checkoutAllowsNoProducts, moneyRound, paymentChoiceKey, paymentChoices, toggleCheckoutPayment } from "@/lib/checkout";
+import { checkoutTotals, checkoutCommission, settleCheckoutPayments, checkoutAllowsNoProducts, moneyRound, paymentChoiceKey, paymentChoices, toggleCheckoutPayment } from "@/lib/checkout";
 import type { Appointment, DiscountSplit, Patient, PaymentItem, Procedure, ProcedureLine, Professional, ProductUsage, Service, GiftStockItem, GiftUsage } from "@/lib/types";
 
 export type CheckoutDraft = {
   appointment: Appointment; client: Patient; professional?: Professional;
   lines: ProcedureLine[]; products: ProductUsage[]; gifts?: GiftUsage[]; payments: PaymentItem[]; entryId?: string;
-  discountSplit: DiscountSplit; notes: string; previousFutureCredit: number;
+  discountSplit: DiscountSplit; notes: string; previousFutureCredit: number; previousCreditAdded?: number; storedCreditPayments?: PaymentItem[]; clinicPatient?: boolean;
 };
-export type CheckoutResult = { client: Patient; lines: ProcedureLine[]; products: ProductUsage[]; gifts: GiftUsage[]; payments: PaymentItem[]; total: number; discount: number; balanceDue: number; change: number };
+export type CheckoutResult = { client: Patient; lines: ProcedureLine[]; products: ProductUsage[]; gifts: GiftUsage[]; payments: PaymentItem[]; total: number; discount: number; balanceDue: number; change: number; creditAdded: number; creditPayments: PaymentItem[]; clinicPatient: boolean };
 
 export function AccountCheckout({ draft, gifts, procedures, services, appointments, onCancel, onConfirm, onDelete }: {
   draft: CheckoutDraft; gifts: GiftStockItem[]; procedures: Procedure[]; services: Service[]; appointments: Appointment[];
@@ -23,14 +24,16 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
   const [products, setProducts] = useState(() => draft.products.map((product) => ({ ...product })));
   const [selectedGifts, setSelectedGifts] = useState(() => (draft.gifts ?? []).map((gift) => ({ ...gift })));
   const [giftId, setGiftId] = useState(""); const [giftQuantity, setGiftQuantity] = useState(1);
-  const [payments, setPayments] = useState(() => draft.payments.map((payment) => ({ ...payment })));
+  const [payments, setPayments] = useState(() => [...draft.payments,...(draft.storedCreditPayments??[])].map((payment) => ({ ...payment })));
   const [editingClient, setEditingClient] = useState(false);
   const [adding, setAdding] = useState<"service" | "product" | "gift" | null>(null);
   const [serviceId, setServiceId] = useState("");
   const [serviceQuantity, setServiceQuantity] = useState(1);
   const [procedureId, setProcedureId] = useState("");
   const [procedureQuantity, setProcedureQuantity] = useState(1);
-  const [allowDebt, setAllowDebt] = useState(false);
+  const [keepCredit, setKeepCredit] = useState((draft.previousCreditAdded??0)>0);
+  const [clinicPatient, setClinicPatient] = useState(draft.clinicPatient ?? false);
+  const availableCredit = moneyRound(Math.max(0,(Number(client.futureCredit)||0)+draft.previousFutureCredit-(draft.previousCreditAdded??0)));
   const [error, setError] = useState("");
   const [closedGroups, setClosedGroups] = useState<string[]>(() => [
     ...(!draft.payments.some((payment) => payment.method === "Transferência Bancária") ? ["Transação bancária"] : []),
@@ -109,18 +112,14 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
     if (selectedGifts.some((gift) => !Number.isSafeInteger(gift.quantity) || gift.quantity <= 0)) { setError("Confira as quantidades dos brindes."); return; }
     if (payments.some((payment) => !Number.isFinite(payment.amount) || payment.amount < 0)) { setError("Confira os valores pagos."); return; }
     const futureCredit = payments.filter((payment) => payment.method === "Crédito Futuro").reduce((sum, payment) => sum + payment.amount, 0);
-    if (futureCredit > (client.futureCredit ?? 0) + draft.previousFutureCredit) { setError("O pagamento com crédito futuro ultrapassa o saldo do cliente."); return; }
-    if (totals.remaining > 0 && !allowDebt) { setError("Informe o pagamento que falta ou marque a opção de deixar o saldo como dívida."); return; }
-    if (totals.change > 0 && payments.filter((payment) => payment.method === "Dinheiro").reduce((sum, payment) => sum + payment.amount, 0) < totals.change) {
-      setError("O valor recebido ultrapassa o total. Ajuste os pagamentos; troco é permitido em dinheiro."); return;
-    }
-    let change = totals.change;
-    const settledPayments = payments.map((payment) => {
-      if (payment.method !== "Dinheiro" || change <= 0) return payment;
-      const returned = Math.min(change, payment.amount); change = moneyRound(change - returned);
-      return { ...payment, amount: moneyRound(payment.amount - returned) };
-    });
-    onConfirm({ client, lines, products, gifts: selectedGifts, payments: settledPayments, total: totals.total, discount: totals.discount, balanceDue: totals.remaining, change: totals.change });
+    if (futureCredit > availableCredit) { setError("O pagamento com crédito futuro ultrapassa o saldo do cliente."); return; }
+    if (totals.remaining > 0) { setError("Informe o pagamento que falta para fechar a conta."); return; }
+    try {
+      const settled = settleCheckoutPayments(payments,totals.change,keepCredit);
+      const professionalPercent=checkoutCommission(draft.professional?.commissionPercent??0,clinicPatient);
+      onConfirm({ client, lines: lines.map(line=>({...line,professionalPercent})), products, gifts: selectedGifts, ...settled, clinicPatient, total: totals.total, discount: totals.discount, balanceDue: totals.remaining });
+    } catch (error) {setError(error instanceof Error?error.message:"Confira os pagamentos.");}
+
   }
   return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-2 sm:p-4">
     <form onSubmit={confirm} role="dialog" aria-modal="true" aria-label="Fechamento de conta" className="flex max-h-[96vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-panel">
@@ -138,12 +137,12 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
             <button type="button" onClick={() => setAdding(adding === "gift" ? null : "gift")} className="flex items-center gap-2 rounded-md bg-lime-300 px-4 py-2 text-sm font-bold text-slate-800 hover:bg-lime-400"><Plus size={16} />Brindes</button>
           </div>
           {adding === "service" && <div className="mb-4 grid gap-3 rounded-md border border-lime-200 bg-lime-50 p-3 sm:grid-cols-[1fr_100px_auto]">
-            <label className="text-xs font-semibold">Serviço<select aria-label="Adicionar serviço à conta" className="input mt-1" value={serviceId} onChange={(event) => setServiceId(event.target.value)}><option value="">Selecione</option>{services.filter((service) => service.active).slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}</select></label>
+            <label className="text-xs font-semibold">Serviço<SearchSelect label="Adicionar serviço à conta" options={services.filter(service=>service.active)} value={serviceId} onChange={setServiceId}/></label>
             <label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do serviço a adicionar" className="input mt-1" type="number" min={1} step={1} value={serviceQuantity} onChange={(event) => setServiceQuantity(Number(event.target.value))} /></label>
             <button type="button" disabled={!serviceId || !Number.isInteger(serviceQuantity) || serviceQuantity < 1} onClick={addService} className="self-end rounded-md bg-lime-400 px-3 py-2 text-sm font-bold disabled:opacity-40">Adicionar serviço</button>
           </div>}
           {adding === "product" && <div className="mb-4 grid gap-3 rounded-md border border-lime-200 bg-lime-50 p-3 sm:grid-cols-[1fr_100px_auto]">
-            <label className="text-xs font-semibold">Produto<select aria-label="Adicionar produto ao consumo" className="input mt-1" value={procedureId} onChange={(event) => setProcedureId(event.target.value)}><option value="">Selecione</option>{procedures.filter((procedure) => procedure.active).slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((procedure) => <option key={procedure.id} value={procedure.id}>{procedure.name}</option>)}</select></label>
+            <label className="text-xs font-semibold">Produto<SearchSelect label="Adicionar produto ao consumo" options={procedures.filter(procedure=>procedure.active)} value={procedureId} onChange={setProcedureId}/></label>
             <label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do produto a adicionar" className="input mt-1" type="number" min={1} step={1} value={procedureQuantity} onChange={(event) => setProcedureQuantity(Number(event.target.value))} /></label>
             <button type="button" disabled={!procedureId || !Number.isInteger(procedureQuantity) || procedureQuantity < 1} onClick={addProduct} className="self-end rounded-md bg-lime-400 px-3 py-2 text-sm font-bold disabled:opacity-40">Adicionar produto</button>
           </div>}
@@ -168,10 +167,14 @@ export function AccountCheckout({ draft, gifts, procedures, services, appointmen
             const selected = payments.filter((payment) => paymentChoiceKey(payment) === choice.id);
             return <div key={choice.id} className="px-1 py-2"><label className="flex items-center gap-2 text-xs text-slate-600"><input aria-label={`Receber por ${choice.label}`} type="checkbox" checked={selected.length > 0} onChange={() => setPayments((current) => toggleCheckoutPayment(current, choice, totals.total))} className="h-4 w-4 accent-lime-600" />{choice.label}</label>{selected.length > 0 && <div className="mt-2 flex items-center gap-2"><span className="text-xs text-slate-500">R$</span><input aria-label={`Valor pago por ${choice.label}`} type="number" min={0} step="0.01" value={moneyRound(selected.reduce((sum, payment) => sum + payment.amount, 0))} onChange={(event) => updatePayment(choice.id, Number(event.target.value))} className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-right text-sm" />{choice.method === "Crédito" && <select aria-label={`Parcelas de ${choice.label}`} value={selected[0].installments ?? 1} onChange={(event) => setPayments((current) => current.map((payment) => paymentChoiceKey(payment) === choice.id ? { ...payment, installments: Number(event.target.value) } : payment))} className="rounded border border-slate-300 py-1 text-xs">{Array.from({ length: 12 }, (_, index) => <option key={index} value={index + 1}>{index + 1}x</option>)}</select>}</div>}</div>;
           })}</div>}</section>)}
-          <div className="rounded-md bg-white p-3 text-sm shadow-panel"><div className="flex justify-between border-b py-2"><span>Total</span><strong data-testid="checkout-total">{currency(totals.total)}</strong></div><div className="flex justify-between border-b py-2"><span>Recebido</span><strong data-testid="checkout-received" className="text-emerald-600">{currency(totals.received)}</strong></div><div className="flex justify-between py-2"><span>Falta</span><strong data-testid="checkout-remaining" className="text-red-500">{currency(totals.remaining)}</strong></div>{totals.change > 0 && <div className="flex justify-between py-2"><span>Troco</span><strong>{currency(totals.change)}</strong></div>}<label className="mt-3 flex items-start gap-2 text-xs text-slate-500"><input type="checkbox" checked={allowDebt} onChange={(event) => setAllowDebt(event.target.checked)} className="mt-0.5" />Deixar o que falta como dívida</label></div>
+          <div className="rounded-md bg-white p-3 text-sm shadow-panel"><div className="flex justify-between border-b py-2"><span>Total</span><strong data-testid="checkout-total">{currency(totals.total)}</strong></div><div className="flex justify-between border-b py-2"><span>Recebido</span><strong data-testid="checkout-received" className="text-emerald-600">{currency(totals.received)}</strong></div><div className="flex justify-between py-2"><span>Falta</span><strong data-testid="checkout-remaining" className="text-red-500">{currency(totals.remaining)}</strong></div>{totals.change > 0 && <div className="flex justify-between py-2"><span>{keepCredit?"Crédito a guardar":"Troco"}</span><strong data-testid="checkout-excess">{currency(totals.change)}</strong></div>}<div className="mt-3 space-y-3"><CheckoutSwitch label="Guardar valor pago a mais como crédito" checked={keepCredit} onChange={setKeepCredit}/><CheckoutSwitch label="Paciente da clínica" checked={clinicPatient} onChange={setClinicPatient}/><p className="text-xs text-slate-500">Crédito disponível: <strong data-testid="checkout-credit-balance">{currency(availableCredit)}</strong></p></div></div>
         </aside>
       </div>
       <footer className="shrink-0 border-t border-avvi-line px-5 py-4">{allowsNoProducts && <p className="mb-2 text-xs text-slate-500">Avaliação ou retorno: produtos são opcionais. Para fechar sem cobrança, deixe o valor a pagar em R$ 0,00. Sem produtos, não será gerado um lançamento de procedimentos.</p>}{error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}<div className="flex justify-end gap-3"><button type="button" onClick={onCancel} className="rounded border border-orange-500 px-4 py-2 text-sm font-semibold text-orange-600">Cancelar</button>{onDelete && <button type="button" aria-label="Excluir conta fechada" title="Excluir conta fechada" onClick={onDelete} className="rounded-md border border-red-200 p-2 text-red-600 hover:bg-red-50"><Trash2 size={18} /></button>}<button type="submit" className="rounded bg-orange-500 px-5 py-2 text-sm font-bold text-white hover:bg-orange-600">Fechar Conta</button></div></footer>
     </form>
   </div>;
+}
+
+function CheckoutSwitch({label,checked,onChange}:{label:string;checked:boolean;onChange:(checked:boolean)=>void}) {
+ return <label className="flex cursor-pointer items-center justify-between gap-3 text-xs text-slate-600"><span>{label}</span><input type="checkbox" role="switch" aria-label={label} checked={checked} onChange={event=>onChange(event.target.checked)} className="peer sr-only"/><span aria-hidden="true" className={`relative h-5 w-9 shrink-0 rounded-full transition peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-avvi-blue ${checked?"bg-avvi-blue":"bg-slate-300"}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${checked?"left-[18px]":"left-0.5"}`}/></span></label>;
 }

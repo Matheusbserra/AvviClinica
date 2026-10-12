@@ -3,7 +3,8 @@ import type { ClosedAccount, FinancialEntry, Procedure, Professional, ProcedureL
 // Keep catalog prices and share only the difference equally between product rows.
 // Include the explicit discount before comparing the catalog total with the amount received.
 export function procedureEntryFromAccount(account: ClosedAccount, procedures: Procedure[], professional?: Professional): FinancialEntry | undefined {
-  if (!account.products.length) return undefined;
+  if (!account.products.length || account.payments.reduce((sum, payment) => sum + payment.amount, 0) <= 0) return undefined;
+  const commission=account.clinicPatient === undefined ? professional?.commissionPercent ?? 0 : account.professionalPercent;
   const received = Math.round(account.payments.reduce((sum, payment) => sum + payment.amount, 0) * 100);
   const discount = Math.round(account.commercialDiscount * 100);
   const gross = received + discount;
@@ -32,7 +33,7 @@ export function procedureEntryFromAccount(account: ClosedAccount, procedures: Pr
     id: `line-${crypto.randomUUID()}`, procedureId: product.procedureId,
     manualProcedure: procedures.find((procedure) => procedure.id === product.procedureId)?.name ?? "Produto registrado",
     quantity: product.quantity, servicePrice: allocated[index] / 100 / product.quantity,
-    productCost: product.unitCost, professionalPercent: professional?.commissionPercent ?? 0
+    productCost: product.unitCost, professionalPercent: commission
   }));
   const first = lines[0];
   return { id: `procedure-account-${account.id}`, sourceAccountId: account.id, appointmentId: account.appointmentId,

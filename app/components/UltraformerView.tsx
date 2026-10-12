@@ -52,11 +52,12 @@ export function UltraformerView({ user, tips, setTips, patients, professionals }
   const pages = Math.max(1, Math.ceil(historyRows.length / 8));
   const page = Math.min(history?.page ?? 0, pages - 1);
   function edit(tip: UltraformerTip) {
+    if (user.role !== "admin") return;
     setUsageTip(null); setError(""); setNotice("");
     setEditor({ id: tip.id, name: tip.name, depth: tip.depth, kind: tip.kind, color: tip.color, quantity: String(remainingShots(tip)) });
   }
   function saveTip(event: FormEvent) {
-    event.preventDefault(); if (!editor) return;
+    event.preventDefault(); if (!editor || user.role !== "admin") return;
     const current = all.find(tip => tip.id === editor.id);
     const quantity = Number(editor.quantity);
     const updated: UltraformerTip = { id: editor.id, name: editor.name.trim(), depth: editor.depth.trim(), kind: editor.kind, color: editor.color, initialShots: quantity + (current?.usages.reduce((sum,row) => sum + row.quantity,0) ?? 0), usages: current?.usages ?? [] };
@@ -84,7 +85,7 @@ export function UltraformerView({ user, tips, setTips, patients, professionals }
       {rows.map(tip => <Fragment key={tip.id}>
         <div data-testid={`ultraformer-tip-${tip.id}`} className="grid min-h-0 grid-cols-[minmax(0,1fr)_70px_75px] items-center gap-1 border-b border-avvi-line px-1 last:border-0 sm:grid-cols-[minmax(0,1fr)_125px_165px] sm:gap-3 sm:px-2">
           <div className="flex h-full min-h-0 min-w-0 items-center gap-2"><div className="ultraformer-icon-wrap rounded-lg" style={{ backgroundColor: `${tip.color}0b` }}><TipIcon tip={tip}/></div><h3 className="ultraformer-name min-w-0 font-bold">{tip.name}</h3></div>
-          <div className="flex items-center gap-2"><div><strong data-testid={`shots-${tip.id}`} className={`ultraformer-balance tabular-nums ${remainingShots(tip) < 0 ? "text-red-600" : "text-avvi-ink"}`}>{number(remainingShots(tip))}</strong><span className="ml-1 text-[10px] text-slate-400 sm:hidden">disparos</span></div><button aria-label={`Editar ${tip.name}`} onClick={() => edit(tip)} className="rounded-lg p-1 text-slate-400 hover:bg-avvi-soft hover:text-avvi-blue"><Pencil size={14}/></button></div>
+          <div className="flex items-center gap-2"><div><strong data-testid={`shots-${tip.id}`} className={`ultraformer-balance tabular-nums ${remainingShots(tip) < 0 ? "text-red-600" : "text-avvi-ink"}`}>{number(remainingShots(tip))}</strong><span className="ml-1 text-[10px] text-slate-400 sm:hidden">disparos</span></div>{user.role === "admin" && <button aria-label={`Editar ${tip.name}`} onClick={() => edit(tip)} className="rounded-lg p-1 text-slate-400 hover:bg-avvi-soft hover:text-avvi-blue"><Pencil size={14}/></button>}</div>
           <div className="flex min-h-0 items-center justify-end gap-1 sm:gap-2"><button aria-label={`Registrar disparos de ${tip.name}`} aria-expanded={usageTip === tip.id} onClick={() => { setUsageTip(usageTip === tip.id ? null : tip.id); setUsage({ quantity: "", date: localDate(), patientId: "", professionalId: "" }); setError(""); setNotice(""); }} className={`rounded-lg border p-1.5 sm:p-2 ${usageTip === tip.id ? "border-avvi-blue bg-avvi-soft text-avvi-blue" : "border-avvi-line text-slate-500 hover:bg-avvi-soft"}`}><ChevronDown size={17} className={usageTip === tip.id ? "rotate-180" : ""}/></button><button aria-label={`Histórico de ${tip.name}`} onClick={() => { setHistory({ id: tip.id, page: 0 }); setError(""); }} className="flex items-center gap-1.5 rounded-lg border border-avvi-line px-1.5 py-1.5 text-xs sm:px-2 sm:py-2 font-semibold text-slate-600 hover:bg-slate-50"><History size={15}/><span className="hidden sm:inline">Histórico</span></button></div>
         </div>
       </Fragment>)}
@@ -101,7 +102,7 @@ export function UltraformerView({ user, tips, setTips, patients, professionals }
           <div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => { setUsageTip(null); setError(""); }} className="rounded-lg border border-avvi-line bg-white px-4 py-2 text-xs">Cancelar</button><button type="submit" className="rounded-lg bg-avvi-blue px-4 py-2 text-xs font-bold text-white">Registrar disparos</button></div>
         </form></section></div>)}
     </div>
-    {editor && <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/40 p-3"><section role="dialog" aria-modal="true" aria-label="Dados da ponteira" className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-panel">
+    {user.role === "admin" && editor && <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/40 p-3"><section role="dialog" aria-modal="true" aria-label="Dados da ponteira" className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-panel">
       <header className="mb-4 flex items-center justify-between"><h3 className="font-bold">Dados da ponteira</h3><button aria-label="Fechar edição da ponteira" onClick={() => { setEditor(null); setError(""); }} className="rounded p-1 text-slate-500"><X size={20}/></button></header>
       <form onSubmit={saveTip} className="space-y-3"><label className="block text-xs font-semibold text-slate-500">Nome<input autoFocus aria-label="Nome da ponteira" required maxLength={100} className="input mt-1" value={editor.name} onChange={event => setEditor({ ...editor, name: event.target.value })}/></label>
         <div className="grid grid-cols-2 gap-3"><label className="text-xs font-semibold text-slate-500">Modelo<select aria-label="Modelo da ponteira" className="input mt-1" value={editor.kind} onChange={event => setEditor({ ...editor, kind: event.target.value as Editor["kind"] })}><option value="linear">Ponteira maior</option><option value="booster">Skin Booster</option></select></label><label className="text-xs font-semibold text-slate-500">Profundidade<input aria-label="Profundidade da ponteira" maxLength={30} className="input mt-1" value={editor.depth} onChange={event => setEditor({ ...editor, depth: event.target.value })}/></label></div>

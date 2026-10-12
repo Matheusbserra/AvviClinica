@@ -5,7 +5,7 @@ import { accountStorageMode } from "@/lib/accountsServer";
 import { limitedProfessionalReports } from "@/lib/professionalReportAccess";
 import { reportCapacity } from "@/lib/reports";
 import type { MonthlyGoals } from "@/lib/database";
-import type { Appointment, FinancialEntry, Patient, Professional, Service } from "@/lib/types";
+import type { Appointment, FinancialEntry, Patient, Procedure, Professional, Service } from "@/lib/types";
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "private, no-store", "Vary": "Cookie" };
 export async function GET(request: Request) {
@@ -17,7 +17,7 @@ export async function GET(request: Request) {
   try {
     if (accountStorageMode() === "local") {
       const seed = await import("@/lib/seed"), { importedServices } = await import("@/lib/importedServices");
-      return Response.json(limitedProfessionalReports(user, { start, end, professionals: seed.professionals, patients: seed.patients, entries: seed.financialEntries, appointments: seed.appointments, services: importedServices, monthlyGoals: [] }), { headers });
+      return Response.json(limitedProfessionalReports(user, { start, end, professionals: seed.professionals, patients: seed.patients, entries: seed.financialEntries, appointments: seed.appointments, services: importedServices, procedures: seed.procedures, monthlyGoals: [] }), { headers });
     }
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!.trim().replace(/\/+$/, "").replace(/\/(rest|auth)\/v1$/i, ""), key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
     if (!key) throw new Error("Conexão privada não configurada.");
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
         result.push(...data.map(row => row.data as T)); if (data.length < 500) return result;
       }
     }
-    const [professionals, patients, entries, appointments, services, monthlyGoals] = await Promise.all([rows<Professional>("professionals"), rows<Patient>("patients"), rows<FinancialEntry>("financial_entries"), rows<Appointment>("appointments"), rows<Service>("services"), rows<MonthlyGoals>("monthly_goals")]);
-    return Response.json(limitedProfessionalReports(user, { start, end, professionals, patients, entries, appointments, services, monthlyGoals }), { headers });
+    const [professionals, patients, entries, appointments, services, procedures, monthlyGoals] = await Promise.all([rows<Professional>("professionals"), rows<Patient>("patients"), rows<FinancialEntry>("financial_entries"), rows<Appointment>("appointments"), rows<Service>("services"), rows<Procedure>("procedures"), rows<MonthlyGoals>("monthly_goals")]);
+    return Response.json(limitedProfessionalReports(user, { start, end, professionals, patients, entries, appointments, services, procedures, monthlyGoals }), { headers });
   } catch { return Response.json({ error: "Não foi possível consultar o relatório permitido na nuvem. Tente novamente." }, { status: 503, headers }); }
 }

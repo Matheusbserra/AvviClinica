@@ -43,3 +43,16 @@ export function recordUltraformerUsage(tip: UltraformerTip, usage: UltraformerUs
   if (!isUltraformerTip(updated)) throw new Error("Quantidade de disparos inválida.");
   return updated;
 }
+
+// Standard users can append usage only, with an unchanged balance base and history.
+export function usageOnlyTipUpdate(previous: UltraformerTip | undefined, next: UltraformerTip) {
+  const original = previous ?? ultraformerCatalog.find(tip => tip.id === next.id);
+  if (!original || !isUltraformerTip(next)) return false;
+  const stable = (value: unknown): string => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+  const metadata = (tip: UltraformerTip) => Object.fromEntries(Object.entries(tip).filter(([key]) => key !== "usages"));
+  const normalized = availableUltraformerTips([original]).find(tip => tip.id === original.id)!;
+  if (stable(metadata(original)) !== stable(metadata(next)) && stable(metadata(normalized)) !== stable(metadata(next))) return false;
+  if (next.usages.length < original.usages.length) return false;
+  const content = (usage: UltraformerUsage) => Object.fromEntries(Object.entries(usage).filter(([key]) => key !== "registeredBy"));
+  return original.usages.every((usage, index) => stable(content(usage)) === stable(content(next.usages[index])));
+}
