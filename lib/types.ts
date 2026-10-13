@@ -240,8 +240,10 @@ export type Receipt = {
   patientName: string;
   cpf: string;
   procedure: string;
+  services?: { serviceId: string; name: string }[];
   amount: number;
   paymentMethod: PaymentMethod;
+  payments?: { method: PaymentMethod; amount: number }[];
   date: string;
   professionalId: string;
   notes: string;

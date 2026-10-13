@@ -8,8 +8,8 @@ export type IndividualRanking = { id: string; name: string; value: number };
 export type MonthlyProfessionalInsights = {
   month: string; averageTicket: number; previousTicket: number | null;
   ticketChange: number | null; ticketChangePercent: number | null;
-  patientCount: number; monthlyPatientAverage: number | null;
-  patientChange: number | null; historyMonths: number; newPatientCount: number;
+  patientCount: number; previousPatientCount: number;
+  patientChange: number; newPatientCount: number;
   evaluationOnlyPatientCount: number; returnCount: number;
 };
 export type ProfessionalReport = {
@@ -110,15 +110,11 @@ export function professionalReports(input: Parameters<typeof periodProfessionalR
   // In date-range mode the indicators explicitly identify the last calendar
   // month in the range. Range totals and rankings retain their original period.
   const month = input.end.slice(0, 7), period = reportMonthPeriod(month)!;
-  const previousMonths = Array.from({ length: 6 }, (_, index) => {
-    const date = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 2 - index, 1));
-    return date.toISOString().slice(0, 7);
-  });
+  const previousMonth = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 2, 1)).toISOString().slice(0, 7);
   const current = input.start === period.start && input.end === period.end ? result : periodProfessionalReports({ ...input, ...period });
-  const history = previousMonths.map(value => ({ month: value, reports: periodProfessionalReports({ ...input, ...reportMonthPeriod(value)! }).reports }));
+  const previousReports = periodProfessionalReports({ ...input, ...reportMonthPeriod(previousMonth)! }).reports;
   const visits = professionalVisits(input);
   const firstVisits = new Map<string, Map<string, string>>();
-  const firstMonths = new Map<string, string>();
   const paidPatients = new Map<string, Map<string, Set<string>>>();
   const addVisit = (professionalId: string, patientId: string | undefined, date: string, key: string) => {
     date = date.slice(0, 10);
@@ -128,7 +124,6 @@ export function professionalReports(input: Parameters<typeof periodProfessionalR
     const patients = months.get(activityMonth) ?? new Set<string>();
     patients.add(patientId || `unknown:${key}`);
     months.set(activityMonth, patients); paidPatients.set(professionalId, months);
-    if (!firstMonths.has(professionalId) || activityMonth < firstMonths.get(professionalId)!) firstMonths.set(professionalId, activityMonth);
     if (!patientId) return;
     const visits = firstVisits.get(professionalId) ?? new Map<string, string>();
     if (!visits.has(patientId) || date < visits.get(patientId)!) visits.set(patientId, date);
@@ -142,20 +137,16 @@ export function professionalReports(input: Parameters<typeof periodProfessionalR
     const convertedPatients = new Set(monthlyVisits.filter(visit => visit.positiveClosed && visit.services.some(line => !clinicalService(line.name))).map(visit => visit.patientId).filter(Boolean));
     const evaluationPatients = new Set(monthlyVisits.filter(visit => visit.performed && visit.services.some(line => clinicalService(line.name) === "evaluation")).map(visit => visit.patientId).filter(Boolean));
     const patientCount = paidPatients.get(id)?.get(month)?.size ?? 0;
-    const previous = history[0].reports.find(row => row.professional.id === id)!;
-    const firstMonth = firstMonths.get(id);
-    const availableHistory = firstMonth ? history.filter(value => value.month >= firstMonth) : [];
-    const monthlyPatientAverage = availableHistory.length
-      ? availableHistory.reduce((sum, value) => sum + (paidPatients.get(id)?.get(value.month)?.size ?? 0), 0) / availableHistory.length : null;
+    const previous = previousReports.find(row => row.professional.id === id)!;
+    const previousPatientCount = paidPatients.get(id)?.get(previousMonth)?.size ?? 0;
     const previousTicket = previous.closedPatientCount > 0 ? previous.averageTicket : null;
     item.monthlyInsights = {
       month, averageTicket: round(selected.averageTicket), previousTicket: previousTicket === null ? null : round(previousTicket),
       ticketChange: previousTicket === null ? null : round(selected.averageTicket - previousTicket),
       ticketChangePercent: previousTicket === null || previousTicket === 0 ? null : round((selected.averageTicket - previousTicket) / previousTicket * 100),
       patientCount,
-      monthlyPatientAverage: monthlyPatientAverage === null ? null : round(monthlyPatientAverage),
-      patientChange: monthlyPatientAverage === null ? null : round(patientCount - monthlyPatientAverage),
-      historyMonths: availableHistory.length,
+      previousPatientCount,
+      patientChange: patientCount - previousPatientCount,
       newPatientCount: [...(firstVisits.get(id)?.values() ?? [])].filter(date => date >= period.start && date <= period.end).length,
       evaluationOnlyPatientCount: [...evaluationPatients].filter(patientId => !convertedPatients.has(patientId)).length,
       returnCount: monthlyVisits.filter(visit => visit.performed).reduce((sum, visit) => sum + visit.services.filter(line => clinicalService(line.name) === "return").reduce((total, line) => total + line.quantity, 0), 0),

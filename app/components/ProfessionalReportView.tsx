@@ -93,8 +93,8 @@ function MonthlyInsights({name, values}: {name: string; values: MonthlyProfessio
     <p className="mb-2 text-[10px] font-semibold capitalize text-slate-500">{month}</p>
     <div className="space-y-2 text-xs">
       <InsightLine label="Ticket médio vs. mês anterior" change={values.ticketChange} value={ticket}/>
-      <div title={`Média de pacientes únicos em ${values.historyMonths} meses anteriores, até seis meses. Meses sem atendimento dentro do histórico contam como zero.`}>
-        <InsightLine label="Pacientes atendidos" change={values.patientChange} value={<><span>{number(values.patientCount)}</span><span className="text-[10px] font-normal text-slate-500">· {values.monthlyPatientAverage === null ? "Sem média anterior" : `Média dos meses anteriores: ${number(values.monthlyPatientAverage)}`}</span></>}/>
+      <div title="Pacientes únicos com conta fechada e valor positivo, comparados ao mês anterior. Retornos e avaliações zerados não entram.">
+        <InsightLine label="Pacientes atendidos" change={values.patientChange} value={<><span>{number(values.patientCount)}</span><span className="text-[10px] font-normal text-slate-500">· Pacientes no mês anterior: {number(values.previousPatientCount)}</span></>}/>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2" title="Primeira conta fechada e não zerada com esta profissional."><span className="text-slate-600">Pacientes novos</span><strong className="inline-flex items-center gap-1 text-avvi-blue"><UserPlus size={14}/>{values.newPatientCount}</strong></div>
       <div className="flex flex-wrap items-center justify-between gap-2" title="Pacientes únicos que realizaram avaliação no mês e não fecharam outro serviço com esta profissional no mesmo mês."><span className="text-slate-600">Pacientes só de avaliação</span><strong className="text-avvi-blue">{values.evaluationOnlyPatientCount}</strong></div>

@@ -101,6 +101,7 @@ import { MovementsView } from "@/app/components/MovementsView";
 import { ReportsView } from "@/app/components/ReportsView";
 import { dashboardPeriod } from "@/lib/dashboard";
 import { ProfessionalReportView } from "@/app/components/ProfessionalReportView";
+import { createPatientReceiptPdf, receiptServiceNames, receiptPayments, receiptPaymentTotal } from "@/lib/patientReceiptPdf";
 import type { AppRole, AppUser } from "@/lib/access";
 
 type Tab = "Estratégias" | "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
@@ -468,6 +469,7 @@ export default function Home() {
   const [appointmentForm, setAppointmentForm] = useState(makeAppointmentForm("ana", selectedDate, 8));
   const [entryForm, setEntryForm] = useState(makeEntryForm());
   const [receiptForm, setReceiptForm] = useState(makeReceiptForm());
+  const [receiptBusy, setReceiptBusy] = useState(false);
   const [procedureForm, setProcedureForm] = useState(makeProcedureForm());
   const [patientForm, setPatientForm] = useState(makePatientForm());
   const [professionalForm, setProfessionalForm] = useState(makeProfessionalForm());
@@ -1366,33 +1368,35 @@ export default function Home() {
     });
   }
 
-  function savePatientReceiptPdf(receipt: Receipt) {
+  async function savePatientReceiptPdf(receipt: Receipt) {
     const professional = professionals.find((item) => item.id === receipt.professionalId);
-    const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text("AVVI Clínica", 20, 22);
-    doc.setFontSize(12);
-    doc.text("Recibo de Pagamento", 20, 34);
-    doc.line(20, 39, 190, 39);
-    doc.text(`Paciente: ${receipt.patientName}`, 20, 52);
-    doc.text(`CPF: ${receipt.cpf}`, 20, 62);
-    doc.text(`Procedimento: ${receipt.procedure}`, 20, 72);
-    doc.text(`Valor pago: ${currency(Number(receipt.amount))}`, 20, 82);
-    doc.text(`Forma de pagamento: ${receipt.paymentMethod}`, 20, 92);
-    doc.text(`Data: ${formatDate(receipt.date)}`, 20, 102);
-    doc.text(`Profissional: ${professional?.name ?? ""}`, 20, 112);
-    doc.text(`Observações: ${receipt.notes || "-"}`, 20, 122);
-    doc.text("Declaro o recebimento do valor acima referente ao procedimento informado.", 20, 146);
-    doc.line(55, 172, 155, 172);
-    doc.text("AVVI Clínica", 88, 180);
-    doc.save(`recibo-avvi-${receipt.patientName || "paciente"}.pdf`);
+    try {
+      const logo = await imageToDataUrl("/logo-avvi.png");
+      if (!logo) throw new Error("Não foi possível carregar o logo. Tente gerar o recibo novamente.");
+      const doc = createPatientReceiptPdf(receipt, professional?.name ?? "", logo);
+      doc.save(`recibo-avvi-${receipt.patientName || "paciente"}.pdf`);
+      return true;
+    } catch {
+      window.alert("Não foi possível gerar o PDF do recibo com o logo. Tente novamente.");
+      return false;
+    }
   }
 
-  function generateReceipt() {
-    const receipt = { ...receiptForm, id: id("receipt"), amount: Number(receiptForm.amount) || 0 };
-    savePatientReceiptPdf(receipt);
-    setReceipts((current) => [receipt, ...current]);
-    setReceiptForm(makeReceiptForm());
+  async function generateReceipt() {
+    if (receiptBusy) return;
+    const selected = (receiptForm.services ?? []).filter(service => service.serviceId);
+    const payments = receiptPayments(receiptForm).map(payment => ({ ...payment, amount: Math.round(payment.amount * 100) / 100 }));
+    if (!receiptForm.patientName.trim()) { window.alert("Informe o nome do paciente."); return; }
+    if (payments.some(payment => !Number.isFinite(payment.amount) || payment.amount <= 0) || !payments.length) { window.alert("Informe um valor maior que zero em cada forma de pagamento."); return; }
+    if (payments.some(payment => payment.method !== "Crédito Futuro") && !selected.length) { window.alert("Selecione pelo menos um serviço para o recibo."); return; }
+    const receipt = { ...receiptForm, services: selected, procedure: selected.map(service => service.name).join("; "), payments, paymentMethod: payments[0].method, id: id("receipt"), amount: receiptPaymentTotal(payments) };
+    setReceiptBusy(true);
+    try {
+      if (await savePatientReceiptPdf(receipt)) {
+        setReceipts((current) => [receipt, ...current]);
+        setReceiptForm({...makeReceiptForm(), id: id("receipt-form")});
+      }
+    } finally { setReceiptBusy(false); }
   }
 
   async function saveProfessionalReceiptPdf(selectedEntries: FinancialEntry[], professionalId: string, issuedAt: string) {
@@ -1741,6 +1745,8 @@ export default function Home() {
               setReceiptForm={setReceiptForm}
               receipts={receipts}
               professionals={professionals}
+              services={services}
+              busy={receiptBusy}
               generateReceipt={generateReceipt}
               reopenReceipt={savePatientReceiptPdf}
               professionalName={professionalName}
@@ -2402,7 +2408,12 @@ function ProcedureDetailPanel({ entry, procedures, procedureName }: { entry: Fin
   );
 }
 
-function ReceiptsView({ receiptForm, setReceiptForm, receipts, professionals, generateReceipt, reopenReceipt, professionalName }: { receiptForm: ReturnType<typeof makeReceiptForm>; setReceiptForm: (form: ReturnType<typeof makeReceiptForm>) => void; receipts: Receipt[]; professionals: Professional[]; generateReceipt: () => void; reopenReceipt: (receipt: Receipt) => void; professionalName: (id?: string) => string }) {
+function ReceiptsView({ receiptForm, setReceiptForm, receipts, professionals, services, busy, generateReceipt, reopenReceipt, professionalName }: { receiptForm: ReturnType<typeof makeReceiptForm>; setReceiptForm: (form: ReturnType<typeof makeReceiptForm>) => void; receipts: Receipt[]; professionals: Professional[]; services: Service[]; busy: boolean; generateReceipt: () => void; reopenReceipt: (receipt: Receipt) => void; professionalName: (id?: string) => string }) {
+  const lines = receiptForm.services ?? [];
+  const payments = receiptPayments(receiptForm);
+  function updatePayments(next: NonNullable<Receipt["payments"]>) {
+    setReceiptForm({ ...receiptForm, payments: next, amount: receiptPaymentTotal(next), paymentMethod: next[0]?.method ?? "Pix" });
+  }
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
       <Panel>
@@ -2410,14 +2421,21 @@ function ReceiptsView({ receiptForm, setReceiptForm, receipts, professionals, ge
         <div className="grid gap-3 md:grid-cols-2">
           <FormField label="Nome do paciente"><input className="input" value={receiptForm.patientName} onChange={(event) => setReceiptForm({ ...receiptForm, patientName: event.target.value })} /></FormField>
           <FormField label="CPF"><input className="input" value={receiptForm.cpf} onChange={(event) => setReceiptForm({ ...receiptForm, cpf: event.target.value })} /></FormField>
-          <FormField label="Procedimento"><input className="input" value={receiptForm.procedure} onChange={(event) => setReceiptForm({ ...receiptForm, procedure: event.target.value })} /></FormField>
-          <FormField label="Valor pago"><MoneyInput value={Number(receiptForm.amount)} onChange={(value) => setReceiptForm({ ...receiptForm, amount: value })} /></FormField>
-          <FormField label="Forma de pagamento"><select className="input" value={receiptForm.paymentMethod} onChange={(event) => setReceiptForm({ ...receiptForm, paymentMethod: event.target.value as PaymentMethod })}>{paymentMethods.map((method) => <option key={method}>{method}</option>)}</select></FormField>
+          <div className="md:col-span-2"><p className="text-xs font-semibold text-slate-600">Serviços</p><div className="mt-1 space-y-2">{lines.map((line, index) => <div key={`${receiptForm.id}-${index}`} className="flex items-start gap-2"><div className="min-w-0 flex-1"><SearchSelect label={`Serviço do recibo ${index + 1}`} options={services.filter(service => service.active !== false || service.id === line.serviceId)} value={line.serviceId} onChange={serviceId => setReceiptForm({...receiptForm, services: lines.map((item, position) => position === index ? {serviceId, name: services.find(service => service.id === serviceId)?.name ?? ""} : item)})}/></div><button type="button" aria-label={`Remover serviço do recibo ${index + 1}`} onClick={() => setReceiptForm({...receiptForm, services: lines.filter((_, position) => position !== index)})} className="mt-1 rounded border border-avvi-line p-2 text-avvi-red"><Trash2 size={16}/></button></div>)}</div><button type="button" onClick={() => setReceiptForm({...receiptForm, services: [...lines, {serviceId: "", name: ""}]})} className="mt-2 inline-flex items-center gap-1 rounded bg-avvi-blue px-3 py-2 text-xs font-bold text-white"><Plus size={14}/>Serviços</button></div>
+          <div className="md:col-span-2">
+            <p className="text-xs font-semibold text-slate-600">Formas de pagamento</p>
+            <div className="mt-2 space-y-2">{payments.map((payment, index) => <div key={index} className="flex items-end gap-2">
+              <div className="min-w-0 flex-1"><FormField label="Forma de pagamento"><select aria-label={`Forma de pagamento ${index + 1}`} className="input" value={payment.method} onChange={event => updatePayments(payments.map((item, position) => position === index ? { ...item, method: event.target.value as PaymentMethod } : item))}>{[...paymentMethods, "Crédito Futuro"].map(method => <option key={method}>{method}</option>)}</select></FormField></div>
+              <div className="min-w-0 flex-1"><FormField label={`Valor do pagamento ${index + 1}`}><MoneyInput value={payment.amount} onChange={amount => updatePayments(payments.map((item, position) => position === index ? { ...item, amount } : item))} /></FormField></div>
+              {payments.length > 1 && <button type="button" aria-label={`Remover pagamento ${index + 1}`} onClick={() => updatePayments(payments.filter((_, position) => position !== index))} className="mb-0.5 rounded border border-avvi-line p-2 text-avvi-red"><Trash2 size={16}/></button>}
+            </div>)}</div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={() => updatePayments([...payments, { method: "Pix", amount: 0 }])} className="inline-flex items-center gap-1 rounded bg-avvi-blue px-3 py-2 text-xs font-bold text-white"><Plus size={14}/>Pagamento</button><p className="text-sm font-bold text-slate-800">Total pago: {currency(receiptPaymentTotal(payments))}</p></div>
+          </div>
           <FormField label="Data"><input className="input" type="date" value={receiptForm.date} onChange={(event) => setReceiptForm({ ...receiptForm, date: event.target.value })} /></FormField>
           <FormField label="Profissional"><select className="input" value={receiptForm.professionalId} onChange={(event) => setReceiptForm({ ...receiptForm, professionalId: event.target.value })}>{professionals.map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}</select></FormField>
           <FormField label="Observações"><textarea className="input min-h-20" value={receiptForm.notes} onChange={(event) => setReceiptForm({ ...receiptForm, notes: event.target.value })} /></FormField>
         </div>
-        <button onClick={generateReceipt} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white"><FileText className="mr-2 inline" size={16} />Gerar recibo em PDF</button>
+        <button onClick={generateReceipt} disabled={busy} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white disabled:opacity-50"><FileText className="mr-2 inline" size={16} />{busy ? "Gerando recibo…" : "Gerar recibo em PDF"}</button>
       </Panel>
       <Panel>
         <h3 className="mb-3 text-lg font-bold">Histórico de recibos</h3>
@@ -2427,7 +2445,8 @@ function ReceiptsView({ receiptForm, setReceiptForm, receipts, professionals, ge
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <p className="font-bold">{receipt.patientName}</p>
-                  <p>{receipt.procedure} · {currency(receipt.amount)}</p>
+                  <p className="break-words">{receiptServiceNames(receipt).join("; ") || (receipt.paymentMethod === "Crédito Futuro" ? "Crédito futuro" : "Serviços")} · {currency(receipt.amount)}</p>
+                  <p className="break-words text-slate-500">{receiptPayments(receipt).map(payment => `${payment.method}: ${currency(payment.amount)}`).join(" · ")}</p>
                   <p className="text-slate-500">{formatDate(receipt.date)} · {professionalName(receipt.professionalId)}</p>
                 </div>
                 <button onClick={() => reopenReceipt(receipt)} className="rounded-md border border-avvi-line p-2 text-avvi-blue hover:bg-avvi-soft" title="Abrir PDF novamente">
@@ -3487,7 +3506,7 @@ function entryToLine(entry: FinancialEntry): ProcedureLine {
 }
 
 function makeReceiptForm(): Receipt {
-  return { id: "", patientName: "", cpf: "", procedure: "", amount: 0, paymentMethod: "Pix", date: todayKey(), professionalId: "ana", notes: "" };
+  return { id: "", patientName: "", cpf: "", procedure: "", services: [{serviceId: "", name: ""}], amount: 0, paymentMethod: "Pix", payments: [{method: "Pix", amount: 0}], date: todayKey(), professionalId: "ana", notes: "" };
 }
 
 function makePatientForm(): Patient {
