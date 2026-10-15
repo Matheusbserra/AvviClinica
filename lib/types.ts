@@ -109,6 +109,7 @@ export type PaymentItem = {
 };
 
 export type ProcedureLine = {
+  totalPriceOverride?: number;
   id: string;
   serviceId?: string;
   packageId?: string;

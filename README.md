@@ -359,3 +359,10 @@ O formulário de Lançamento de Procedimentos não exibe mais o campo Observaç�
 ### E-mail e gênero no agendamento
 
 Novo evento e Detalhes do agendamento incluem E-mail e Gênero junto dos dados do paciente. Selecionar um cadastro preenche ambos; salvar um novo paciente grava os campos, e salvar um paciente já cadastrado atualiza apenas esses dois campos, preservando crédito, fotos e os demais dados. A edição pelo lápis mantém o formulário sincronizado. O e-mail é opcional e sua validade é conferida tanto para salvar o agendamento quanto para abrir o fechamento; o fechamento imediato recebe o contato recém-digitado. Não exige SQL ou variáveis novas. Teste de regressão: tests/appointment-patient-details-ui.mjs.
+
+
+### Valor total editável no lançamento de procedimentos
+
+Valor total do produto começa com preço do catálogo × quantidade. Uma edição explícita substitui esse total, sem multiplicá-la novamente pela quantidade; o custo continua sendo custo unitário × quantidade. O total editado permanece ao salvar, reabrir, recarregar e ajustar a quantidade. Selecionar outro produto retorna ao cálculo automático do catálogo. Registros antigos mantêm os cálculos existentes. O campo opcional totalPriceOverride identifica a edição, enquanto servicePrice guarda o valor unitário equivalente, sem arredondar divisões intermediárias; os relatórios e o banco continuam usando a estrutura existente.
+
+Alterar apenas custo, comissão ou quantidade de um item com total editado preserva os pagamentos. Quando o total ou desconto muda, a primeira forma de pagamento considera as demais formas para não duplicar valores. O catálogo permanece intacto. Não exige SQL nem novas variáveis. Regressão: tests/procedure-entry-pricing.mjs e tests/procedure-entry-total-ui.mjs; o teste de tela reproduziu a cobrança duplicada antes da correção.

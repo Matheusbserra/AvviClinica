@@ -80,6 +80,7 @@ import { originalAppointmentNotes } from "@/lib/appointmentNotes";
 import { checkoutCommission } from "@/lib/checkout";
 import { InvoiceView } from "@/app/components/InvoiceView";
 import { procedureEntryFromAccount } from "@/lib/accountProcedures";
+import { changeProcedureLineQuantity, overrideProcedureLineTotal, procedureLineTotal } from "@/lib/procedureEntryPricing";
 import { applyCheckoutInventory } from "@/lib/inventory";
 import { importedServices } from "@/lib/importedServices";
 import { appointmentServices, totalServiceMinutes } from "@/lib/appointmentServices";
@@ -2087,13 +2088,16 @@ function FinancialView(props: {
   function updateLine(index: number, patch: Partial<ProcedureLine>) {
     const procedureLines = props.entryForm.procedureLines.map((line, lineIndex) => lineIndex === index ? { ...line, ...patch } : line);
     const gross = procedureLines.reduce((sum, line) => sum + Number(line.servicePrice) * Number(line.quantity), 0);
-    const paymentAmount = Math.max(0, gross - (Number(props.entryForm.commercialDiscount) || 0));
-    props.setEntryForm({ ...props.entryForm, procedureLines, payments: [{ ...props.entryForm.payments[0], amount: paymentAmount }, ...props.entryForm.payments.slice(1)] });
+    const previousGross = servicesTotal(props.entryForm);
+    const otherPayments = props.entryForm.payments.slice(1).reduce((sum, payment) => sum + payment.amount, 0);
+    const paymentAmount = Math.max(0, Math.round((gross - (Number(props.entryForm.commercialDiscount) || 0) - otherPayments) * 100) / 100);
+    props.setEntryForm({ ...props.entryForm, procedureLines, payments: Math.round(gross * 100) === Math.round(previousGross * 100) ? props.entryForm.payments : [{ ...props.entryForm.payments[0], amount: paymentAmount }, ...props.entryForm.payments.slice(1)] });
   }
 
   function updateCommercialDiscount(value: number) {
     const gross = props.entryForm.procedureLines.reduce((sum, line) => sum + Number(line.servicePrice) * Number(line.quantity), 0);
-    const paymentAmount = Math.max(0, gross - (Number(value) || 0));
+    const otherPayments = props.entryForm.payments.slice(1).reduce((sum, payment) => sum + payment.amount, 0);
+    const paymentAmount = Math.max(0, Math.round((gross - (Number(value) || 0) - otherPayments) * 100) / 100);
     props.setEntryForm({
       ...props.entryForm,
       commercialDiscount: value,
@@ -2105,6 +2109,7 @@ function FinancialView(props: {
     const procedure = props.procedures.find((item) => item.id === procedureId);
     updateLine(index, {
       procedureId,
+      totalPriceOverride: undefined,
       servicePrice: procedure?.price ?? 0,
       productCost: procedure?.averageCost ?? 0,
       professionalPercent: props.professionals.find((item) => item.id === props.entryForm.professionalId)?.commissionPercent ?? 70
@@ -2182,10 +2187,10 @@ function FinancialView(props: {
                   {!line.procedureId && line.manualProcedure && <p className="mt-2 text-sm font-bold text-avvi-blue">Serviço agendado: {line.manualProcedure}</p>}
                 </FormField>
                 <FormField label="Quantidade">
-                  <input type="number" min={1} value={line.quantity} onChange={(event) => updateLine(index, { quantity: Number(event.target.value) })} className="input" />
+                  <input type="number" min={1} value={line.quantity} onChange={(event) => updateLine(index, changeProcedureLineQuantity(line, Number(event.target.value)))} className="input" />
                 </FormField>
-                <FormField label="Valor do produto">
-                  <MoneyInput value={line.servicePrice} onChange={(value) => updateLine(index, { servicePrice: value })} />
+                <FormField label="Valor total do produto">
+                  <MoneyInput value={procedureLineTotal(line)} onChange={(value) => updateLine(index, overrideProcedureLineTotal(line, value))} />
                 </FormField>
                 <FormField label="Custo médio">
                   <MoneyInput value={line.productCost} onChange={(value) => updateLine(index, { productCost: value })} />
