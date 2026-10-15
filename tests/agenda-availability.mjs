@@ -5,6 +5,12 @@ const source = ts.transpileModule(fs.readFileSync("lib/agendaAvailability.ts", "
 const a = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
 const professionals = [{id:"ana",active:true,closedShifts:[{weekday:1,shift:"morning"}]},{id:"bia",active:true},{id:"off",active:false}];
 const monday = "2026-10-12", saturday = "2026-10-10";
+const resizeRecord={startsAt:saturday+'T08:00:00',endsAt:saturday+'T09:00:00'};
+assert.equal(a.resizedAgendaEnd(resizeRecord,2),saturday+'T10:00:00');
+assert.equal(a.resizedAgendaEnd(resizeRecord,-10),saturday+'T08:30:00');
+assert.equal(a.resizedAgendaEnd(resizeRecord,99),saturday+'T21:00:00');
+assert.equal(a.resizedAgendaEnd({...resizeRecord,endsAt:saturday+'T08:45:00'},1),saturday+'T09:30:00');
+assert.equal(a.resizedAgendaEnd({...resizeRecord,endsAt:'2026-10-11T01:00:00'},1),null);
 assert.ok(a.validClosedShifts(professionals[0].closedShifts));
 assert.equal(a.validClosedShifts([{weekday:7,shift:"morning"}]),false);
 assert.equal(a.validClosedShifts([{weekday:1,shift:"invalid"}]),false);

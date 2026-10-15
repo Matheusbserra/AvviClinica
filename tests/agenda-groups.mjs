@@ -11,6 +11,6 @@ const before=JSON.stringify(records),groups=agendaGroups(records,date,"ana");ass
 
 assert.equal(agendaGroups(records,date,"bia").length,1);assert.equal(agendaGroups(records,"2026-10-11","ana").length,0);assert.equal(JSON.stringify(records),before);
 const overlapping=agendaGroups([record("first","p1","08:00","10:00"),record("overlap","p2","09:00","09:30")],date,"ana");assert.equal(overlapping.length,1);assert.equal(overlapping[0].overlaps.length,2);assert.equal(overlapping[0].appointments.length,1);
-const absences=[record("abs1",undefined,"08:00","08:30"),record("abs2",undefined,"08:30","09:00")].map(a=>({...a,eventType:"Registrar Ausência"}));assert.equal(agendaGroups(absences,date,"ana").length,2);
+const absences=[record("abs1",undefined,"08:00","08:30"),record("abs2",undefined,"08:30","09:00")].map(a=>({...a,eventType:"Registrar Ausência"}));assert.equal(agendaGroups(absences,date,"ana").length,1);assert.equal(agendaGroups(absences,date,"ana")[0].slotCount,2);assert.deepEqual(agendaGroups(absences,date,"ana")[0].appointments.map(a=>a.id),['abs1','abs2']);
 assert.equal(agendaGroups([record("mid-hour","p1","08:30","10:00")],date,"ana")[0].slotCount,3);
-console.log("PASS: consecutive separate appointments share one display group; a long appointment spans four half-hours; gaps, different patients/professionals and absences stay separate; overlapping other patients remain available; original records unchanged.");
+console.log("PASS: consecutive appointments and absences share their display groups; long appointments span half-hours; gaps and different patients/professionals stay separate; overlapping other patients remain available; original records unchanged.");

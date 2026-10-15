@@ -2,7 +2,7 @@ import fs from "node:fs";
 import assert from "node:assert/strict";
 import ts from "typescript";
 async function load(file) { const code=ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText; return import("data:text/javascript;base64,"+Buffer.from(code).toString("base64")); }
-const {ultraformerCatalog,availableUltraformerTips,remainingShots,recordUltraformerUsage,isUltraformerTip}=await load("lib/ultraformer.ts");
+const {ultraformerCatalog,availableUltraformerTips,remainingShots,recordUltraformerUsage,isUltraformerTip,applyCheckoutUltraformer,validCheckoutShots}=await load("lib/ultraformer.ts");
 const access=await load("lib/access.ts");
 assert.equal(ultraformerCatalog.length,10);assert.equal(ultraformerCatalog.filter(tip=>tip.kind==="booster").length,3);
 assert.equal(new Set(ultraformerCatalog.map(tip=>tip.id)).size,10);assert.ok(ultraformerCatalog.every(tip=>isUltraformerTip(tip)&&remainingShots(tip)===0));
@@ -24,4 +24,17 @@ const persistence=await load("lib/persistence.ts");const baseline=persistence.no
 const draft={...baseline,ultraformer_tips:[used]};const store=new Map();persistence.writeSnapshot({setItem:(key,value)=>store.set(key,value)},draft,baseline);
 const restored=persistence.readSnapshot({getItem:key=>store.get(key)??null});assert.equal(remainingShots(restored.data.ultraformer_tips[0]),1000);assert.equal(restored.data.ultraformer_tips[0].usages.length,1);
 const recovered=persistence.recoverPendingChanges(baseline,restored.syncedData,restored.data);assert.deepEqual(recovered.patients,[{id:"preserved"}]);assert.deepEqual(recovered.ultraformer_tips,[used]);
+const author={id:"operator",login:"operator",name:"Operadora"};
+const appointment={id:"visit",patientId:"patient",professionalId:"professional",accountClosed:true,closedAccount:{id:"account",date:"2026-10-14",closedAt:"2026-10-14T13:00:00Z",patientId:"patient",professionalId:"professional",ultraformerShots:[{tipId:tip.id,name:tip.name,quantity:150},{tipId:ultraformerCatalog[1].id,name:ultraformerCatalog[1].name,quantity:20}]}};
+const checkout=applyCheckoutUltraformer([used],appointment,usage.patientName,usage.professionalName,author);
+assert.equal(remainingShots(checkout[0]),850);assert.equal(checkout[0].usages.length,2);assert.equal(used.usages.length,1);assert.deepEqual(checkout[0].usages[1].registeredBy,author);
+assert.equal(checkout[1].usages[0].quantity,20);assert.equal(checkout[0].usages[1].appointmentId,'visit');
+assert.deepEqual(applyCheckoutUltraformer(checkout,appointment,usage.patientName,usage.professionalName,author),checkout);
+const edited=applyCheckoutUltraformer(checkout,{...appointment,closedAccount:{...appointment.closedAccount,ultraformerShots:[{tipId:tip.id,name:tip.name,quantity:50}]}},usage.patientName,usage.professionalName,author);
+assert.equal(remainingShots(edited[0]),950);assert.equal(edited[0].usages.length,2);assert.equal(edited[1].usages.length,0);
+const reverted=applyCheckoutUltraformer(edited,{...appointment,accountClosed:false,closedAccount:undefined},"","",undefined);
+assert.deepEqual(reverted[0],used);assert.equal(reverted[1].usages.length,0);assert.equal(reverted[0].initialShots,1200);
+for(const shots of [[{tipId:tip.id,name:tip.name,quantity:0}],[{tipId:tip.id,name:tip.name,quantity:1.5}],Array(2).fill({tipId:tip.id,name:tip.name,quantity:1})])assert.equal(validCheckoutShots(shots),false);
+assert.throws(()=>applyCheckoutUltraformer([used],{...appointment,closedAccount:{...appointment.closedAccount,ultraformerShots:[{tipId:'missing',name:'Missing',quantity:1}]}},'Patient','Professional',author));
+assert.equal(access.canReadEntity({login:'agenda',role:'standard',tabs:['Agenda']},'ultraformer_tips'),true);
 console.log("PASS: Ten official-reference tips, independent shot balances, valid usage and history, duplicate prevention, balance adjustment preserves history, old-cache migration, pending recovery and explicit tab permissions.");

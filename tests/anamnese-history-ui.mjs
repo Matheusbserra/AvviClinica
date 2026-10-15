@@ -1,8 +1,9 @@
+import {navigationButton} from './navigation-helper.mjs';
 import {chromium} from 'file:///C:/Users/mathe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs';
 import assert from 'node:assert/strict';import fs from 'node:fs';
 const browser=await chromium.launch({headless:true,executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe'}),context=await browser.newContext({viewport:{width:1440,height:900},acceptDownloads:true}),page=await context.newPage(),errors=[];
 const origin=process.env.AVVI_TEST_URL??'http://127.0.0.1:3107',key='avvi.data.snapshot.v1',root='C:/Users/mathe/.codex/visualizations/2026/10/08/01a11cce-4e90-7ed3-9fab-934e7f183230/';
-const tab=name=>page.getByRole('button',{name,exact:true}).filter({visible:true}).first(),state=()=>page.evaluate(k=>JSON.parse(localStorage.getItem(k)).data,key),clinical=()=>page.getByRole('dialog',{name:'Ficha de Harmonização Facial – Anamnese',exact:true});
+const tab=name=>navigationButton(page,name),state=()=>page.evaluate(k=>JSON.parse(localStorage.getItem(k)).data,key),clinical=()=>page.getByRole('dialog',{name:'Ficha de Harmonização Facial – Anamnese',exact:true});
 page.on('pageerror',e=>errors.push(e.message));
 try{
  await page.goto(origin);await page.getByLabel('Login',{exact:true}).fill('admin');await page.getByLabel('Senha',{exact:true}).fill(process.env.AVVI_TEST_ADMIN_PASSWORD);await tab('Entrar').click();await tab('Sair').waitFor();await page.getByRole('status',{name:'Status do salvamento'}).filter({hasText:'Prévia local'}).waitFor();

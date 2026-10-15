@@ -1,4 +1,4 @@
-﻿export type UserRole = "admin" | "recepcao" | "profissional";
+export type UserRole = "admin" | "recepcao" | "profissional";
 
 export type AppointmentStatus =
   | "Agendado"
@@ -9,8 +9,10 @@ export type AppointmentStatus =
   | "Reagendado"
   | "Finalizado";
 
+export type AnamneseTemplate = "facial" | "body";
 export type AnamneseRecord = {
   id: string; patientId: string; professionalId: string; date: string; templateVersion: 1;
+  template?: AnamneseTemplate;
   answers: Record<string, string | string[]>;
   createdAt: string; updatedAt: string;
   createdBy: { login: string; name: string }; updatedBy: { login: string; name: string };
@@ -24,6 +26,7 @@ export type ViewMode = "Dia" | "Semana" | "Mês";
 export type ClosedShift = { weekday: number; shift: "morning" | "afternoon" | "evening" };
 
 export type Professional = {
+  anamneseTemplate?: AnamneseTemplate;
   closedShifts?: ClosedShift[];
   showInAgenda?: boolean;
   id: string;
@@ -149,10 +152,12 @@ export type FinancialEntry = {
 
 // Billing is stored separately from the independently editable procedure ledger.
 export type ClosedAccount = FinancialEntry & {
+  checkoutNotes?: string;
   clinicPatient?: boolean;
   creditAdded?: number;
   creditPayments?: PaymentItem[];
   gifts?: GiftUsage[];
+  ultraformerShots?: UltraformerShots[];
   closedAt?: string;
   change?: number;
   procedureLines: ProcedureLine[];
@@ -290,7 +295,8 @@ export type FollowUpLead = { id: string; name: string; phone: string; patientId?
 
 export type FollowUpMessage = { id: string; leadId: string; direction: "incoming" | "outgoing"; text: string; at: string; status?: FollowUpLog["status"] };
 
-export type UltraformerUsage = { registeredBy?: { id: string; login: string; name: string }; id: string; date: string; quantity: number; patientId: string; patientName: string; professionalId: string; professionalName: string; createdAt: string };
+export type UltraformerShots = { tipId: string; name: string; quantity: number };
+export type UltraformerUsage = { appointmentId?: string; sourceAccountId?: string; registeredBy?: { id: string; login: string; name: string }; id: string; date: string; quantity: number; patientId: string; patientName: string; professionalId: string; professionalName: string; createdAt: string };
 export type UltraformerTip = { id: string; name: string; depth: string; kind: "linear" | "booster"; color: string; initialShots: number; usages: UltraformerUsage[] };
 
 export type StrategyMetric = "revenue" | "patients" | "services" | "averageTicket" | "productivity" | "custom";

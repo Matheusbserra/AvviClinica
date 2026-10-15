@@ -1,12 +1,14 @@
-import type { AnamneseRecord, Patient } from "./types";
+import type { AnamneseRecord, AnamneseTemplate, Patient } from "./types";
+import { bodyClinicalPages, retiredBodyFields } from "./bodyAnamnese";
 export type ClinicalField = { id: string; label: string; type?: "text" | "area" | "date" | "number" | "choice" | "checks" | "rank" | "signature"; options?: string[] };
 export type ClinicalRow = { left?: string[]; right?: string[]; full?: string[] };
+export type ClinicalPage = { title: string; sections: { title: string; fields: ClinicalField[]; rows?: ClinicalRow[]; image?: string; declaration?: string }[] };
 const pair = (left: string, ...right: string[]): ClinicalRow => ({ left: [left], right });
 const full = (...fields: string[]): ClinicalRow => ({ full: fields });
 const f = (id: string, label: string, type: ClinicalField["type"] = "text", options?: string[]): ClinicalField => ({ id, label, type, options });
 const yn = (id: string, label: string) => f(id, label, "choice", ["Sim", "Não"]);
 export const toxinMuscles = ["m. procero", "m. corrugador (dir)", "m. corrugador (esq)", "m. frontal", "m. orbicular dos olhos (dir)", "m. orbicular dos olhos (esq)", "m. nasal", "m. depressor do septo nasal", "m. orbicular da boca", "m. Depressor do ângulo da boca", "m. mentoniano", "m. platisma"];
-export const clinicalPages: { title: string; sections: { title: string; fields: ClinicalField[]; rows?: ClinicalRow[]; image?: string; declaration?: string }[] }[] = [
+export const clinicalPages: ClinicalPage[] = [
  { title: "Dados e anamnese", sections: [
   { title: "Dados pessoais", fields: [f("name", "Nome"), f("address", "Endereço"), f("addressNumber", "Nº"), f("district", "Bairro"), f("zip", "CEP"), f("city", "Cidade/Estado"), f("sex", "Sexo", "choice", ["M", "F"]), f("phone", "Telefone para contato"), f("email", "E-mail"), f("birthDate", "Data de nascimento", "date"), f("age", "Idade", "number"), f("occupation", "Profissão"), f("rg", "RG"), f("cpf", "CPF"), f("maritalStatus", "Estado civil"), f("clinicDiscovery", "Como conheceu a clínica?", "checks", ["Redes sociais", "Tráfego pago", "Indicação"])] },
   { title: "Anamnese", fields: [f("motivation", "O que mais a (o) motiva a procurar o tratamento facial? (Marque 1 na maior prioridade, 2 na segunda e 3 na terceira)", "rank", ["Parecer menos Brava(o)", "Parecer mais Esbelta(o)", "Parecer mais Feminina", "Parecer menos Cansada(o)", "Parecer mais Jovem", "Parecer menos Triste", "Parecer mais Atraente", "Parecer menos Flácida(o)"]), f("faceTreatment", "O que em sua face, você mais gostaria de tratar?"), yn("previousTreatment", "Realizou tratamento estético anteriormente"), f("previousTypes", "Tratamentos anteriores", "checks", ["BOTOX", "Peelings", "Preenchimento facial", "Fios", "Bioestimuladores"]), f("materials", "Materiais usados"), f("satisfaction", "Descreva sua satisfação com os resultados")], rows: [full("motivation"), full("faceTreatment"), pair("previousTreatment"), pair("previousTypes", "materials", "satisfaction")] },
@@ -25,17 +27,21 @@ export const clinicalPages: { title: string; sections: { title: string; fields: 
  { title: "Toxina botulínica", sections: [{ title: "Detalhamento toxina botulínica", image: "/anamnese/anatomia-facial.png", fields: [...toxinMuscles.map((label, i) => f(`toxin${i}`, label, "number")), f("dilutionDate", "Data da diluição", "date"), f("brand", "Marca"), f("dilutionVolume", "Volume da diluição"), f("batch", "Nº do lote"), f("expiry", "Data de validade", "date"), f("toxinNotes", "Observações", "area")] }] }
 ];
 export const clinicalFields = clinicalPages.flatMap(page => page.sections.flatMap(section => section.fields));
-export function initialClinicalAnswers(patient: Patient): AnamneseRecord["answers"] {
- return { name: patient.name, address: patient.address ?? "", phone: patient.phone ?? "", email: patient.email ?? "", cpf: patient.cpf ?? "", birthDate: patient.birthDate ?? "", sex: patient.gender === "Feminino" ? "F" : patient.gender === "Masculino" ? "M" : "" };
+export function anamnesePages(template?: AnamneseTemplate) { return template === "body" ? bodyClinicalPages : clinicalPages; }
+export function initialClinicalAnswers(patient: Patient, template?: AnamneseTemplate): AnamneseRecord["answers"] {
+ const sex = patient.gender === "Feminino" ? "F" : patient.gender === "Masculino" ? "M" : "";
+ return { name: patient.name, address: patient.address ?? "", phone: patient.phone ?? "", email: patient.email ?? "", cpf: patient.cpf ?? "", birthDate: patient.birthDate ?? "", sex: template === "body" ? sex ? patient.gender! : "" : sex };
 }
-const imageKeys = new Set(["patientSignatureImage", "planSignatureImage", "planningImage"]);
 function validDate(value: string) { if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false; const date = new Date(`${value}T12:00:00Z`); return Number.isFinite(date.getTime()) && date.toISOString().slice(0,10) === value; }
 export function validAnamnese(value: unknown): value is AnamneseRecord {
  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
  const record = value as AnamneseRecord;
+ if (record.template !== undefined && !["facial", "body"].includes(record.template)) return false;
  if (![record.id, record.patientId, record.professionalId].every(id => typeof id === "string" && id.length > 0 && id.length <= 200) || record.templateVersion !== 1 || typeof record.date !== "string" || !validDate(record.date) || !record.answers || typeof record.answers !== "object" || Array.isArray(record.answers)) return false;
  // Keep hidden answers from older fichas valid without showing the retired field.
- const fields = new Map([...clinicalFields, f("water", "Ingestão de água (copos/dia)", "number"), f("referral", "Indicação anterior")].map(item => [item.id, item]));
+ const templateFields = anamnesePages(record.template).flatMap(page => page.sections.flatMap(section => section.fields));
+ const fields = new Map([...templateFields, ...(record.template === "body" ? retiredBodyFields : [f("water", "Ingestão de água (copos/dia)", "number"), f("referral", "Indicação anterior")])].map(item => [item.id, item]));
+ const imageKeys = new Set([...(record.template === "body" ? [...templateFields, ...retiredBodyFields] : templateFields).filter(field => field.type === "signature").map(field => `${field.id}Image`), record.template === "body" ? "bodyImage" : "planningImage"]);
  for (const [key, answer] of Object.entries(record.answers)) {
   if (imageKeys.has(key)) { if (typeof answer !== "string" || answer.length > 450000 || (answer !== "" && !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(answer))) return false; continue; }
   const item = fields.get(key); if (!item) return false;

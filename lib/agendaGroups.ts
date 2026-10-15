@@ -3,7 +3,7 @@ import type { Appointment } from "./types";
 
 export type AgendaGroup = { startIndex: number; slotCount: number; appointments: Appointment[]; overlaps: Appointment[] };
 function samePatient(left: Appointment, right: Appointment) {
-  return left.id === right.id || (!isAbsence(left) && !isAbsence(right) && !!left.patientId && left.patientId === right.patientId);
+  return left.id === right.id || (isAbsence(left) && isAbsence(right)) || (!isAbsence(left) && !isAbsence(right) && !!left.patientId && left.patientId === right.patientId);
 }
 // Group only the display; every original appointment keeps its ID, times and account.
 export function agendaGroups(appointments: Appointment[], date: string, professionalId: string): AgendaGroup[] {

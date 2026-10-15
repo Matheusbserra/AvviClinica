@@ -67,3 +67,12 @@ export function appointmentAvailabilityError(professional: Professional | undefi
   if (conflicts.length) return "Este horário já está reservado para outro atendimento deste profissional. Escolha um intervalo livre.";
   return "";
 }
+
+export function resizedAgendaEnd(appointment: Pick<Appointment, "startsAt" | "endsAt">, halfHourSteps: number) {
+  if (!reservedInterval(appointment.startsAt, appointment.endsAt) || appointment.startsAt.slice(0, 10) !== appointment.endsAt.slice(0, 10) || !Number.isInteger(halfHourSteps)) return null;
+  const minutes = (value: string) => Number(value.slice(11, 13)) * 60 + Number(value.slice(14, 16));
+  const minimum = Math.ceil((minutes(appointment.startsAt) + 30) / 30) * 30;
+  if (minimum > 21 * 60) return null;
+  const end = Math.max(minimum, Math.min(21 * 60, Math.ceil(minutes(appointment.endsAt) / 30) * 30 + halfHourSteps * 30));
+  return `${appointment.startsAt.slice(0, 10)}T${slotTime(end / 60)}:00`;
+}

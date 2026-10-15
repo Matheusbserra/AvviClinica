@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { addDays, addMonths, eachDayOfInterval, endOfMonth, format, getDate, isSameDay, parseISO, startOfMonth } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Plus, X, Eye, CircleDollarSign, Ban, Phone, User, Syringe, Info } from "lucide-react";
-import { agendaHours, agendaSlots, slotTime, bookingDuration, isAbsence, overlappingAppointments, rectangleSlots, shiftClosed, slotAvailable } from "@/lib/agendaAvailability";
+import { agendaHours, agendaSlots, slotTime, bookingDuration, isAbsence, overlappingAppointments, rectangleSlots, shiftClosed, slotAvailable, resizedAgendaEnd, appointmentAvailabilityError } from "@/lib/agendaAvailability";
 import type { AgendaSlot } from "@/lib/agendaAvailability";
 import { agendaGroups } from "@/lib/agendaGroups";
 import { appointmentServices } from "@/lib/appointmentServices";
@@ -27,12 +27,14 @@ type Props = {
   appointments: Appointment[]; entries: FinancialEntry[]; patients: Patient[];
   procedures: Procedure[]; services: Service[]; professionals: Professional[]; visibleProfessionals: Professional[];
   openSlot: (hour: number, professionalId: string, durationMinutes?: number) => void;
-  markAbsent: (slots: AgendaSlot[]) => void; removeAbsence: (id: string) => void; openAppointment: (id: string) => void;
+  markAbsent: (slots: AgendaSlot[]) => void; removeAbsence: (ids: string[]) => void; openAppointment: (id: string) => void;
   updateStatus: (id: string, status: "Confirmado" | "Cancelado") => void;
+  resizeAppointment: (id: string, endsAt: string) => string;
   openAccount: (id: string) => void; viewAccount: (id: string) => void;
 };
 
 export function AgendaView(props: Props) {
+  const [showCancelled, setShowCancelled] = useState(false);
   const [menu, setMenu] = useState<{ appointmentId: string; appointmentIds: string[]; left: number; top: number } | null>(null);
   const [hover, setHover] = useState<{ appointmentIds: string[]; left: number; top: number; bottom: number } | null>(null);
   const hoverCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,7 +43,7 @@ export function AgendaView(props: Props) {
   function clearHoverTimers() { if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current); if (hoverOpenTimer.current) clearTimeout(hoverOpenTimer.current); }
   function closeHover() { clearHoverTimers(); setHover(null); }
   function scheduleHover(element: HTMLButtonElement, appointmentIds: string[]) {
-    if (menu || slotMenu) return;
+    if (menu || slotMenu || resizing) return;
     clearHoverTimers(); setHover(null);
     hoverOpenTimer.current = setTimeout(() => {
       const rect = element.getBoundingClientRect();
@@ -64,6 +66,8 @@ export function AgendaView(props: Props) {
   const [selectedSlots, setSelectedSlots] = useState<AgendaSlot[]>([]);
   const [choosingProfessional, setChoosingProfessional] = useState(false);
   const dragCleanup = useRef<(() => void) | null>(null);
+  const [resizing, setResizing] = useState<{ id: string; endsAt: string } | null>(null);
+  const [resizeError, setResizeError] = useState("");
   useEffect(() => () => dragCleanup.current?.(), []);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -153,6 +157,33 @@ export function AgendaView(props: Props) {
     const { hour, durationMinutes } = bookingDuration(selection, professionalId);
     menuAction(() => props.openSlot(hour, professionalId, durationMinutes));
   }
+  function resizeBooking(event: React.PointerEvent<HTMLButtonElement>, appointment: Appointment) {
+    if (event.button !== 0 || rowHeight <= 0) return;
+    event.preventDefault(); event.stopPropagation(); closeHover(); dragCleanup.current?.();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setMenu(null); setSlotMenu(null); setSelectedSlots([]); setResizeError("");
+    setResizing({ id: appointment.id, endsAt: appointment.endsAt });
+    const pointerId = event.pointerId, startY = event.clientY;
+    let endsAt = appointment.endsAt, changed = false, error = "";
+    function move(pointer: PointerEvent) {
+      if (pointer.pointerId !== pointerId) return;
+      const steps = Math.round((pointer.clientY - startY) / (rowHeight / 2));
+      const candidate = resizedAgendaEnd(appointment, steps);
+      if (!candidate) return;
+      changed = Math.abs(pointer.clientY - startY) > 3;
+      if (!changed) { error = ""; setResizing(null); setResizeError(""); return; }
+      error = appointmentAvailabilityError(props.professionals.find(item => item.id === appointment.professionalId), props.appointments, appointment.startsAt, candidate, appointment.id);
+      setResizeError(error);
+      endsAt = candidate;
+      if (!error) setResizing({ id: appointment.id, endsAt });
+    }
+    function cleanup() { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", finish); document.removeEventListener("pointercancel", cancel); document.removeEventListener("keydown", escape); dragCleanup.current = null; }
+    function cancel() { cleanup(); setResizing(null); setResizeError(""); }
+    function finish(pointer: PointerEvent) { if (pointer.pointerId !== pointerId) return; cleanup(); setResizing(null); if (changed && !error && endsAt !== appointment.endsAt) setResizeError(props.resizeAppointment(appointment.id, endsAt)); }
+    function escape(key: KeyboardEvent) { if (key.key === "Escape") { key.preventDefault(); cancel(); } }
+    document.addEventListener("pointermove", move); document.addEventListener("pointerup", finish); document.addEventListener("pointercancel", cancel); document.addEventListener("keydown", escape);
+    dragCleanup.current = cleanup;
+  }
   const gridRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [professionalPage, setProfessionalPage] = useState(0);
@@ -182,18 +213,20 @@ export function AgendaView(props: Props) {
   const menuAppointment = menu ? props.appointments.find((appointment) => appointment.id === menu.appointmentId) : undefined;
   const patientName = (appointment: Appointment) => isAbsence(appointment) ? "Ausente" : patientNames.get(appointment.patientId ?? "") ?? "Paciente";
   const serviceName = (appointment: Appointment) => appointmentServices(appointment, props.services).map((service) => service.name).join(" · ") || procedureNames.get(appointment.procedureId ?? "") || "Sem serviço";
-  const appointmentsAt = (professionalId: string, hour: number) => overlappingAppointments(props.appointments, { date: props.selectedDate, professionalId, hour });
-  const displayGroups = new Map(visible.map(professional => [professional.id, agendaGroups(props.appointments, props.selectedDate, professional.id)]));
-  const hoverAppointments = hover ? props.appointments.filter(item => hover.appointmentIds.includes(item.id)) : [];
+  const agendaAppointments = props.appointments.filter(item => showCancelled || item.status !== "Cancelado");
+  const displayedAppointments = resizing ? agendaAppointments.map(item => item.id === resizing.id ? { ...item, endsAt: resizing.endsAt } : item) : agendaAppointments;
+  const appointmentsAt = (professionalId: string, hour: number) => overlappingAppointments(displayedAppointments, { date: props.selectedDate, professionalId, hour });
+  const displayGroups = new Map(visible.map(professional => [professional.id, agendaGroups(displayedAppointments, props.selectedDate, professional.id)]));
+  const hoverAppointments = hover ? agendaAppointments.filter(item => hover.appointmentIds.includes(item.id)) : [];
   const hoverAppointment = hoverAppointments[0];
   const hoverPatient = hoverAppointment ? props.patients.find(item => item.id === hoverAppointment.patientId) : undefined;
   const hoverStart = hoverAppointments.map(item => item.startsAt).sort()[0] ?? "";
   const hoverEnd = hoverAppointments.map(item => item.endsAt).sort().at(-1) ?? "";
   const previousVisit = hoverAppointment && props.appointments.some(item => item.patientId === hoverAppointment.patientId && !isAbsence(item) && item.startsAt < hoverStart && (isClosed(item) || item.status === "Compareceu" || item.status === "Finalizado"));
-  const listedAppointments = slotList ? slotList.appointmentIds ? props.appointments.filter(item => slotList.appointmentIds!.includes(item.id)) : appointmentsAt(slotList.professionalId, slotList.hour) : [];
+  const listedAppointments = slotList ? slotList.appointmentIds ? agendaAppointments.filter(item => slotList.appointmentIds!.includes(item.id)) : appointmentsAt(slotList.professionalId, slotList.hour) : [];
   const listPages = Math.max(1, Math.ceil(listedAppointments.length / 4));
   const listPage = Math.min(slotList?.page ?? 0, listPages - 1);
-  function changeDate(date: string) { dragCleanup.current?.(); props.setSelectedDate(date); setSlotList(null); setMenu(null); setSlotMenu(null); setSelectedSlots([]); }
+  function changeDate(date: string) { dragCleanup.current?.(); setResizing(null); setResizeError(""); props.setSelectedDate(date); setSlotList(null); setMenu(null); setSlotMenu(null); setSelectedSlots([]); }
   const controls = <>
     <section className="rounded-lg border border-avvi-line bg-white p-2.5 shadow-sm">
       <div className="mb-2 flex items-center justify-between gap-1 text-[11px]"><button type="button" className="rounded p-1 hover:bg-avvi-soft" onClick={() => changeDate(format(addMonths(selected, -1), "yyyy-MM-dd"))} title="Mês anterior"><ChevronLeft size={13} /></button><strong>{format(selected, "MMM yyyy", { locale: ptBR })}</strong><button type="button" className="rounded p-1 hover:bg-avvi-soft" onClick={() => changeDate(format(addMonths(selected, 1), "yyyy-MM-dd"))} title="Próximo mês"><ChevronRight size={13} /></button></div>
@@ -206,7 +239,7 @@ export function AgendaView(props: Props) {
     <section className="space-y-2 rounded-lg border border-avvi-line bg-white p-2.5 shadow-sm">
       <label className="block text-[10px] font-semibold text-slate-500">Profissional<select aria-label="Filtrar profissional da agenda" value={props.professionals.some(professional => professional.id === props.professionalFilter && professional.showInAgenda !== false) ? props.professionalFilter : "todos"} onChange={(event) => { props.setProfessionalFilter(event.target.value); setProfessionalPage(0); }} className="mt-1 w-full min-w-0 rounded border border-avvi-line bg-white px-1.5 py-1.5 text-[11px]"><option value="todos">Todos</option>{props.professionals.filter(professional => professional.showInAgenda !== false).map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}</select></label>
       <div><p className="mb-1 text-[10px] font-semibold text-slate-500">Visão</p><div className="grid grid-cols-3 gap-1">{(["Dia", "Semana", "Mês"] as ViewMode[]).map((mode) => <button type="button" key={mode} onClick={() => props.setViewMode(mode)} className={`rounded px-1 py-1.5 text-[10px] font-semibold ${props.viewMode === mode ? "bg-avvi-blue text-white" : "bg-slate-100 text-slate-600"}`}>{mode}</button>)}</div></div>
-      <div className="space-y-1 border-t border-avvi-line pt-2 text-[9px] text-slate-500">{[["bg-blue-200", "Agendado"], ["bg-green-200", "Confirmado / compareceu"], ["bg-red-200", "Cancelado / faltou / reagendado"], ["bg-orange-200", "Finalizado"], ["bg-slate-300", "Ausente"], ["bg-[#f0f7ff]", "Agenda fechada"]].map(([color, label]) => <p key={label} className="flex items-center gap-1.5"><span className={`h-2 w-2 shrink-0 rounded ${color}`} />{label}</p>)}</div>
+      <div className="space-y-1 border-t border-avvi-line pt-2 text-[9px] text-slate-500">{[["bg-blue-200", "Agendado"], ["bg-green-200", "Confirmado / compareceu"], ["bg-red-200", "Cancelados"], ["bg-red-200", "Faltou / reagendado"], ["bg-orange-200", "Finalizado"], ["bg-slate-300", "Ausente"], ["bg-[#f0f7ff]", "Agenda fechada"]].map(([color, label]) => label === "Cancelados" ? <button key={label} type="button" aria-label="Mostrar agendamentos cancelados" aria-pressed={showCancelled} onClick={() => { closeHover(); setMenu(null); setSlotMenu(null); setSlotList(null); setSelectedSlots([]); setShowCancelled(current => !current); }} className={`flex w-full items-center gap-1.5 rounded px-1 py-1 text-left ${showCancelled ? "bg-red-50 font-semibold text-red-700 ring-1 ring-inset ring-red-200" : "hover:bg-red-50"}`}><span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${color} ${showCancelled ? "ring-1 ring-red-400" : ""}`}/>{label}</button> : <p key={label} className="flex items-center gap-1.5 px-1"><span className={`h-2 w-2 shrink-0 rounded-full ${color}`} />{label}</p>)}</div>
     </section>
   </>;
   return <div data-testid="agenda-layout" className="grid min-h-0 min-w-0 flex-1 gap-2 overflow-hidden md:grid-cols-[164px_minmax(0,1fr)]">
@@ -223,6 +256,7 @@ export function AgendaView(props: Props) {
 
         <div className="flex shrink-0 items-center gap-1 text-[9px] text-slate-500"><button type="button" aria-label="Profissionais anteriores" disabled={page === 0} onClick={() => { setProfessionalPage(page - 1); setMenu(null); setSlotMenu(null); setSelectedSlots([]); }} className="rounded border border-avvi-line p-1 disabled:opacity-25"><ChevronLeft size={12} /></button><span data-testid="professional-page">{props.visibleProfessionals.length ? `${page * columnsPerPage + 1}–${Math.min((page + 1) * columnsPerPage, props.visibleProfessionals.length)}` : "0"} de {props.visibleProfessionals.length}</span><button type="button" aria-label="Próximos profissionais" disabled={page === pageCount - 1} onClick={() => { setProfessionalPage(page + 1); setMenu(null); setSlotMenu(null); setSelectedSlots([]); }} className="rounded border border-avvi-line p-1 disabled:opacity-25"><ChevronRight size={12} /></button></div>
       </div>
+      {resizeError && <p role="alert" className="shrink-0 border-b border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{resizeError}</p>}
       <div ref={gridRef} data-testid="agenda-grid" className="grid min-h-0 min-w-0 flex-1 overflow-hidden" style={{ gridTemplateColumns: `34px repeat(${Math.max(1, visible.length)}, minmax(0, 1fr))`, gridTemplateRows: `56px repeat(${agendaSlots.length}, minmax(0, 1fr))` }}>
         <div className="border-b border-avvi-line" />
         {visible.map((professional) => <div key={professional.id} data-testid={`professional-${professional.id}`} title={`${professional.name} · ${professional.specialty}`} className="flex min-w-0 items-center gap-2 overflow-hidden border-b border-l border-avvi-line px-2"><span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full text-sm font-bold text-white" style={{ background: professional.color }}>{professional.avatarDataUrl ? <Image src={professional.avatarDataUrl} alt={`Foto de ${professional.name}`} width={36} height={36} className="h-full w-full object-cover" unoptimized /> : professional.name.slice(0, 1)}</span><div className="min-w-0"><p className="truncate text-sm font-bold leading-tight">{professional.name}</p><p className="mt-0.5 truncate text-[10px] leading-tight text-slate-500">{professional.specialty}</p></div></div>)}
@@ -232,6 +266,7 @@ export function AgendaView(props: Props) {
           {visible.map((professional, column) => {
             const group = displayGroups.get(professional.id)?.find(item => item.startIndex === index);
             const appointment = group?.appointments[0];
+            const resizeTarget = group && !isAbsence(group.appointments[0]) ? group.appointments.slice().sort((a, b) => a.endsAt.localeCompare(b.endsAt) || a.startsAt.localeCompare(b.startsAt)).at(-1) : undefined;
             const occupied = appointmentsAt(professional.id, time).length > 0;
             const slot = { date: props.selectedDate, professionalId: professional.id, hour: time };
             const closed = shiftClosed(professional, props.selectedDate, time);
@@ -244,11 +279,12 @@ export function AgendaView(props: Props) {
               {group && appointment ? <div data-testid="appointment-group" data-appointment-ids={group.appointments.map(item => item.id).join(",")} data-slot-count={group.slotCount} className="absolute left-0 top-0 z-10 w-full p-0.5" style={{ height: `calc(${group.slotCount * 100}% + ${group.slotCount - 1}px)` }}>
                 <button type="button" onPointerEnter={event => { if (event.pointerType !== "touch" && !isAbsence(appointment)) scheduleHover(event.currentTarget, group.appointments.map(item => item.id)); }} onPointerLeave={leaveHover} aria-describedby={hover?.appointmentIds.includes(appointment.id) ? "agenda-patient-hover" : undefined} onClick={event => showMenu(appointment.id, event.currentTarget, group.appointments.map(item => item.id))} onContextMenu={event => { event.preventDefault(); showMenu(appointment.id, event.currentTarget, group.appointments.map(item => item.id)); }} aria-haspopup="menu" aria-expanded={!!menu && group.appointments.some(item => item.id === menu.appointmentId)} data-testid={`appointment-${appointment.id}`} data-status={appointment.status} data-compact={!fullHeight} aria-label={`${patientName(appointment)}, ${names}, ${statuses}`} className={`flex h-full w-full min-w-0 flex-col justify-center overflow-hidden rounded border-l-[3px] px-1 text-center ${isAbsence(appointment) ? "bg-slate-200 border-slate-400 text-slate-600" : statusColors(appointment.status)}`}>
                   <span data-testid="appointment-patient" className={`flex w-full min-w-0 shrink-0 items-center justify-center gap-1 font-bold ${fullHeight && group.slotCount > 2 ? "text-[10px] leading-[11px]" : denseRows ? "text-[7px] leading-[7px]" : compactRows ? "text-[8px] leading-[8px]" : "text-[10px] leading-[11px]"} ${otherPatients ? "px-6" : ""}`}><span className="truncate">{patientName(appointment)}</span>{group.appointments.every(isClosed) && <CheckCircle2 size={10} aria-label="Conta fechada" className="shrink-0 text-green-600" />}</span>
-                  {fullHeight && <><span data-testid="appointment-service" className={`block w-full shrink-0 truncate text-slate-600 ${denseRows && group.slotCount === 2 ? "text-[7px] leading-[7px]" : compactRows && group.slotCount === 2 ? "text-[8px] leading-[8px]" : "text-[9px] leading-[11px]"}`}>{isAbsence(appointment) ? "Profissional ausente" : names}</span>
+                  {fullHeight && !isAbsence(appointment) && <><span data-testid="appointment-service" className={`block w-full shrink-0 truncate text-slate-600 ${denseRows && group.slotCount === 2 ? "text-[7px] leading-[7px]" : compactRows && group.slotCount === 2 ? "text-[8px] leading-[8px]" : "text-[9px] leading-[11px]"}`}>{names}</span>
                   {!isAbsence(appointment) && <span data-testid="appointment-status" className={`block w-full shrink-0 text-center font-semibold ${denseRows && group.slotCount === 2 ? "text-[7px] leading-[7px]" : compactRows && group.slotCount === 2 ? "text-[8px] leading-[8px]" : "text-[9px] leading-[11px]"}`}>{statuses}</span>}</>}
                 </button>
+                {resizeTarget && <button type="button" data-testid={`resize-appointment-${resizeTarget.id}`} aria-label={`Ajustar duração de ${patientName(appointment)}`} title="Arraste para ajustar a duração" onPointerDown={event => resizeBooking(event, props.appointments.find(item => item.id === resizeTarget.id)!)} onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); closeHover(); const target = props.appointments.find(item => item.id === resizeTarget.id)!; const end = resizedAgendaEnd(target, event.key === "ArrowDown" ? 1 : -1); if (end) setResizeError(props.resizeAppointment(target.id, end)); } }} className="absolute bottom-0 left-1/4 z-20 flex h-[30%] max-h-2 w-1/2 touch-none cursor-ns-resize select-none items-center justify-center rounded opacity-0 hover:bg-white/60 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-avvi-blue"><span aria-hidden className="h-0.5 w-7 rounded bg-current opacity-40"/></button>}
                 {otherPatients > 0 && <button type="button" aria-label={`Ver outros pacientes às ${slotTime(time)} com ${professional.name}`} onClick={() => setSlotList({ professionalId: professional.id, hour: time, page: 0, appointmentIds: group.overlaps.map(item => item.id) })} className="absolute right-1 top-0.5 rounded bg-white/90 px-1 text-[9px] font-bold text-slate-600 shadow-sm">+{otherPatients}</button>}
-              </div> : !occupied && <button type="button" aria-label={`Agendar às ${slotTime(time)} com ${professional.name}`} disabled={closed || !professional.active} onPointerDown={event => selectSlot(event, slot)} onClick={event => { if (event.detail === 0) showSlotMenu(event.currentTarget, [slot]); }} onContextMenu={event => { event.preventDefault(); if (!closed && professional.active) showSlotMenu(event.currentTarget, [slot]); }} aria-haspopup="menu" aria-expanded={!!slotMenu && selectedSlot} className={`h-full w-full touch-none select-none rounded text-[9px] ${closed ? "bg-[#f0f7ff] text-slate-400" : !professional.active ? "bg-slate-50 text-slate-400" : "hover:bg-avvi-soft"}`}>{closed ? "Agenda fechada" : !professional.active ? "Inativo" : null}</button>}
+              </div> : !occupied && <button type="button" aria-label={`Agendar às ${slotTime(time)} com ${professional.name}`} disabled={closed || !professional.active} onPointerDown={event => selectSlot(event, slot)} onClick={event => { if (event.detail === 0) showSlotMenu(event.currentTarget, [slot]); }} onContextMenu={event => { event.preventDefault(); if (!closed && professional.active) showSlotMenu(event.currentTarget, [slot]); }} aria-haspopup="menu" aria-expanded={!!slotMenu && selectedSlot} className={`h-full w-full touch-none select-none rounded text-[9px] ${closed ? "bg-[#f0f7ff] text-slate-400" : !professional.active ? "bg-slate-50 text-slate-400" : "hover:bg-avvi-soft"}`}>{!closed && !professional.active ? "Inativo" : null}</button>}
             </div>;
           })}
           {!visible.length && <div className="min-h-0 border-b border-avvi-line" style={{ gridRow: index + 2, gridColumn: 2 }} />}
@@ -275,8 +311,8 @@ export function AgendaView(props: Props) {
         {!isAbsence(menuAppointment) && <><p data-testid="menu-appointment-service" className="mt-1 break-words">{serviceName(menuAppointment)}</p><p data-testid="menu-appointment-status" className="mt-1 font-semibold">{menuAppointment.status}</p></>}
         <p className="mt-1">{menuAppointment.startsAt.slice(11, 16)} – {menuAppointment.endsAt.slice(11, 16)}</p>
       </div>
-      {menu.appointmentIds.length > 1 && <label className="block border-b border-slate-100 px-2 py-2 text-[10px] text-slate-500">Agendamento<select aria-label="Selecionar agendamento da paciente" value={menu.appointmentId} onChange={event => setMenu({ ...menu, appointmentId: event.target.value })} className="mt-1 block w-full min-w-0 rounded border border-avvi-line bg-white p-1 text-[10px] text-slate-700">{menu.appointmentIds.map(id => { const item = props.appointments.find(appointment => appointment.id === id); return item && <option key={id} value={id}>{item.startsAt.slice(11,16)} – {item.endsAt.slice(11,16)} · {serviceName(item)}</option>; })}</select></label>}
-      {isAbsence(menuAppointment) ? <button type="button" role="menuitem" onClick={() => menuAction(() => props.removeAbsence(menuAppointment.id))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-slate-700 hover:bg-slate-100"><X size={14} />Remover ausência</button> : <>
+      {menu.appointmentIds.length > 1 && !isAbsence(menuAppointment) && <label className="block border-b border-slate-100 px-2 py-2 text-[10px] text-slate-500">Agendamento<select aria-label="Selecionar agendamento da paciente" value={menu.appointmentId} onChange={event => setMenu({ ...menu, appointmentId: event.target.value })} className="mt-1 block w-full min-w-0 rounded border border-avvi-line bg-white p-1 text-[10px] text-slate-700">{menu.appointmentIds.map(id => { const item = props.appointments.find(appointment => appointment.id === id); return item && <option key={id} value={id}>{item.startsAt.slice(11,16)} – {item.endsAt.slice(11,16)} · {serviceName(item)}</option>; })}</select></label>}
+      {isAbsence(menuAppointment) ? <button type="button" role="menuitem" onClick={() => menuAction(() => props.removeAbsence(menu.appointmentIds))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-slate-700 hover:bg-slate-100"><X size={14} />Remover ausência</button> : <>
       <button type="button" role="menuitem" onClick={() => menuAction(() => props.openAppointment(menuAppointment.id))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-slate-700 hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"><Eye size={14} />Ver agendamento</button>
       <button type="button" role="menuitem" onClick={() => menuAction(() => props.updateStatus(menuAppointment.id, "Confirmado"))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-green-700 hover:bg-green-50 focus:bg-green-50 focus:outline-none"><CheckCircle2 size={14} />Confirmado</button>
       <button type="button" role="menuitem" onClick={() => menuAction(() => props.updateStatus(menuAppointment.id, "Cancelado"))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-red-600 hover:bg-red-50 focus:bg-red-50 focus:outline-none"><Ban size={14} />Cancelado</button>

@@ -5,7 +5,7 @@ import { canAccessProfessional, canManageProfessional, canMoveStock, registratio
 import { checkoutStockUpdates } from "@/lib/stockAccess";
 import { stockHistoryEntry } from "@/lib/accessSnapshot";
 import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAvailability";
-import { isUltraformerTip, usageOnlyTipUpdate } from "@/lib/ultraformer";
+import { applyCheckoutUltraformer, isUltraformerTip, usageOnlyTipUpdate, validCheckoutShots } from "@/lib/ultraformer";
 import { validStrategy } from "@/lib/strategyDefinitions";
 import { validAnamnese } from "@/lib/anamnese";
 import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice } from "@/lib/invoices";
@@ -97,21 +97,47 @@ export async function POST(request: Request) {
         if (!validAnamnese(row.data) || !patientIds.has(row.data.patientId) || !professionalIds.has(row.data.professionalId)) return Response.json({ error: "Ficha, paciente ou profissional inválido." }, { status: 400, headers });
         const prior = existing.find(item => item.record_id === row.record_id)?.data;
         if (prior && (prior.patientId !== row.data.patientId || prior.professionalId !== row.data.professionalId)) return Response.json({ error: "O vínculo da ficha não pode ser alterado." }, { status: 400, headers });
+        if (prior && (prior.template ?? "facial") !== (row.data.template ?? "facial")) return Response.json({ error: "O modelo de uma ficha salva não pode ser alterado. Crie uma nova anamnese." }, { status: 400, headers });
         const author = { login: user.login, name: user.name?.trim() || user.login }; const now = new Date().toISOString();
-        row.data = { id: row.data.id, patientId: row.data.patientId, professionalId: row.data.professionalId, date: row.data.date, templateVersion: 1, answers: row.data.answers, createdAt: prior?.createdAt ?? now, updatedAt: now, createdBy: prior?.createdBy ?? author, updatedBy: author };
+        row.data = { id: row.data.id, patientId: row.data.patientId, professionalId: row.data.professionalId, date: row.data.date, templateVersion: 1, ...(row.data.template ? {template: row.data.template} : {}), answers: row.data.answers, createdAt: prior?.createdAt ?? now, updatedAt: now, createdBy: prior?.createdBy ?? author, updatedBy: author };
       }
     }
     const appointmentUpdates = upserts.filter((row) => row.entity === "appointments").map((row) => row.data as Appointment);
     const stockUpdates = upserts.filter(row => ["inventory", "gifts"].includes(row.entity));
     const stockRestricted = user.role === "standard" && !canMoveStock(user);
     const deletedAppointments = removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids);
-    const stored = appointmentUpdates.length || stockRestricted && stockUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
+    const stored = appointmentUpdates.length || deletedAppointments.length || stockRestricted && stockUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
     if (stockRestricted) {
       if (removed.some(item => ["inventory", "gifts"].includes(item.entity) && item.ids?.length)) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
       if (stockUpdates.length) {
         if (!canAccessTab(user, "Agenda")) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
         const [inventory, gifts] = await Promise.all([rows("inventory"), rows("gifts")]);
         if (!checkoutStockUpdates(inventory.map(row => row.data as unknown as import("@/lib/types").InventoryItem), gifts.map(row => row.data as unknown as import("@/lib/types").GiftStockItem), stored, appointmentUpdates, deletedAppointments, stockUpdates)) return Response.json({ error: "Sem permissão para ajustar o estoque. A baixa automática deve corresponder ao fechamento da conta." }, { status: 403, headers });
+      }
+    }
+    const tipUpdates = upserts.filter(row => row.entity === "ultraformer_tips");
+    const shotAppointments = appointmentUpdates.filter(next => next.closedAccount?.ultraformerShots?.length || stored.find(old => old.id === next.id)?.closedAccount?.ultraformerShots?.length);
+    const deletedShotAppointments = stored.filter(old => deletedAppointments.includes(old.id) && old.closedAccount?.ultraformerShots?.length).map(old => ({ ...old, accountClosed: false, closedAccount: undefined }));
+    if (appointmentUpdates.some(next => next.closedAccount?.ultraformerShots !== undefined && !validCheckoutShots(next.closedAccount.ultraformerShots))) return Response.json({ error: "Confira as ponteiras e os disparos do Ultraformer." }, { status: 400, headers });
+    const checkoutTipIds = new Set<string>();
+    if (shotAppointments.length || deletedShotAppointments.length) {
+      const [tipRows, patientRows, professionalRows] = await Promise.all([rows("ultraformer_tips"), rows("patients"), rows("professionals")]);
+      const tips = tipRows.map(row => row.data as unknown as import("@/lib/types").UltraformerTip);
+      let expected = tips;
+      try {
+        for (const next of [...shotAppointments, ...deletedShotAppointments]) {
+          const patient = upserts.find(row => row.entity === "patients" && row.record_id === next.patientId)?.data ?? patientRows.find(row => row.record_id === next.patientId)?.data;
+          const professional = upserts.find(row => row.entity === "professionals" && row.record_id === next.professionalId)?.data ?? professionalRows.find(row => row.record_id === next.professionalId)?.data;
+          const old = stored.find(item => item.id === next.id);
+          for (const shot of [...(old?.closedAccount?.ultraformerShots ?? []), ...(next.closedAccount?.ultraformerShots ?? [])]) checkoutTipIds.add(shot.tipId);
+          expected = applyCheckoutUltraformer(expected, next, String(patient?.name ?? ""), String(professional?.name ?? ""), undefined);
+        }
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Disparos inválidos." }, { status: 400, headers }); }
+      // A checkout may adjust only its linked usages, with the balance base and manual history intact.
+      const stable = (value: unknown) => JSON.stringify(value, (key, item) => key === "registeredBy" ? undefined : item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+      for (const tipId of checkoutTipIds) {
+        const before = tips.find(tip => tip.id === tipId), after = expected.find(tip => tip.id === tipId), update = tipUpdates.find(row => row.record_id === tipId);
+        if (update && stable(update.data) !== stable(after) || !update && stable(before) !== stable(after)) return Response.json({ error: "Os disparos devem corresponder ao fechamento da conta. Atualize a página e tente novamente." }, { status: 409, headers });
       }
     }
     const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt));
@@ -131,7 +157,7 @@ export async function POST(request: Request) {
       const foreign = stored.some((item) => item.id !== appointment.id && item.closedAccount?.id === account.id);
       if (account.appointmentId !== appointment.id || foreign || (account.generatedEntryId && account.generatedEntryId !== `procedure-account-${account.id}`)) return Response.json({ error: "Vínculo de fechamento inválido." }, { status: 403, headers });
     }
-    const touched = stored.filter((item) => appointmentUpdates.some((update) => update.id === item.id));
+    const touched = stored.filter((item) => deletedAppointments.includes(item.id) || appointmentUpdates.some((update) => update.id === item.id));
     const accounts = new Set([...touched, ...appointmentUpdates].flatMap((item) => [item.closedAccount?.id, item.financialEntryId, item.closedAccount?.generatedEntryId]).filter(Boolean));
     const entries = new Set([...accounts, ...upserts.filter((row) => row.entity === "financial_entries" && accounts.has(row.data?.sourceAccountId)).map((row) => row.record_id)]);
     const ledgerSources = new Set<string>(canWriteEntity(user, "financial_entries") ? upserts.filter(row => row.entity === "financial_entries").map(row => row.record_id) : []);
@@ -143,13 +169,17 @@ export async function POST(request: Request) {
       if (row.entity === "appointments" && row.data.invoice !== undefined && (!validInvoice(row.data.invoice) || row.data.invoice.localPdf)) return Response.json({error:"Anexo fiscal inválido."},{status:400,headers});
       if (row.entity === "professionals" && row.data.showInAgenda !== undefined && typeof row.data.showInAgenda !== "boolean") return Response.json({ error: "Visibilidade na agenda inválida." }, { status: 400, headers });
       if (row.entity === "professionals" && row.data.closedShifts !== undefined && !validClosedShifts(row.data.closedShifts)) return Response.json({ error: "Turnos de agenda inválidos." }, { status: 400, headers });
+      if (row.entity === "professionals" && row.data.anamneseTemplate !== undefined && !["facial", "body"].includes(row.data.anamneseTemplate)) return Response.json({ error: "Modelo de anamnese inválido." }, { status: 400, headers });
       if (row.entity === "professionals" && !canManageProfessional(user, row.record_id)) return Response.json({ error: "Cadastro deste profissional não autorizado." }, { status: 403, headers });
       if (row.entity === "ultraformer_tips" && !isUltraformerTip(row.data)) return Response.json({ error: "Dados de ponteira ou utilização inválidos." }, { status: 400, headers });
       if (row.entity === "ultraformer_tips" && !canWriteEntity(user, "ultraformer_tips")) return Response.json({ error: "Acesso ao Ultraformer MPT não autorizado." }, { status: 403, headers });
       if (row.entity === "ultraformer_tips") {
         const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "ultraformer_tips").eq("record_id", row.record_id).maybeSingle();
         if (error) throw error;
-        if (user.role === "standard" && !usageOnlyTipUpdate(previous?.data, row.data)) return Response.json({ error: "Somente o administrador pode ajustar o saldo ou alterar o histórico. Registre uma nova utilização." }, { status: 403, headers });
+        const checkoutUpdate = canAccessTab(user, "Agenda") && checkoutTipIds.has(row.record_id);
+        const previousIds = new Set((previous?.data?.usages ?? []).map((usage: { id: string }) => usage.id));
+        const forgedCheckoutUsage = row.data.usages.some((usage: { id: string; appointmentId?: string; sourceAccountId?: string }) => !previousIds.has(usage.id) && (usage.appointmentId || usage.sourceAccountId));
+        if (user.role === "standard" && !checkoutUpdate && (!canAccessTab(user, "Ultraformer MPT") || forgedCheckoutUsage || !usageOnlyTipUpdate(previous?.data, row.data))) return Response.json({ error: "Somente o administrador pode ajustar o saldo ou alterar o histórico. Registre uma nova utilização ou edite o fechamento correspondente." }, { status: 403, headers });
         const prior = new Map((previous?.data?.usages ?? []).map((usage: { id: string; registeredBy?: unknown }) => [usage.id, usage]));
         // Stamp new usages from the signed session; preserve the original author on retries and edits.
         row.data.usages = row.data.usages.map((usage: { id: string; registeredBy?: unknown }) => {
@@ -213,7 +243,7 @@ export async function POST(request: Request) {
     // Removing a closed account reverses its derived records even though restricted rows are not loaded by this user.
     if (user.role === "standard") for (const old of touched) {
       const next = appointmentUpdates.find((item) => item.id === old.id);
-      if (old.accountClosed && next && !next.accountClosed) {
+      if (old.accountClosed && (!next || !next.accountClosed)) {
         for (const entity of ["revenues", "fixed_costs", "financial_entries"]) {
           const ids = [old.closedAccount?.id, old.financialEntryId, old.closedAccount?.generatedEntryId].filter(Boolean);
           for (const id of ids) {

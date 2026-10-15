@@ -324,3 +324,33 @@ Validação: `tests/professional-insights.mjs`, `tests/professional-insights-ui.
 O recibo permite selecionar vários serviços do catálogo com busca por qualquer trecho do nome. Crédito Futuro fica disponível somente nas formas do recibo e pode ser emitido antes de escolher serviços. O PDF usa o logo da clínica, os nomes salvos dos serviços e paginação para textos extensos; recibos antigos continuam legíveis usando o campo procedure legado. Este cadastro de recibos documenta o recebimento e não altera automaticamente o saldo de crédito do paciente ou os lançamentos financeiros. Contas autorizadas apenas a Recibos de Pagamento recebem leitura do catálogo de serviços, sem permissão de edição. Não exige SQL nem novas variáveis. Verificação: tests/patient-receipts.mjs e tests/patient-receipts-ui.mjs.
 
 Os recibos aceitam várias formas de pagamento, cada uma com seu valor, por exemplo Pix e cartão de crédito. O total é calculado pela soma em centavos e cada parcela deve ser positiva. A divisão fica salva no campo opcional payments e aparece no PDF, inclusive ao reabrir o histórico. Recibos antigos usam paymentMethod e amount como pagamento único. Não requer migração no Supabase.
+
+
+### Ações no fechamento e ajustes rápidos na agenda
+
+Ver fechamento oferece Excluir fechamento e Estorno para contas com acesso à Agenda. Estorno abre o fechamento preenchido para edição; abrir ou cancelar não altera o registro. Excluir usa a reversão já existente de lançamentos, estoque, brindes, crédito e nota fiscal, preservando o agendamento e a proteção contra crédito já utilizado. Nos detalhes do agendamento, o lápis ao lado de Histórico edita o cadastro do paciente em uma janela; o salvamento preserva saldo de crédito, fotos e demais dados fora do formulário.
+
+A borda inferior do agendamento tem uma alça visível ao passar o mouse sobre ela, para ajustar a duração em passos de 30 minutos. Setas para cima/baixo também funcionam quando a alça está focada; Escape cancela o arraste. A agenda impede sobreposição, ausência e turno fechado. O ajuste mantém serviços, contas, estoque e status. Em blocos do mesmo paciente com vários agendamentos, só o término do último é ajustado. Ausências consecutivas aparecem em um único bloco com um rótulo; remover a ausência remove esse bloco. Horários fechados por turno ficam somente em azul claro. Não exige SQL nem variáveis novas. Validação: tests/checkout-invoices-ui.mjs, tests/agenda-resize-ui.mjs, tests/agenda-availability.mjs e tests/agenda-groups.mjs.
+
+
+### Menu compacto e visualização de cancelados
+
+A navegação desktop começa recolhida, com 72px e ícones dos cinco grupos autorizados. Clicar no ícone expande a barra para 256px, mostrando nomes e abas; somente o botão de seta volta ao modo compacto. Trocar de aba ou clicar no mesmo grupo mantém a barra aberta. A área principal acompanha a largura, liberando espaço para a agenda. As permissões existentes e a navegação móvel são preservadas.
+
+Na Agenda, agendamentos com status Cancelado ficam ocultos por padrão. A bolinha vermelha e o texto Cancelados na legenda alternam sua exibição, inclusive nos filtros móveis. É apenas um filtro de visualização: os dados, fechamentos e regras de disponibilidade existentes são preservados. Faltou e Reagendado continuam visíveis. Testes: tests/sidebar-cancelled-ui.mjs e tests/agenda-groups-hover-ui.mjs.
+
+
+### Anamnese facial e corporal por profissional
+
+O Cadastro de Profissionais oferece Modelo de anamnese: Facial ou Corporal. Sem configuração, o modelo continua facial. Uma nova ficha usa a preferência do profissional; cada ficha salva conserva seu próprio modelo, mesmo que a preferência mude depois. Fichas antigas sem template continuam faciais. O servidor valida campos, opções e modelo, mantém autoria e impede trocar o modelo ou os vínculos de uma ficha existente.
+
+O formulário corporal incorpora as três páginas da ficha fornecida, organizado em Dados e hábitos, Antecedentes e declaração, Avaliação corporal, Medidas e acompanhamento e Sessões e relatório. Opções são caixinhas, áreas de escrita são digitáveis, a figura corporal aceita marcações e há campos de medidas inicial/meio/última e 12 sessões. Fotos, histórico por profissional, edição e PDF ficam disponíveis como na facial. Na declaração corporal, fica somente a assinatura do paciente; dados da empresa e assinatura do esteticista não aparecem. As 12 sessões mantêm apenas a data, sem visto do paciente, e os quatro campos do Histórico do paciente usam entradas de uma linha. Respostas antigas desses campos retirados continuam válidas ao editar uma ficha, mas ficam ocultas no formulário e no PDF. Os registros usam os campos opcionais anamneseTemplate no profissional e template na ficha, no JSON já existente; não exige SQL nem variáveis novas. Verificação: tests/body-anamnese-ui.mjs, tests/anamnese-cloud.mjs e tests/anamnese-history-ui.mjs.
+
+
+### Ultraformer no fechamento de conta
+
+Ao lado de + Brindes, + Ultraformer permite buscar a ponteira e registrar os disparos usados, incluindo várias ponteiras no mesmo fechamento. O consumo é salvo ao confirmar a conta, com paciente, profissional e usuário responsável, e aparece no histórico do Ultraformer e em Ver fechamento. Disparos não adicionam cobrança: o preço vem dos serviços. Um serviço com disparos registrados pode ser fechado sem adicionar um produto fictício.
+
+Reabrir ou cancelar a edição não consome disparos; salvar novamente reconcilia a quantidade sem duplicação, e excluir o fechamento devolve somente os disparos vinculados àquela conta. Registros manuais e demais contas são preservados. A Agenda carrega as ponteiras para este fluxo; contas padrão podem ajustar somente a utilização vinculada ao fechamento, validada no servidor. O saldo base das ponteiras continua editável apenas pelo administrador. Os novos campos ficam no JSON existente, sem SQL ou variáveis adicionais. Verificação: tests/checkout-ultraformer-ui.mjs, tests/ultraformer.mjs e tests/ultraformer-cloud.mjs.
+
+O formulário de Lançamento de Procedimentos não exibe mais o campo Observações do lançamento. As observações específicas do fechamento e do agendamento permanecem separadas.

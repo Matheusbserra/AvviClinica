@@ -1,7 +1,7 @@
 import fs from "node:fs";import os from "node:os";import path from "node:path";import {pathToFileURL} from "node:url";import {createRequire} from "node:module";import assert from "node:assert/strict";import ts from "typescript";
 const require=createRequire(import.meta.url),dir=fs.mkdtempSync(path.join(os.tmpdir(),"avvi-ultraformer-cloud-"));
 try {
- const modules=['stockAccess','inventory','gifts','servicePackages',"anamnese", "strategyDefinitions","access","accessServer","accountsServer","accessSnapshot","database","supabase","persistence","ultraformer","agendaAvailability","invoices","appointmentServices","checkout","calculations"];
+ const modules=['stockAccess','inventory','gifts','servicePackages',"anamnese", "bodyAnamnese", "strategyDefinitions","access","accessServer","accountsServer","accessSnapshot","database","supabase","persistence","ultraformer","agendaAvailability","invoices","appointmentServices","checkout","calculations"];
  for(const name of [...modules,"route"]){let source=fs.readFileSync(name==="route"?"app/api/access/data/route.ts":"lib/"+name+".ts","utf8");for(const dependency of modules)source=source.replaceAll('"./'+dependency+'"','"./'+dependency+'.mjs"').replaceAll('"@/lib/'+dependency+'"','"./'+dependency+'.mjs"');source=source.replaceAll('"@supabase/supabase-js"',JSON.stringify(pathToFileURL(require.resolve("@supabase/supabase-js")).href));fs.writeFileSync(path.join(dir,name+".mjs"),ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText);}
  Object.assign(process.env,{AVVI_SESSION_SECRET:"isolated-ultraformer-test-secret-000000000",NEXT_PUBLIC_SUPABASE_URL:"https://project.supabase.co",NEXT_PUBLIC_SUPABASE_ANON_KEY:"sb_publishable_test",SUPABASE_SERVICE_ROLE_KEY:"sb_secret_test"});
  const records=new Map(),account={id:"operator",login:"operator",name:"Operadora",role:"standard",tabs:["Ultraformer MPT"],version:1,salt:"test",password_hash:"test"};let failWrites=false;
@@ -26,6 +26,30 @@ try {
  assert.equal((await route.POST(request(operator,{upserts:[],removed:[{entity:"ultraformer_tips",ids:[tip.id]}]}))).status,403);
  const invalid={...body,upserts:[{...body.upserts[0],data:{...tip,usages:[{...usage,quantity:-1}]}}]};assert.equal((await route.POST(request(admin,invalid))).status,400);
  failWrites=true;assert.equal((await route.POST(request(operator,body))).status,503);failWrites=false;
+ account.tabs=["Agenda"];
+ const storedTip=structuredClone(records.get('ultraformer_tips:'+tip.id).data),professional={id:'professional',name:'Profissional',active:true},checkoutPatient={id:'patient',name:'Paciente',cpf:''};
+ for(const [entity,data] of [['professionals',professional],['patients',checkoutPatient]])records.set(entity+':'+data.id,{entity,record_id:data.id,data});
+ const openVisit={id:'visit',patientId:'patient',professionalId:'professional',startsAt:'2026-10-14T08:00:00',endsAt:'2026-10-14T09:00:00',status:'Confirmado'};
+ records.set('appointments:visit',{entity:'appointments',record_id:'visit',data:openVisit});
+ const closedVisit={...openVisit,status:'Finalizado',accountClosed:true,closedAccount:{id:'account',appointmentId:'visit',patientId:'patient',professionalId:'professional',date:'2026-10-14',closedAt:'2026-10-14T13:00:00Z',procedureLines:[],products:[],payments:[],ultraformerShots:[{tipId:tip.id,name:tip.name,quantity:250}]}};
+ const linkedTip=module.applyCheckoutUltraformer([storedTip],closedVisit,'Paciente','Profissional',usage.registeredBy)[0];
+ const checkoutBody={upserts:[{entity:'appointments',record_id:'visit',data:closedVisit},{entity:'ultraformer_tips',record_id:tip.id,data:linkedTip}],removed:[]};
+ assert.equal((await route.POST(request(operator,checkoutBody))).status,200);
+ assert.equal(module.remainingShots(records.get('ultraformer_tips:'+tip.id).data),750);
+ assert.equal(records.get('ultraformer_tips:'+tip.id).data.usages[1].registeredBy.name,'Operadora');
+ assert.equal((await route.POST(request(operator,checkoutBody))).status,200);assert.equal(records.get('ultraformer_tips:'+tip.id).data.usages.length,2);
+ assert.equal((await route.POST(request(operator,{upserts:[{entity:'ultraformer_tips',record_id:tip.id,data:{...linkedTip,initialShots:5000}}],removed:[]}))).status,403);
+ assert.equal((await route.POST(request(operator,{...checkoutBody,upserts:checkoutBody.upserts.map(row=>row.entity==='ultraformer_tips'?{...row,data:{...row.data,initialShots:5000}}:row)}))).status,409);
+ const editedVisit={...closedVisit,closedAccount:{...closedVisit.closedAccount,ultraformerShots:[{tipId:tip.id,name:tip.name,quantity:125}]}};
+ assert.equal((await route.POST(request(operator,{upserts:[{entity:'appointments',record_id:'visit',data:editedVisit}],removed:[]}))).status,409);
+ const editedTip=module.applyCheckoutUltraformer([records.get('ultraformer_tips:'+tip.id).data],editedVisit,'Paciente','Profissional',undefined)[0];
+ assert.equal((await route.POST(request(operator,{upserts:[{entity:'appointments',record_id:'visit',data:editedVisit},{entity:'ultraformer_tips',record_id:tip.id,data:editedTip}],removed:[]}))).status,200);
+ assert.equal(module.remainingShots(records.get('ultraformer_tips:'+tip.id).data),875);
+ assert.equal((await route.POST(request(operator,{upserts:[{entity:'appointments',record_id:'visit',data:{...editedVisit,closedAccount:{...editedVisit.closedAccount,ultraformerShots:[{tipId:tip.id,name:tip.name,quantity:-1}]}}}],removed:[]}))).status,400);
+ const reopened={...openVisit,accountClosed:false},revertedTip=module.applyCheckoutUltraformer([records.get('ultraformer_tips:'+tip.id).data],reopened,'','',undefined)[0];
+ assert.equal((await route.POST(request(operator,{upserts:[{entity:'appointments',record_id:'visit',data:reopened},{entity:'ultraformer_tips',record_id:tip.id,data:revertedTip}],removed:[]}))).status,200);
+ assert.equal(module.remainingShots(records.get('ultraformer_tips:'+tip.id).data),1000);assert.deepEqual(records.get('ultraformer_tips:'+tip.id).data.usages,storedTip.usages);
+ assert.equal((await route.POST(request(operator,{upserts:[{entity:'ultraformer_tips',record_id:tip.id,data:linkedTip}],removed:[]}))).status,403);
  account.tabs=["Nota Fiscal"];
  const patient={id:"patient",name:"Patient",cpf:"",futureCredit:50};records.set("patients:patient",{entity:"patients",record_id:"patient",data:patient});
  const cpfBody={upserts:[{entity:"patients",record_id:"patient",data:{...patient,cpf:"123.456.789-09"}}],removed:[]};

@@ -1,3 +1,4 @@
+import {navigationButton} from './navigation-helper.mjs';
 import { chromium } from 'file:///C:/Users/mathe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs';
 import assert from 'node:assert/strict';
 const browser=await chromium.launch({headless:true,executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe'});
@@ -5,7 +6,7 @@ const context=await browser.newContext({viewport:{width:1440,height:900}}),page=
 page.on('pageerror',error=>errors.push(error.message));
 const origin=process.env.AVVI_TEST_URL??'http://127.0.0.1:3107';
 const root='C:/Users/mathe/.codex/visualizations/2026/10/08/01a11cce-4e90-7ed3-9fab-934e7f183230/';
-const tab=name=>page.getByRole('button',{name,exact:true}).filter({visible:true}).first();
+const tab=name=>navigationButton(page,name);
 const slot=(id,hour)=>page.locator(`[data-agenda-slot][data-professional-id="${id}"][data-hour="${hour}"]`);
 async function stored(){await page.waitForFunction(()=>JSON.parse(localStorage.getItem('avvi.data.snapshot.v1')??'null')?.data?.professionals?.length===2);}
 async function drag(from,to){const a=await from.boundingBox(),b=await to.boundingBox();await page.mouse.move(a.x+a.width/2,a.y+a.height/2);await page.mouse.down();await page.mouse.move(b.x+b.width/2,b.y+b.height/2,{steps:8});await page.mouse.up();}
@@ -20,7 +21,7 @@ try{
  await page.reload();await tab('Agenda').click();await stored();
  const eight=slot('ana',8).getByRole('button');const eightBox=await eight.boundingBox();await eight.click();const menu=page.getByRole('menu',{name:'Ações dos horários selecionados'});await menu.waitFor();assert.equal(await page.getByTestId('appointment-details-window').count(),0);await page.waitForFunction(bottom=>document.querySelector('[aria-label="Ações dos horários selecionados"]')?.getBoundingClientRect().top>=bottom,eightBox.y+eightBox.height);await page.keyboard.press('Escape');await menu.waitFor({state:'hidden'});
  await drag(slot('ana',8),slot('bia',10));await menu.getByText('10 horários selecionados').waitFor();await menu.getByRole('menuitem',{name:'Ausente',exact:true}).click();await page.waitForFunction(()=>JSON.parse(localStorage.getItem('avvi.data.snapshot.v1')).data.appointments.filter(a=>a.eventType==='Registrar Ausência').length===10);
- assert.match(await slot('bia',9).getByRole('button').getAttribute('class'),/bg-slate-200/);await page.reload();await tab('Agenda').click();await slot('ana',8).getByRole('button').click();await page.getByRole('menuitem',{name:'Remover ausência'}).click();await page.waitForFunction(()=>JSON.parse(localStorage.getItem('avvi.data.snapshot.v1')).data.appointments.filter(a=>a.eventType==='Registrar Ausência').length===9);
+ assert.match(await slot('bia',9).getByRole('button').getAttribute('class'),/bg-slate-200/);await page.reload();await tab('Agenda').click();await slot('ana',8).getByRole('button').click();await page.getByRole('menuitem',{name:'Remover ausência'}).click();await page.waitForFunction(()=>JSON.parse(localStorage.getItem('avvi.data.snapshot.v1')).data.appointments.filter(a=>a.eventType==='Registrar Ausência').length===5);
  await drag(slot('ana',11),slot('ana',13));await menu.getByRole('menuitem',{name:'Novo agendamento'}).click();const details=page.getByTestId('appointment-details-window');await details.waitFor();assert.equal(await details.getByLabel('Duração (minutos)',{exact:true}).inputValue(),'150');await details.getByRole('button',{name:'Fechar',exact:true}).click();
  await tab('Cadastro de Profissionais').click();await page.getByRole('button',{name:'Fechar agenda de Ana QA'}).click();const weekday=new Date().getDay(),days=['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];await page.getByLabel('Fechar '+days[weekday]+' Tarde',{exact:true}).check();await page.getByRole('button',{name:'Salvar profissional',exact:true}).click();await page.waitForFunction(()=>JSON.parse(localStorage.getItem('avvi.data.snapshot.v1')).data.professionals[0].closedShifts.length===1);await tab('Agenda').click();assert.equal(await slot('ana',14).getByRole('button').isDisabled(),true);assert.match(await slot('ana',14).getByRole('button').getAttribute('class'),/f0f7ff/);await page.getByTestId('appointment-appointment').click();await page.getByRole('menuitem',{name:'Ver agendamento'}).click();await details.getByRole('button',{name:'Salvar agendamento'}).click();await details.waitFor({state:'hidden'});
  await page.screenshot({path:root+'agenda-ausencias-turnos.png',fullPage:false});

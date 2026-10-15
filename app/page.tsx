@@ -21,12 +21,14 @@ import { ptBR } from "date-fns/locale";
 import {
   Activity,
   BarChart3,
+  Building2,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleDollarSign,
+  ClipboardList,
   Download,
   Eye,
   EyeOff,
@@ -43,6 +45,7 @@ import {
   Pencil,
   Trash2,
   UserPlus,
+  UserRound,
   Users,
   WalletCards,
   MessageCircle,
@@ -59,6 +62,7 @@ import { AgendaView } from "@/app/components/AgendaView";
 import { PatientPhotos } from "@/app/components/PatientPhotos";
 import { AnamneseView } from "@/app/components/AnamneseView";
 import { PatientHistory } from "@/app/components/PatientHistory";
+import { PatientRegistrationEditor } from "@/app/components/PatientRegistrationEditor";
 import { ClinicalDialog } from "@/app/components/ClinicalDialog";
 import { PackagesView } from "@/app/components/PackagesView";
 import type { ServicePackage } from "@/lib/servicePackages";
@@ -66,6 +70,7 @@ import { SearchSelect } from "@/app/components/SearchSelect";
 import { History } from "lucide-react";
 import { UltraformerView } from "@/app/components/UltraformerView";
 import { InventorySection } from "@/app/components/GiftInventoryView";
+import { applyCheckoutUltraformer } from "@/lib/ultraformer";
 import { applyCheckoutGifts } from "@/lib/gifts";
 import { AccountSummary } from "@/app/components/AccountSummary";
 import { AccountCheckout } from "@/app/components/AccountCheckout";
@@ -106,12 +111,12 @@ import type { AppRole, AppUser } from "@/lib/access";
 
 type Tab = "Estratégias" | "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
-const sidebarGroups: { label: string; tabs: Tab[] }[] = [
-  { label: "Operação", tabs: ["Agenda", "Follow Up", "Anamnese"] },
-  { label: "Meu estabelecimento", tabs: ["Estoque", "Ultraformer MPT"] },
-  { label: "Profissional", tabs: ["Relatórios", "Relatório Profissional", "Estratégias"] },
-  { label: "Financeiro", tabs: ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos"] },
-  { label: "Cadastros", tabs: ["Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] }
+const sidebarGroups: { label: string; icon: ElementType; tabs: Tab[] }[] = [
+  { label: "Operação", icon: CalendarDays, tabs: ["Agenda", "Follow Up", "Anamnese"] },
+  { label: "Meu estabelecimento", icon: Building2, tabs: ["Estoque", "Ultraformer MPT"] },
+  { label: "Profissional", icon: Users, tabs: ["Relatórios", "Relatório Profissional", "Estratégias"] },
+  { label: "Financeiro", icon: CircleDollarSign, tabs: ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos"] },
+  { label: "Cadastros", icon: ClipboardList, tabs: ["Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] }
 ];
 const savedLoginKey = "avvi.saved.login.v1";
 
@@ -433,7 +438,7 @@ function readSavedLogin() {
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("Agenda");
-  const [openSidebarGroup, setOpenSidebarGroup] = useState<string | null>("Operação");
+  const [openSidebarGroup, setOpenSidebarGroup] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("Dia");
   const [selectedDate, setSelectedDate] = useState(() => todayKey());
   const [selectedMonth, setSelectedMonth] = useState(() => todayKey().slice(0, 7));
@@ -472,6 +477,7 @@ export default function Home() {
   const [receiptBusy, setReceiptBusy] = useState(false);
   const [procedureForm, setProcedureForm] = useState(makeProcedureForm());
   const [patientForm, setPatientForm] = useState(makePatientForm());
+  const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
   const [professionalForm, setProfessionalForm] = useState(makeProfessionalForm());
   const [costForm, setCostForm] = useState(makeCostForm());
   const [professionalPaymentFilter, setProfessionalPaymentFilter] = useState("todos");
@@ -913,13 +919,13 @@ export default function Home() {
     setIsDataReady(false); setHasPendingChanges(false); setStorageError(""); setLastSavedAt("");
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
     setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
-    setAnamneses([]); setHistoryPatientId(null);
+    setAnamneses([]); setHistoryPatientId(null); setEditingPatientId(null);
     setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
     setPatients(startupSnapshot.current.patients); setProfessionals(startupSnapshot.current.professionals);
     setProcedures(startupSnapshot.current.procedures); setServices(startupSnapshot.current.services);
     setInventory([]); setGifts([]); setAppointments(startupSnapshot.current.appointments); setCosts(startupSnapshot.current.fixed_costs);
     setFollowUpRules([]); setFollowUpContacts([]); setFollowUpLogs([]);
-    const firstTab = tabs.find(tab => canAccessTab(user, tab.id))?.id ?? "Agenda"; setActiveTab(firstTab); setOpenSidebarGroup(sidebarGroups.find(group => group.tabs.includes(firstTab))?.label ?? null); setIsAuthenticated(true);
+    const firstTab = tabs.find(tab => canAccessTab(user, tab.id))?.id ?? "Agenda"; setActiveTab(firstTab); setOpenSidebarGroup(null); setIsAuthenticated(true);
   }
   useEffect(() => {
     let active = true;
@@ -966,7 +972,7 @@ export default function Home() {
     window.sessionStorage.removeItem("avvi.session");
     setIsAuthenticated(false); setIsDataReady(false); setUserRole("standard"); setCurrentUser({ login: "", role: "standard", tabs: [] }); setDatabaseAccess("standard");
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
-    setAnamneses([]); setHistoryPatientId(null);
+    setAnamneses([]); setHistoryPatientId(null); setEditingPatientId(null);
     setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
     setSelectedSlot(null); setSelectedAppointmentId(null); setCheckoutDraft(null); setAccountSummary(null);
     setLoginForm(rememberPassword ? loginForm : { login: "", password: "" });
@@ -982,7 +988,7 @@ export default function Home() {
         const data = await response.json();
         if (active && !data.user) {
           setIsAuthenticated(false); setIsDataReady(false); setCurrentUser({ login: "", role: "standard", tabs: [] }); setUserRole("standard"); setDatabaseAccess("standard");
-          setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null); setAnamneses([]); setHistoryPatientId(null);
+          setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null); setAnamneses([]); setHistoryPatientId(null); setEditingPatientId(null);
           setLoginError("Seu acesso foi atualizado. Entre novamente para usar as permissões atuais.");
         }
       } catch { /* A temporary network failure does not discard the local pending draft. */ }
@@ -991,7 +997,7 @@ export default function Home() {
     return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", check); };
   }, [isAuthenticated]);
   const availableTabs = tabs.filter((tab) => canAccessTab(currentUser, tab.id));
-  function changeTab(tab: Tab) { if (canAccessTab(currentUser, tab)) { setActiveTab(tab); setOpenSidebarGroup(sidebarGroups.find(group => group.tabs.includes(tab))?.label ?? null); } }
+  function changeTab(tab: Tab) { if (canAccessTab(currentUser, tab)) setActiveTab(tab); }
 
   function openSlot(hour: number, professionalId: string, durationMinutes = 30) {
     setAppointmentError("");
@@ -1003,8 +1009,16 @@ export default function Home() {
   function markAgendaAbsent(slots: AgendaSlot[]) {
     setAppointments(current => [...current, ...newAbsences(professionals, current, slots, () => id("absence"))]);
   }
-  function removeAgendaAbsence(appointmentId: string) {
-    setAppointments(current => current.filter(item => item.id !== appointmentId || !isAbsence(item)));
+  function removeAgendaAbsence(appointmentIds: string[]) {
+    setAppointments(current => current.filter(item => !appointmentIds.includes(item.id) || !isAbsence(item)));
+  }
+  function resizeAgendaAppointment(appointmentId: string, endsAt: string) {
+    const appointment = appointments.find(item => item.id === appointmentId);
+    if (!appointment || isAbsence(appointment)) return "Agendamento indisponível.";
+    const error = appointmentAvailabilityError(professionals.find(item => item.id === appointment.professionalId), appointments, appointment.startsAt, endsAt, appointmentId);
+    if (error) return error;
+    setAppointments(current => current.map(item => item.id === appointmentId ? { ...item, endsAt } : item));
+    return "";
   }
   function openAppointment(appointmentId: string) {
     setAppointmentError("");
@@ -1123,9 +1137,9 @@ export default function Home() {
     const existingLines = existing?.procedureLines?.length ? existing.procedureLines : existing ? [entryToLine(existing)] : initialLines;
     const restoredItems = existing ? restoreCheckoutItems(existingLines, existing.products, procedures, services) : { lines: initialLines, products: [] };
     return { appointment, client: { ...client }, professional: professionals.find((item) => item.id === appointment.professionalId),
-      lines: distributeCheckoutDiscount(restoredItems.lines, existing?.commercialDiscount ?? 0), products: restoredItems.products, gifts: appointment.closedAccount?.gifts?.map((gift) => ({ ...gift })) ?? [],
+      lines: distributeCheckoutDiscount(restoredItems.lines, existing?.commercialDiscount ?? 0), products: restoredItems.products, gifts: appointment.closedAccount?.gifts?.map((gift) => ({ ...gift })) ?? [], ultraformerShots: appointment.closedAccount?.ultraformerShots?.map(shot => ({ ...shot })) ?? [],
       payments: existing?.payments.map((payment) => ({ ...payment })) ?? [], entryId: existing?.id,
-      discountSplit: existing?.discountSplit ?? "Empresa e profissional dividem", notes: originalAppointmentNotes(existing?.notes ?? appointment.notes),
+      discountSplit: existing?.discountSplit ?? "Empresa e profissional dividem", notes: originalAppointmentNotes(existing?.notes ?? appointment.notes), checkoutNotes: appointment.closedAccount?.checkoutNotes ?? "",
       storedCreditPayments: appointment.closedAccount?.creditPayments, previousCreditAdded: appointment.closedAccount?.creditAdded ?? 0, clinicPatient: appointment.closedAccount?.clinicPatient, previousFutureCredit: futureCreditUsed(existing) };
   }
 
@@ -1154,7 +1168,7 @@ export default function Home() {
   }
 
   function finishCheckout(result: CheckoutResult) {
-    if (!checkoutDraft || (!result.products.length && !checkoutAllowsNoProducts(result.lines, services))) return;
+    if (!checkoutDraft || (!result.products.length && !result.ultraformerShots.length && !checkoutAllowsNoProducts(result.lines, services))) return;
     const currentAppointment = appointments.find((appointment) => appointment.id === checkoutDraft.appointment.id);
     if (!currentAppointment?.patientId) return;
     const previousAccount = currentAppointment.closedAccount ?? entries.find((entry) => !entry.sourceAccountId && entry.accountClosed && entry.id === checkoutDraft.entryId);
@@ -1167,16 +1181,20 @@ export default function Home() {
       id: accountId, appointmentId: currentAppointment.id, patientId: currentAppointment.patientId,
       professionalId: currentAppointment.professionalId, accountClosed: true, balanceDue: result.balanceDue,
       closedAt: new Date().toISOString(), change: result.change, creditAdded: result.creditAdded, creditPayments: result.creditPayments.map(payment=>({...payment,fee:payment.method === "Crédito" ? calculateCardFee(payment.amount,payment.cardBrand,payment.installments) : payment.method === "Débito" ? calculateDebitFee(payment.amount) : 0})), clinicPatient: result.clinicPatient,
-      procedureLines: result.lines.map((line) => ({ ...line })), products: result.products.map((product) => ({ ...product })), gifts: result.gifts.map((gift) => ({ ...gift })),
+      procedureLines: result.lines.map((line) => ({ ...line })), products: result.products.map((product) => ({ ...product })), gifts: result.gifts.map((gift) => ({ ...gift })), ultraformerShots: result.ultraformerShots.map(shot => ({ ...shot })),
       procedureId: undefined, manualProcedure: first?.manualProcedure, quantity: first?.quantity ?? 1,
       servicePrice: first?.servicePrice ?? 0, productCost: 0, machineFee: 0,
       commercialDiscount: result.discount, discountSplit: checkoutDraft.discountSplit,
       professionalPercent: result.lines.some(line => line.packageId) ? professionalPercentForEntry({ procedureLines: result.lines, servicePrice: first?.servicePrice ?? 0, quantity: first?.quantity ?? 1, professionalPercent: checkoutCommission(professional?.commissionPercent ?? 0,result.clinicPatient) }) : checkoutCommission(professional?.commissionPercent ?? 0,result.clinicPatient),
-      date: currentAppointment.startsAt.slice(0, 10), notes: checkoutDraft.notes,
+      date: currentAppointment.startsAt.slice(0, 10), notes: checkoutDraft.notes, checkoutNotes: result.checkoutNotes,
       payments: result.payments.map((payment) => ({ ...payment, discount: 0,
         fee: payment.method === "Crédito" ? calculateCardFee(payment.amount, payment.cardBrand, payment.installments)
           : payment.method === "Débito" ? calculateDebitFee(payment.amount) : 0 }))
     };
+    let nextTips: UltraformerTip[];
+    try { nextTips = applyCheckoutUltraformer(ultraformerTips, { ...currentAppointment, accountClosed: true, closedAccount: account }, result.client.name.trim(), professional?.name ?? "Profissional", { id: currentUser.id ?? currentUser.login, login: currentUser.login, name: currentUser.name?.trim() || currentUser.login }); }
+    catch (error) { window.alert(error instanceof Error ? error.message : "Confira os disparos do Ultraformer."); return; }
+    setUltraformerTips(nextTips);
     // Generate once. Editing either record afterward never overwrites the other.
     const generated = entries.find((entry) => entry.sourceAccountId === accountId);
     const procedureEntry = result.total > 0 ? generated ?? procedureEntryFromAccount(account, procedures, professional) : undefined;
@@ -1213,10 +1231,11 @@ export default function Home() {
 
   function deleteClosedAccount(appointmentId: string) {
     const appointment = appointments.find((item) => item.id === appointmentId);
-    if (!appointment?.accountClosed) return;
-    const account = appointment.closedAccount ?? entries.find((entry) => entry.accountClosed && entry.id === appointment.financialEntryId);
+    if (!appointment) return false;
+    const account = appointment.closedAccount ?? entries.find((entry) => entry.accountClosed && (entry.id === appointment.financialEntryId || entry.appointmentId === appointment.id));
+    if (!appointment.accountClosed && !account) return false;
     const existingCredit = Number(patients.find(item=>item.id===(account?.patientId??appointment.patientId))?.futureCredit)||0;
-    if(existingCredit+futureCreditUsed(account)<(appointment.closedAccount?.creditAdded??0)){window.alert("O crédito deste fechamento já foi utilizado. Estorne primeiro a conta em que ele foi usado.");return;}
+    if(existingCredit+futureCreditUsed(account)<(appointment.closedAccount?.creditAdded??0)){window.alert("O crédito deste fechamento já foi utilizado. Estorne primeiro a conta em que ele foi usado.");return false;}
     const linked = entries.filter((entry) => account ? entry.sourceAccountId === account.id || entry.id === account.id || entry.id === appointment.closedAccount?.generatedEntryId : entry.id === appointment.financialEntryId);
     const removedIds = new Set(linked.map((entry) => entry.id));
     if (account) removedIds.add(account.id);
@@ -1226,16 +1245,21 @@ export default function Home() {
     const consumed = appointment.stockConsumption ?? account?.products ?? [];
     setInventory(applyCheckoutInventory(inventory, consumed, []).inventory);
     setGifts(applyCheckoutGifts(gifts, appointment.giftConsumption ?? appointment.closedAccount?.gifts, []).gifts);
+    setUltraformerTips(applyCheckoutUltraformer(ultraformerTips, { ...appointment, accountClosed: false, closedAccount: undefined }, "", "", undefined));
     const credit = futureCreditUsed(account) - (appointment.closedAccount?.creditAdded ?? 0) + linked.filter((entry) => !entry.sourceAccountId && entry.id !== account?.id).reduce((sum, entry) => sum + futureCreditUsed(entry), 0);
     if (credit) setPatients((current) => current.map((patient) => patient.id === (account?.patientId ?? appointment.patientId) ? { ...patient, futureCredit: (Number(patient.futureCredit) || 0) + credit } : patient));
     setAppointments((current) => current.map((item) => item.id === appointment.id
       ? { ...item, status: "Agendado", accountClosed: false, closedAccount: undefined, financialEntryId: undefined, stockConsumption: [], giftConsumption: [], invoice: undefined } : item));
     setAppointmentForm((current) => ({ ...current, status: "Agendado" }));
     setCheckoutDraft(null);
+    setAccountSummary(null);
+    return true;
   }
 
   function deleteSelectedAppointment() {
     if (!selectedAppointmentId) return;
+    const selected = appointments.find(appointment => appointment.id === selectedAppointmentId);
+    if (selected?.accountClosed && !deleteClosedAccount(selectedAppointmentId)) return;
     setAppointments((current) => current.filter((appointment) => appointment.id !== selectedAppointmentId));
     setSelectedAppointmentId(null);
     setSelectedSlot(null);
@@ -1632,34 +1656,35 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-transparent">
       <div className="flex w-full">
-        <aside className="avvi-sidebar fixed left-0 top-0 z-40 hidden h-dvh w-[17.5rem] shrink-0 border-r border-white/70 bg-white/90 p-3 shadow-panel backdrop-blur-xl lg:block">
+        <aside data-expanded={!!openSidebarGroup} className={`avvi-sidebar fixed left-0 top-0 z-40 hidden h-dvh shrink-0 border-r border-white/70 bg-white/90 shadow-panel backdrop-blur-xl transition-[width] duration-150 motion-reduce:transition-none lg:block ${openSidebarGroup ? "w-64 p-3" : "w-[4.5rem] p-2"}`}>
           <div className="flex h-full flex-col">
             <div className="avvi-sidebar-brand shrink-0 text-center">
               <Image src="/logo-avvi.png" alt="AVVI Clínica" width={200} height={82} className="mx-auto w-auto object-contain" priority />
-              <p className="mt-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-avvi-blue">Gestão integrada</p>
+              {openSidebarGroup && <p className="mt-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-avvi-blue">Gestão integrada</p>}
             </div>
+            {openSidebarGroup && <button type="button" aria-label="Recolher menu" onClick={() => setOpenSidebarGroup(null)} className="mb-2 flex shrink-0 items-center justify-end gap-1 rounded-lg px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-avvi-soft"><ChevronLeft size={16}/></button>}
             <nav aria-label="Menu principal" className="avvi-sidebar-nav min-h-0 flex-1">
               {sidebarGroups.map(group => {
                 const items = group.tabs.flatMap(value => availableTabs.filter(tab => tab.id === value));
                 if (!items.length) return null;
-                return <SidebarGroup key={group.label} label={group.label} open={openSidebarGroup === group.label} onToggle={() => setOpenSidebarGroup(current => current === group.label ? null : group.label)}>
+                return <SidebarGroup key={group.label} label={group.label} icon={group.icon} compact={!openSidebarGroup} active={group.tabs.includes(activeTab)} open={openSidebarGroup === group.label} onToggle={() => setOpenSidebarGroup(group.label)}>
                   {items.map(tab => { const Icon = tab.icon; return <button key={tab.id} onClick={() => changeTab(tab.id)} aria-current={activeTab === tab.id ? "page" : undefined} className={`avvi-sidebar-link flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left font-semibold transition ${activeTab === tab.id ? "bg-avvi-blue text-white shadow-sm" : "text-slate-600 hover:bg-avvi-soft hover:text-avvi-blue"}`}><Icon size={15}/><span>{tabLabel(tab.id)}</span></button>; })}
                 </SidebarGroup>;
               })}
             </nav>
             <div className="avvi-sidebar-footer shrink-0">
-              <div aria-label="Perfil do usuário" title={`${currentUser.name || currentUser.login} · ${userRole === "admin" ? "Administrador" : "Usuário padrão"}`} className="truncate rounded border border-[#eadcc4] bg-avvi-soft px-2 text-[10px] font-semibold leading-[20px] text-slate-600">
-                {currentUser.login === "admin" ? "Perfil Administrador" : `Perfil ${userRole === "admin" ? "Administrador" : "Usuário padrão"} · ${currentUser.login}`}
+              <div aria-label="Perfil do usuário" title={`${currentUser.name || currentUser.login} · ${userRole === "admin" ? "Administrador" : "Usuário padrão"}`} className={`rounded border border-[#eadcc4] bg-avvi-soft text-slate-600 ${openSidebarGroup ? "truncate px-2 text-[10px] font-semibold leading-[20px]" : "grid h-8 place-items-center"}`}>
+                {openSidebarGroup ? currentUser.login === "admin" ? "Perfil Administrador" : `Perfil ${userRole === "admin" ? "Administrador" : "Usuário padrão"} · ${currentUser.login}` : <UserRound size={16}/>}
               </div>
-              <button onClick={handleLogout} disabled={isSyncing} className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-100 bg-white h-[26px] px-3 text-[11px] font-bold text-avvi-red transition hover:bg-red-50" title="Sair do sistema">
+              <button aria-label="Sair" onClick={handleLogout} disabled={isSyncing} className={`flex w-full items-center justify-center gap-2 rounded-lg border border-red-100 bg-white px-3 text-[11px] font-bold text-avvi-red transition hover:bg-red-50 ${openSidebarGroup ? "h-[26px]" : "h-9"}`} title="Sair do sistema">
                 <LogOut size={15} />
-                <span>Sair</span>
+                {openSidebarGroup && <span>Sair</span>}
               </button>
             </div>
           </div>
         </aside>
 
-        <section className={`min-w-0 flex-1 lg:ml-[17.5rem] ${["Agenda", "Ultraformer MPT"].includes(activeTab) ? "flex h-dvh min-h-0 flex-col overflow-hidden px-2 py-2 lg:px-4" : "px-4 py-5 lg:px-7"}`}>
+        <section className={`min-w-0 flex-1 transition-[margin-left] duration-150 motion-reduce:transition-none ${openSidebarGroup ? "lg:ml-64" : "lg:ml-[4.5rem]"} ${["Agenda", "Ultraformer MPT"].includes(activeTab) ? "flex h-dvh min-h-0 flex-col overflow-hidden px-2 py-2 lg:px-4" : "px-4 py-5 lg:px-7"}`}>
           <Header activeTab={activeTab} compact={["Agenda", "Ultraformer MPT"].includes(activeTab)} />
           {!availableTabs.length && <Panel><p className="text-sm text-slate-600">Nenhuma aba foi autorizada para esta conta. Solicite o acesso ao administrador.</p></Panel>}
           {canAccessTab(currentUser, "Follow Up") && activeTab === "Follow Up" && <FollowUpNavigation tab={followUpTab} change={setFollowUpTab} />}
@@ -1695,6 +1720,7 @@ export default function Home() {
               openSlot={openSlot}
               openAppointment={openAppointment}
               updateStatus={updateAgendaStatus}
+              resizeAppointment={resizeAgendaAppointment}
               openAccount={openAccountFromAgenda}
               viewAccount={viewClosedAccount}
             />
@@ -1863,10 +1889,12 @@ export default function Home() {
         </section>
       </div>
 
-      {accountSummary && <AccountSummary draft={accountSummary.draft} closedAt={accountSummary.closedAt} change={accountSummary.change} procedures={procedures} onClose={() => setAccountSummary(null)} />}
+      {accountSummary && <AccountSummary draft={accountSummary.draft} closedAt={accountSummary.closedAt} change={accountSummary.change} procedures={procedures} onClose={() => setAccountSummary(null)}
+        onDelete={canAccessTab(currentUser, "Agenda") && (accountSummary.draft.appointment.accountClosed || accountSummary.draft.entryId) ? () => deleteClosedAccount(accountSummary.draft.appointment.id) : undefined}
+        onReverse={canAccessTab(currentUser, "Agenda") ? () => { const appointmentId = accountSummary.draft.appointment.id; setAccountSummary(null); openAccountFromAgenda(appointmentId); } : undefined} />}
 
       {checkoutDraft && <AccountCheckout key={`${checkoutDraft.appointment.id}-${checkoutDraft.entryId ?? "new"}`}
-        draft={checkoutDraft} gifts={gifts} procedures={procedures} services={services} packages={servicePackages} appointments={appointments}
+        draft={checkoutDraft} ultraformerTips={ultraformerTips} gifts={gifts} procedures={procedures} services={services} packages={servicePackages} appointments={appointments}
         onCancel={() => { const appointmentId = checkoutDraft.appointment.id; setCheckoutDraft(null); openAppointment(appointmentId); }}
         onDelete={checkoutDraft.appointment.accountClosed ? () => deleteClosedAccount(checkoutDraft.appointment.id) : undefined}
         onConfirm={finishCheckout} />}
@@ -1892,6 +1920,7 @@ export default function Home() {
               form={appointmentForm}
               setForm={setAppointmentForm}
               openHistory={() => appointmentForm.patientId && setHistoryPatientId(appointmentForm.patientId)}
+              editPatient={() => setEditingPatientId(appointmentForm.patientId)}
               patients={patients}
               services={services}
               professionals={professionals}
@@ -1903,6 +1932,11 @@ export default function Home() {
           </div>
         </div>
       )}
+      {editingPatientId && patients.find(patient => patient.id === editingPatientId) && <PatientRegistrationEditor key={editingPatientId} patient={patients.find(patient => patient.id === editingPatientId)!} professionals={professionals} onClose={() => setEditingPatientId(null)} onSave={details => {
+        setPatients(current => current.map(patient => patient.id === editingPatientId ? { ...patient, ...details } : patient));
+        setAppointmentForm(current => current.patientId === editingPatientId ? { ...current, patientName: details.name, phone: details.phone, cpf: details.cpf, birthDate: details.birthDate, patientNotes: details.notes } : current);
+        setEditingPatientId(null);
+      }}/>}
       {historyPatientId && patients.find(patient => patient.id === historyPatientId) && <PatientHistory patient={patients.find(patient => patient.id === historyPatientId)!} appointments={appointments} professionals={professionals} services={services} procedures={procedures} onClose={() => setHistoryPatientId(null)} />}
     </main>
   );
@@ -1937,7 +1971,7 @@ function MobileTabs({ activeTab, setActiveTab, allowedTabs }: { activeTab: Tab; 
   );
 }
 
-function AppointmentForm({ form, setForm, patients, services, professionals, saveAppointment, openCheckout, openHistory, deleteAccount, error }: { form: ReturnType<typeof makeAppointmentForm>; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; services: Service[]; professionals: Professional[]; saveAppointment: () => void; openCheckout: () => void; openHistory: () => void; deleteAccount?: () => void; error: string }) {
+function AppointmentForm({ form, setForm, patients, services, professionals, saveAppointment, openCheckout, openHistory, editPatient, deleteAccount, error }: { form: ReturnType<typeof makeAppointmentForm>; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; services: Service[]; professionals: Professional[]; saveAppointment: () => void; openCheckout: () => void; openHistory: () => void; editPatient: () => void; deleteAccount?: () => void; error: string }) {
   const hasServices = !!form.serviceId || form.additionalServices.some(item => item.serviceId);
   function updateServices(patch: Partial<typeof form>) {
     const next = { ...form, ...patch };
@@ -1957,7 +1991,7 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
           {statuses.map((status) => <option key={status}>{status}</option>)}
         </select>
       </FormField>
-      <div><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-600">Paciente cadastrado</span><button type="button" disabled={!form.patientId} aria-label="Histórico do paciente" onClick={openHistory} className="flex items-center gap-1 text-xs font-semibold text-avvi-blue disabled:opacity-40"><History size={15}/>Histórico</button></div>
+      <div><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-600">Paciente cadastrado</span><div className="flex items-center gap-3"><button type="button" disabled={!form.patientId} aria-label="Histórico do paciente" onClick={openHistory} className="flex items-center gap-1 text-xs font-semibold text-avvi-blue disabled:opacity-40"><History size={15}/>Histórico</button><button type="button" disabled={!form.patientId} aria-label="Editar paciente" title="Editar paciente" onClick={editPatient} className="rounded p-1 text-avvi-blue hover:bg-avvi-soft disabled:opacity-40"><Pencil size={15}/></button></div></div>
         <SearchSelect label="Paciente cadastrado" options={[{id: "", name: "Novo paciente"}, ...patients]} value={form.patientId} onChange={patientId => {
           const patient = patients.find(item => item.id === patientId);
           setForm({...form, patientId, patientName: patient?.name ?? "", phone: patient?.phone ?? "", cpf: patient?.cpf ?? "", birthDate: patient?.birthDate ?? "", patientNotes: patient?.notes ?? ""});
@@ -2161,7 +2195,6 @@ function FinancialView(props: {
             ))}
           </div>
         </div>
-        <div className="mt-4"><FormField label="Observações do lançamento"><textarea className="input min-h-20" value={props.entryForm.notes} onChange={(event) => props.setEntryForm({ ...props.entryForm, notes: event.target.value })} /></FormField></div>
         <PaymentEditor form={props.entryForm} setForm={props.setEntryForm} patients={props.patients} />
         <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-[11px] md:grid-cols-8">
           <SummaryItem label="Custo médio" value={currency(productCost)} />
@@ -2837,6 +2870,7 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
         </header>
         <fieldset disabled={!formAllowed} className="grid gap-3 md:grid-cols-3">
           <FormField label="Nome"><input className="input" value={professionalForm.name} onChange={(event) => setProfessionalForm({ ...professionalForm, name: event.target.value })} /></FormField>
+          <FormField label="Modelo de anamnese"><select aria-label="Modelo de anamnese" className="input" value={professionalForm.anamneseTemplate ?? "facial"} onChange={event => setProfessionalForm({ ...professionalForm, anamneseTemplate: event.target.value as Professional["anamneseTemplate"] })}><option value="facial">Anamnese facial</option><option value="body">Anamnese corporal</option></select></FormField>
           <FormField label="Especialidade"><input className="input" value={professionalForm.specialty} onChange={(event) => setProfessionalForm({ ...professionalForm, specialty: event.target.value })} /></FormField>
           <FormField label="Telefone"><input className="input" value={professionalForm.phone} onChange={(event) => setProfessionalForm({ ...professionalForm, phone: event.target.value })} /></FormField>
           <FormField label="E-mail"><input className="input" type="email" value={professionalForm.email} onChange={(event) => setProfessionalForm({ ...professionalForm, email: event.target.value })} /></FormField>
@@ -3312,9 +3346,9 @@ function Panel({ children }: { children: ReactNode }) {
   return <section className="rounded-2xl border border-white/70 bg-white/90 p-5 shadow-panel backdrop-blur">{children}</section>;
 }
 
-function SidebarGroup({ label, children, open, onToggle }: { label: string; children: ReactNode; open: boolean; onToggle: () => void }) {
+function SidebarGroup({ label, icon: Icon, compact, active, children, open, onToggle }: { label: string; icon: ElementType; compact: boolean; active: boolean; children: ReactNode; open: boolean; onToggle: () => void }) {
   const target = `sidebar-${label.replace(/\s+/g, "-")}`;
-  return <section><button type="button" aria-expanded={open} aria-controls={target} onClick={onToggle} className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-3 text-left text-xs font-bold ${open ? "bg-avvi-soft text-avvi-blue" : "text-slate-600 hover:bg-avvi-soft"}`}><span>{label}</span>{open ? <ChevronDown size={15}/> : <ChevronRight size={15}/>}</button><div id={target} hidden={!open} className="space-y-1 py-1 pl-2">{children}</div></section>;
+  return <section><button type="button" aria-label={label} aria-expanded={open} aria-controls={target} onClick={onToggle} className={`flex w-full items-center gap-2 rounded-lg text-left text-xs font-bold ${compact ? "h-12 justify-center" : "justify-between px-2.5 py-3"} ${open || active ? "bg-avvi-soft text-avvi-blue" : "text-slate-600 hover:bg-avvi-soft"}`}><Icon size={compact ? 21 : 17} className="shrink-0"/>{!compact && <><span className="min-w-0 flex-1">{label}</span>{open ? <ChevronDown size={15}/> : <ChevronRight size={15}/>}</>}</button><div id={target} hidden={!open} className="space-y-1 py-1 pl-2">{children}</div></section>;
 }
 
 function FormField({ label, children }: { label: string; children: ReactNode }) {
@@ -3521,6 +3555,7 @@ function makeProfessionalForm(): Professional {
   return {
     id: "",
     closedShifts: [],
+    anamneseTemplate: "facial",
     name: "",
     specialty: "",
     phone: "",

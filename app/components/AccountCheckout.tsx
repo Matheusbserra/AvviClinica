@@ -4,31 +4,36 @@ import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, UserRound, X } from "luci
 import { SearchSelect } from "./SearchSelect";
 import { packageCheckoutLines } from "@/lib/servicePackages";
 import type { ServicePackage } from "@/lib/servicePackages";
+import { availableUltraformerTips, validCheckoutShots } from "@/lib/ultraformer";
 import { currency } from "@/lib/calculations";
 import { checkoutTotals, checkoutCommission, settleCheckoutPayments, checkoutAllowsNoProducts, moneyRound, paymentChoiceKey, paymentChoices, toggleCheckoutPayment } from "@/lib/checkout";
-import type { Appointment, DiscountSplit, Patient, PaymentItem, Procedure, ProcedureLine, Professional, ProductUsage, Service, GiftStockItem, GiftUsage } from "@/lib/types";
+import type { Appointment, DiscountSplit, Patient, PaymentItem, Procedure, ProcedureLine, Professional, ProductUsage, Service, GiftStockItem, GiftUsage, UltraformerShots, UltraformerTip } from "@/lib/types";
 
 export type CheckoutDraft = {
   appointment: Appointment; client: Patient; professional?: Professional;
-  lines: ProcedureLine[]; products: ProductUsage[]; gifts?: GiftUsage[]; payments: PaymentItem[]; entryId?: string;
-  discountSplit: DiscountSplit; notes: string; previousFutureCredit: number; previousCreditAdded?: number; storedCreditPayments?: PaymentItem[]; clinicPatient?: boolean;
+  lines: ProcedureLine[]; products: ProductUsage[]; gifts?: GiftUsage[]; ultraformerShots?: UltraformerShots[]; payments: PaymentItem[]; entryId?: string;
+  discountSplit: DiscountSplit; notes: string; checkoutNotes?: string; previousFutureCredit: number; previousCreditAdded?: number; storedCreditPayments?: PaymentItem[]; clinicPatient?: boolean;
 };
-export type CheckoutResult = { client: Patient; lines: ProcedureLine[]; products: ProductUsage[]; gifts: GiftUsage[]; payments: PaymentItem[]; total: number; discount: number; balanceDue: number; change: number; creditAdded: number; creditPayments: PaymentItem[]; clinicPatient: boolean };
+export type CheckoutResult = { client: Patient; lines: ProcedureLine[]; products: ProductUsage[]; gifts: GiftUsage[]; ultraformerShots: UltraformerShots[]; payments: PaymentItem[]; total: number; discount: number; balanceDue: number; change: number; creditAdded: number; creditPayments: PaymentItem[]; clinicPatient: boolean; checkoutNotes: string };
 
-export function AccountCheckout({ draft, gifts, procedures, services, packages = [], appointments, onCancel, onConfirm, onDelete }: {
-  draft: CheckoutDraft; gifts: GiftStockItem[]; procedures: Procedure[]; services: Service[]; packages?: ServicePackage[]; appointments: Appointment[];
+export function AccountCheckout({ draft, gifts, procedures, services, packages = [], ultraformerTips, appointments, onCancel, onConfirm, onDelete }: {
+  draft: CheckoutDraft; ultraformerTips: UltraformerTip[]; gifts: GiftStockItem[]; procedures: Procedure[]; services: Service[]; packages?: ServicePackage[]; appointments: Appointment[];
   onDelete?: () => void; onCancel: () => void; onConfirm: (result: CheckoutResult) => void;
 }) {
   const [client, setClient] = useState({ ...draft.client });
+  const [checkoutNotes, setCheckoutNotes] = useState(draft.checkoutNotes ?? "");
   const [lines, setLines] = useState(() => draft.lines.map((line) => ({ ...line })));
   const [expandedDiscount, setExpandedDiscount] = useState<string | null>(null);
   const [percentages, setPercentages] = useState<Record<string, number>>({});
   const [products, setProducts] = useState(() => draft.products.map((product) => ({ ...product })));
   const [selectedGifts, setSelectedGifts] = useState(() => (draft.gifts ?? []).map((gift) => ({ ...gift })));
+  const [selectedShots, setSelectedShots] = useState(() => (draft.ultraformerShots ?? []).map(shot => ({ ...shot })));
+  const [tipId, setTipId] = useState(""); const [shotQuantity, setShotQuantity] = useState(1);
+  const tips = availableUltraformerTips(ultraformerTips);
   const [giftId, setGiftId] = useState(""); const [giftQuantity, setGiftQuantity] = useState(1);
   const [payments, setPayments] = useState(() => [...draft.payments,...(draft.storedCreditPayments??[])].map((payment) => ({ ...payment })));
   const [editingClient, setEditingClient] = useState(false);
-  const [adding, setAdding] = useState<"service" | "product" | "gift" | "package" | null>(null);
+  const [adding, setAdding] = useState<"service" | "product" | "gift" | "package" | "ultraformer" | null>(null);
   const [packageId, setPackageId] = useState("");
   const [packageQuantity, setPackageQuantity] = useState(1);
   const [serviceId, setServiceId] = useState("");
@@ -91,7 +96,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
     catch (error) { setError(error instanceof Error ? error.message : "Confira o pacote."); }
   }
   function addProduct() {
-    const procedure = procedures.find((item) => item.id === procedureId && item.active);
+    const procedure = procedures.find((item) => item.id === procedureId);
     if (!procedure || !Number.isInteger(procedureQuantity) || procedureQuantity <= 0) return;
     setProducts((current) => {
       const existing = current.find((product) => product.procedureId === procedure.id);
@@ -105,6 +110,15 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
     setSelectedGifts((current) => { const existing = current.find((item) => item.giftId === gift.id); return existing ? current.map((item) => item.giftId === gift.id ? { ...item, quantity: item.quantity + giftQuantity } : item) : [...current, { id: `gift-usage-${crypto.randomUUID()}`, giftId: gift.id, name: gift.name, quantity: giftQuantity }]; });
     setGiftId(""); setGiftQuantity(1); setAdding(null);
   }
+  function addShots() {
+    const tip = tips.find(item => item.id === tipId);
+    if (!tip || !Number.isSafeInteger(shotQuantity) || shotQuantity <= 0) return;
+    const next = selectedShots.some(item => item.tipId === tip.id)
+      ? selectedShots.map(item => item.tipId === tip.id ? { ...item, quantity: item.quantity + shotQuantity } : item)
+      : [...selectedShots, { tipId: tip.id, name: tip.name, quantity: shotQuantity }];
+    if (!validCheckoutShots(next)) { setError("Confira a quantidade de disparos."); return; }
+    setSelectedShots(next); setTipId(""); setShotQuantity(1); setAdding(null); setError("");
+  }
   function updatePayment(choiceId: string, amount: number) {
     const selected = payments.filter((payment) => paymentChoiceKey(payment) === choiceId);
     if (!selected.length) return;
@@ -117,8 +131,9 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
       || !Number.isFinite(line.discount ?? 0) || (line.discount ?? 0) < 0 || (line.discount ?? 0) > moneyRound(line.quantity * line.servicePrice))) {
       setError("Confira as quantidades, os preços e os descontos dos itens."); return;
     }
-    if (!products.length && !allowsNoProducts) { setError("Adicione ao menos um produto utilizado antes de fechar a conta."); return; }
+    if (!products.length && !selectedShots.length && !allowsNoProducts) { setError("Adicione um produto utilizado ou os disparos do Ultraformer antes de fechar a conta."); return; }
     if (products.some((product) => !Number.isInteger(product.quantity) || product.quantity <= 0 || !Number.isFinite(product.unitCost) || product.unitCost < 0)) { setError("Confira as quantidades dos produtos utilizados."); return; }
+    if (!validCheckoutShots(selectedShots)) { setError("Confira a ponteira e a quantidade de disparos."); return; }
     if (selectedGifts.some((gift) => !Number.isSafeInteger(gift.quantity) || gift.quantity <= 0)) { setError("Confira as quantidades dos brindes."); return; }
     if (payments.some((payment) => !Number.isFinite(payment.amount) || payment.amount < 0)) { setError("Confira os valores pagos."); return; }
     const futureCredit = payments.filter((payment) => payment.method === "Crédito Futuro").reduce((sum, payment) => sum + payment.amount, 0);
@@ -127,7 +142,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
     try {
       const settled = settleCheckoutPayments(payments,totals.change,keepCredit);
       const professionalPercent=checkoutCommission(draft.professional?.commissionPercent??0,clinicPatient);
-      onConfirm({ client, lines: lines.map(line=>({...line,professionalPercent: line.packageCommissionPercent === undefined ? professionalPercent : checkoutCommission(line.packageCommissionPercent,clinicPatient)})), products, gifts: selectedGifts, ...settled, clinicPatient, total: totals.total, discount: totals.discount, balanceDue: totals.remaining });
+      onConfirm({ client, lines: lines.map(line=>({...line,professionalPercent: line.packageCommissionPercent === undefined ? professionalPercent : checkoutCommission(line.packageCommissionPercent,clinicPatient)})), products, gifts: selectedGifts, ultraformerShots: selectedShots, ...settled, clinicPatient, checkoutNotes, total: totals.total, discount: totals.discount, balanceDue: totals.remaining });
     } catch (error) {setError(error instanceof Error?error.message:"Confira os pagamentos.");}
 
   }
@@ -146,6 +161,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
             <button type="button" onClick={() => setAdding(adding === "package" ? null : "package")} className="flex items-center gap-2 rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white hover:brightness-95"><Plus size={16}/>Pacotes</button>
             <button type="button" onClick={() => setAdding(adding === "product" ? null : "product")} className="flex items-center gap-2 rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white hover:brightness-95"><Plus size={16} />Produtos</button>
             <button type="button" onClick={() => setAdding(adding === "gift" ? null : "gift")} className="flex items-center gap-2 rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white hover:brightness-95"><Plus size={16} />Brindes</button>
+            <button type="button" onClick={() => setAdding(adding === "ultraformer" ? null : "ultraformer")} className="flex items-center gap-2 rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white hover:brightness-95"><Plus size={16}/>Ultraformer</button>
           </div>
           {adding === "service" && <div className="mb-4 grid gap-3 rounded-md border border-lime-200 bg-lime-50 p-3 sm:grid-cols-[1fr_100px_auto]">
             <label className="text-xs font-semibold">Serviço<SearchSelect label="Adicionar serviço à conta" options={services.filter(service=>service.active)} value={serviceId} onChange={setServiceId}/></label>
@@ -160,11 +176,17 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
             {!packages.some(pack => pack.active) && <p className="text-xs text-slate-500 sm:col-span-3">Cadastre um pacote em Cadastro de Serviços → Pacotes.</p>}
           </div>}
           {adding === "product" && <div className="mb-4 grid gap-3 rounded-md border border-lime-200 bg-lime-50 p-3 sm:grid-cols-[1fr_100px_auto]">
-            <label className="text-xs font-semibold">Produto<SearchSelect label="Adicionar produto ao consumo" options={procedures.filter(procedure=>procedure.active)} value={procedureId} onChange={setProcedureId}/></label>
+            <label className="text-xs font-semibold">Produto<SearchSelect label="Adicionar produto ao consumo" options={procedures} value={procedureId} onChange={setProcedureId}/></label>
             <label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do produto a adicionar" className="input mt-1" type="number" min={1} step={1} value={procedureQuantity} onChange={(event) => setProcedureQuantity(Number(event.target.value))} /></label>
             <button type="button" disabled={!procedureId || !Number.isInteger(procedureQuantity) || procedureQuantity < 1} onClick={addProduct} className="self-end rounded-md bg-lime-400 px-3 py-2 text-sm font-bold disabled:opacity-40">Adicionar produto</button>
           </div>}
           {adding === "gift" && <div className="mb-4 grid gap-3 rounded-md border border-lime-200 bg-lime-50 p-3 sm:grid-cols-[1fr_100px_auto]"><label className="text-xs font-semibold">Brinde<select aria-label="Adicionar brinde ao fechamento" className="input mt-1" value={giftId} onChange={(event) => setGiftId(event.target.value)}><option value="">Selecione</option>{gifts.slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((gift) => <option key={gift.id} value={gift.id}>{gift.name}</option>)}</select></label><label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do brinde a adicionar" className="input mt-1" type="number" min={1} step={1} value={giftQuantity} onChange={(event) => setGiftQuantity(Number(event.target.value))} /></label><button type="button" disabled={!giftId || !Number.isSafeInteger(giftQuantity) || giftQuantity < 1} onClick={addGift} className="self-end rounded-md bg-lime-400 px-3 py-2 text-sm font-bold disabled:opacity-40">Adicionar brinde</button>{!gifts.length && <p className="text-xs text-slate-500 sm:col-span-3">Cadastre seus brindes em Estoque → Brindes.</p>}</div>}
+          {adding === "ultraformer" && <div className="mb-4 grid gap-3 rounded-md border border-avvi-line bg-avvi-soft p-3 sm:grid-cols-[1fr_110px_auto]">
+            <label className="text-xs font-semibold">Ponteira<SearchSelect label="Ponteira do Ultraformer" options={tips} value={tipId} onChange={setTipId}/></label>
+            <label className="text-xs font-semibold">Disparos utilizados<input aria-label="Disparos do Ultraformer a adicionar" className="input mt-1" type="number" min={1} step={1} value={shotQuantity} onChange={event => setShotQuantity(Number(event.target.value))}/></label>
+            <button type="button" disabled={!tipId || !Number.isSafeInteger(shotQuantity) || shotQuantity < 1} onClick={addShots} className="self-end rounded-md bg-avvi-blue px-3 py-2 text-sm font-bold text-white disabled:opacity-40">Adicionar Ultraformer</button>
+          </div>}
+          {!!selectedShots.length && <section aria-label="Ultraformer no fechamento" className="mb-4 rounded-md border border-avvi-line bg-avvi-soft p-3"><h3 className="text-xs font-bold text-avvi-blue">Ultraformer</h3><div className="mt-2 divide-y divide-avvi-line">{selectedShots.map(shot => <div key={shot.tipId} className="flex items-center gap-3 py-2"><span className="min-w-0 flex-1 text-sm font-semibold">{shot.name}</span><input aria-label={`Disparos utilizados de ${shot.name}`} type="number" required min={1} step={1} value={shot.quantity} onChange={event => setSelectedShots(current => current.map(item => item.tipId === shot.tipId ? { ...item, quantity: Number(event.target.value) } : item))} className="w-24 rounded border border-slate-300 px-2 py-1 text-right text-sm"/><button type="button" aria-label={`Remover ${shot.name} do Ultraformer`} onClick={() => setSelectedShots(current => current.filter(item => item.tipId !== shot.tipId))} className="rounded p-1 text-slate-400 hover:text-red-500"><Trash2 size={15}/></button></div>)}</div></section>}
           {selectedGifts.length > 0 && <section data-testid="checkout-gifts" className="mb-4 rounded-md border border-avvi-line bg-avvi-soft p-3"><h3 className="text-xs font-bold text-avvi-blue">Brindes entregues</h3><p className="mt-1 text-xs text-slate-500">Opcional, sem cobrança ao paciente.</p><div className="mt-2 divide-y divide-avvi-line">{selectedGifts.map((gift) => <div key={gift.id} className="flex items-center gap-3 py-2"><span className="min-w-0 flex-1 text-sm font-semibold">{gift.name}</span><input aria-label={`Quantidade entregue de ${gift.name}`} type="number" required min={1} step={1} value={gift.quantity} onChange={(event) => setSelectedGifts((current) => current.map((item) => item.id === gift.id ? { ...item, quantity: Number(event.target.value) } : item))} className="w-16 rounded border border-slate-300 px-2 py-1 text-right text-sm" /><button type="button" aria-label={`Remover ${gift.name} dos brindes entregues`} onClick={() => setSelectedGifts((current) => current.filter((item) => item.id !== gift.id))} className="rounded p-1 text-slate-400 hover:text-red-500"><Trash2 size={15} /></button></div>)}</div></section>}
           {products.length > 0 && <section data-testid="checkout-products" className="mb-4 rounded-md border border-avvi-line bg-slate-50 p-3"><h3 className="text-xs font-bold text-slate-600">Produtos utilizados</h3><p className="mt-1 text-xs text-slate-500">Quantidade consumida no estoque.</p><div className="mt-2 divide-y divide-avvi-line">{products.map((product) => {
             const name = procedures.find((procedure) => procedure.id === product.procedureId)?.name ?? "Produto registrado";
@@ -178,6 +200,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
           </tbody></table></div>
           {!lines.length && <p className="py-6 text-center text-sm text-slate-500">Adicione os serviços desta conta.</p>}
           <label className="mt-5 block text-xs text-slate-500">Observação do agendamento<p className="mt-1 text-sm text-slate-700">{draft.notes || "-"}</p></label>
+          <label className="mt-4 block text-xs font-semibold text-slate-600">Observações do fechamento<textarea aria-label="Observações do fechamento" className="input mt-2 min-h-24 resize-y" maxLength={10000} value={checkoutNotes} onChange={event => setCheckoutNotes(event.target.value)}/></label>
         </div>
         <aside className="space-y-3 lg:border-l lg:border-avvi-line lg:pl-4">
           <div className="flex justify-between rounded-md bg-white px-3 py-3 text-sm shadow-panel"><span>Total</span><strong>{currency(totals.total)}</strong></div>

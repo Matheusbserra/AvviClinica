@@ -1,4 +1,4 @@
-import type { UltraformerTip, UltraformerUsage } from "./types";
+import type { Appointment, UltraformerShots, UltraformerTip, UltraformerUsage } from "./types";
 
 // Names, depths and color references: CLASSYS Ultraformer MPT official cartridge images.
 export const ultraformerCatalog: UltraformerTip[] = [
@@ -25,7 +25,7 @@ export function remainingShots(tip: UltraformerTip): number {
   return tip.initialShots - tip.usages.reduce((sum, usage) => sum + usage.quantity, 0);
 }
 export function validUsage(usage: UltraformerUsage): boolean {
-  return (!usage?.registeredBy || [usage.registeredBy.id, usage.registeredBy.login, usage.registeredBy.name].every(value => typeof value === "string" && !!value.trim())) && typeof usage?.id === "string" && !!usage.id && Number.isSafeInteger(usage.quantity) && usage.quantity > 0 &&
+  return (!usage?.appointmentId || (typeof usage.appointmentId === "string" && usage.appointmentId.length <= 200 && typeof usage.sourceAccountId === "string" && !!usage.sourceAccountId && usage.sourceAccountId.length <= 200)) && (!usage?.sourceAccountId || !!usage.appointmentId) && (!usage?.registeredBy || [usage.registeredBy.id, usage.registeredBy.login, usage.registeredBy.name].every(value => typeof value === "string" && !!value.trim())) && typeof usage?.id === "string" && !!usage.id && Number.isSafeInteger(usage.quantity) && usage.quantity > 0 &&
     /^\d{4}-\d{2}-\d{2}$/.test(usage.date) && !Number.isNaN(Date.parse(usage.date)) && new Date(usage.date).toISOString().slice(0, 10) === usage.date &&
     [usage.patientId, usage.patientName, usage.professionalId, usage.professionalName, usage.createdAt].every(value => typeof value === "string" && !!value.trim()) && !Number.isNaN(Date.parse(usage.createdAt));
 }
@@ -55,4 +55,39 @@ export function usageOnlyTipUpdate(previous: UltraformerTip | undefined, next: U
   if (next.usages.length < original.usages.length) return false;
   const content = (usage: UltraformerUsage) => Object.fromEntries(Object.entries(usage).filter(([key]) => key !== "registeredBy"));
   return original.usages.every((usage, index) => stable(content(usage)) === stable(content(next.usages[index])));
+}
+
+export function validCheckoutShots(value: unknown): value is UltraformerShots[] {
+  return Array.isArray(value) && value.length <= 50 && value.every(item => item && typeof item.tipId === "string" && !!item.tipId && item.tipId.length <= 200 && typeof item.name === "string" && !!item.name.trim() && item.name.length <= 100 && Number.isSafeInteger(item.quantity) && item.quantity > 0) && new Set(value.map(item => item.tipId)).size === value.length;
+}
+
+// Reconcile only this appointment's usage. Manual records and other accounts stay intact.
+// Stable IDs and the original creation date make retries and repeated saves idempotent.
+export function applyCheckoutUltraformer(saved: UltraformerTip[], appointment: Appointment, patientName: string, professionalName: string, author: UltraformerUsage["registeredBy"]): UltraformerTip[] {
+  const account = appointment.accountClosed ? appointment.closedAccount : undefined;
+  const shots = account?.ultraformerShots ?? [];
+  if (!validCheckoutShots(shots)) throw new Error("Confira a ponteira e a quantidade de disparos do Ultraformer.");
+  if (shots.length && (!account || !appointment.patientId || account.patientId !== appointment.patientId || account.professionalId !== appointment.professionalId || !patientName || !professionalName)) throw new Error("Confira o paciente e a profissional dos disparos.");
+  const all = [...saved, ...ultraformerCatalog.filter(tip => !saved.some(row => row.id === tip.id))];
+  if (shots.some(shot => !all.some(tip => tip.id === shot.tipId))) throw new Error("A ponteira selecionada não está cadastrada.");
+  const result = [...saved];
+  for (const tip of all) {
+    const selected = shots.find(shot => shot.tipId === tip.id);
+    const existing = tip.usages.find(usage => usage.appointmentId === appointment.id);
+    if (!selected && !existing) continue;
+    const unchanged = existing && selected && account && existing.sourceAccountId === account.id && existing.quantity === selected.quantity && existing.date === account.date && existing.patientId === account.patientId && existing.professionalId === account.professionalId;
+    const usage: UltraformerUsage | undefined = unchanged ? existing : selected && account ? {
+      id: `checkout-shots-${account.id}-${tip.id}`, appointmentId: appointment.id, sourceAccountId: account.id,
+      date: account.date, quantity: selected.quantity, patientId: account.patientId, patientName,
+      professionalId: account.professionalId, professionalName, createdAt: existing?.createdAt ?? account.closedAt ?? `${account.date}T12:00:00Z`,
+      registeredBy: existing?.registeredBy ?? author,
+    } : undefined;
+    const usages = tip.usages.flatMap(row => row.appointmentId === appointment.id ? usage ? [usage] : [] : [row]);
+    if (usage && !existing) usages.push(usage);
+    const next = { ...tip, usages };
+    if (!isUltraformerTip(next)) throw new Error("Quantidade de disparos inválida.");
+    const index = result.findIndex(row => row.id === tip.id);
+    if (index < 0) result.push(next); else result[index] = next;
+  }
+  return result;
 }

@@ -1,7 +1,7 @@
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import {pathToFileURL} from "node:url"; import {createRequire} from "node:module"; import assert from "node:assert/strict"; import ts from "typescript";
 const require=createRequire(import.meta.url),dir=fs.mkdtempSync(path.join(os.tmpdir(),"avvi-registration-test-"));
 try{
- const names=['stockAccess','inventory','gifts','servicePackages',"anamnese", "strategyDefinitions","access","accessServer","accountsServer","accessSnapshot","agendaAvailability","ultraformer","database","invoices","checkout","calculations","appointmentServices"];
+ const names=['stockAccess','inventory','gifts','servicePackages',"anamnese", "bodyAnamnese", "strategyDefinitions","access","accessServer","accountsServer","accessSnapshot","agendaAvailability","ultraformer","database","invoices","checkout","calculations","appointmentServices"];
  function compile(source){for(const name of names)source=source.replaceAll('"./'+name+'"','"./'+name+'.mjs"').replaceAll('"@/lib/'+name+'"','"./'+name+'.mjs"');source=source.replace('"@supabase/supabase-js"',JSON.stringify(pathToFileURL(require.resolve("@supabase/supabase-js")).href));return ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;}
  for(const name of names)fs.writeFileSync(path.join(dir,name+'.mjs'),compile(name==='database'?'export const entityNames=["professionals","appointments","patients","financial_entries","revenues","fixed_costs","ultraformer_tips"];':fs.readFileSync('lib/'+name+'.ts','utf8')));
  fs.writeFileSync(path.join(dir,'route.mjs'),compile(fs.readFileSync('app/api/access/data/route.ts','utf8')));
