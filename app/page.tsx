@@ -1033,6 +1033,8 @@ export default function Home() {
       patientId: appointment.patientId ?? "",
       patientName: patient?.name ?? "",
       phone: patient?.phone ?? "",
+      email: patient?.email ?? "",
+      gender: patient?.gender || "Não informado",
       cpf: patient?.cpf ?? "",
       birthDate: patient?.birthDate ?? "",
       patientNotes: patient?.notes ?? "",
@@ -1071,7 +1073,8 @@ export default function Home() {
       const created: Patient = {
         id: id("patient"),
         name: appointmentForm.patientName.trim(),
-        gender: "Não informado",
+        gender: appointmentForm.gender,
+        email: appointmentForm.email.trim(),
         phone: appointmentForm.phone,
         cpf: appointmentForm.cpf,
         birthDate: appointmentForm.birthDate,
@@ -1084,6 +1087,8 @@ export default function Home() {
       };
       setPatients((current) => [...current, created]);
       patientId = created.id;
+    } else if (patientId) {
+      setPatients(current => current.map(patient => patient.id === patientId ? { ...patient, email: appointmentForm.email.trim(), gender: appointmentForm.gender } : patient));
     }
     const created: Appointment = {
       id: selectedAppointmentId || id("appointment"),
@@ -1136,7 +1141,7 @@ export default function Home() {
       professionalPercent: professionals.find((item) => item.id === appointment.professionalId)?.commissionPercent ?? 0, discount: 0 }] : [];
     const existingLines = existing?.procedureLines?.length ? existing.procedureLines : existing ? [entryToLine(existing)] : initialLines;
     const restoredItems = existing ? restoreCheckoutItems(existingLines, existing.products, procedures, services) : { lines: initialLines, products: [] };
-    return { appointment, client: { ...client }, professional: professionals.find((item) => item.id === appointment.professionalId),
+    return { appointment, client: { ...client, ...(useAppointmentForm ? { email: appointmentForm.email.trim(), gender: appointmentForm.gender } : {}) }, professional: professionals.find((item) => item.id === appointment.professionalId),
       lines: distributeCheckoutDiscount(restoredItems.lines, existing?.commercialDiscount ?? 0), products: restoredItems.products, gifts: appointment.closedAccount?.gifts?.map((gift) => ({ ...gift })) ?? [], ultraformerShots: appointment.closedAccount?.ultraformerShots?.map(shot => ({ ...shot })) ?? [],
       payments: existing?.payments.map((payment) => ({ ...payment })) ?? [], entryId: existing?.id,
       discountSplit: existing?.discountSplit ?? "Empresa e profissional dividem", notes: originalAppointmentNotes(existing?.notes ?? appointment.notes), checkoutNotes: appointment.closedAccount?.checkoutNotes ?? "",
@@ -1934,7 +1939,7 @@ export default function Home() {
       )}
       {editingPatientId && patients.find(patient => patient.id === editingPatientId) && <PatientRegistrationEditor key={editingPatientId} patient={patients.find(patient => patient.id === editingPatientId)!} professionals={professionals} onClose={() => setEditingPatientId(null)} onSave={details => {
         setPatients(current => current.map(patient => patient.id === editingPatientId ? { ...patient, ...details } : patient));
-        setAppointmentForm(current => current.patientId === editingPatientId ? { ...current, patientName: details.name, phone: details.phone, cpf: details.cpf, birthDate: details.birthDate, patientNotes: details.notes } : current);
+        setAppointmentForm(current => current.patientId === editingPatientId ? { ...current, patientName: details.name, phone: details.phone, email: details.email ?? "", gender: details.gender || "Não informado", cpf: details.cpf, birthDate: details.birthDate, patientNotes: details.notes } : current);
         setEditingPatientId(null);
       }}/>}
       {historyPatientId && patients.find(patient => patient.id === historyPatientId) && <PatientHistory patient={patients.find(patient => patient.id === historyPatientId)!} appointments={appointments} professionals={professionals} services={services} procedures={procedures} onClose={() => setHistoryPatientId(null)} />}
@@ -1994,13 +1999,15 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
       <div><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-600">Paciente cadastrado</span><div className="flex items-center gap-3"><button type="button" disabled={!form.patientId} aria-label="Histórico do paciente" onClick={openHistory} className="flex items-center gap-1 text-xs font-semibold text-avvi-blue disabled:opacity-40"><History size={15}/>Histórico</button><button type="button" disabled={!form.patientId} aria-label="Editar paciente" title="Editar paciente" onClick={editPatient} className="rounded p-1 text-avvi-blue hover:bg-avvi-soft disabled:opacity-40"><Pencil size={15}/></button></div></div>
         <SearchSelect label="Paciente cadastrado" options={[{id: "", name: "Novo paciente"}, ...patients]} value={form.patientId} onChange={patientId => {
           const patient = patients.find(item => item.id === patientId);
-          setForm({...form, patientId, patientName: patient?.name ?? "", phone: patient?.phone ?? "", cpf: patient?.cpf ?? "", birthDate: patient?.birthDate ?? "", patientNotes: patient?.notes ?? ""});
+          setForm({...form, patientId, patientName: patient?.name ?? "", phone: patient?.phone ?? "", email: patient?.email ?? "", gender: patient?.gender || "Não informado", cpf: patient?.cpf ?? "", birthDate: patient?.birthDate ?? "", patientNotes: patient?.notes ?? ""});
         }}/>
       </div>
       <FormField label="Nome do paciente">
         <input value={form.patientName} onChange={(event) => setForm({ ...form, patientName: event.target.value })} className="input" placeholder="Nome completo" />
       </FormField>
       <FormField label="Telefone"><input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} className="input" /></FormField>
+      <FormField label="E-mail"><input type="email" value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} className="input" /></FormField>
+      <FormField label="Gênero"><select aria-label="Gênero" value={form.gender} onChange={event => setForm({ ...form, gender: event.target.value as typeof form.gender })} className="input"><option value="Não informado">Não informado</option><option value="Feminino">Feminino</option><option value="Masculino">Masculino</option></select></FormField>
       <FormField label="CPF"><input value={form.cpf} onChange={(event) => setForm({ ...form, cpf: event.target.value })} className="input" /></FormField>
       <FormField label="Data de nascimento"><input type="date" value={form.birthDate} onChange={(event) => setForm({ ...form, birthDate: event.target.value })} className="input" /></FormField>
       <div className="space-y-2 lg:col-span-2">
@@ -2031,7 +2038,7 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
       <FormField label="Observações do paciente"><textarea value={form.patientNotes} onChange={(event) => setForm({ ...form, patientNotes: event.target.value })} className="input min-h-20" /></FormField>
       <div className="flex items-center justify-between gap-3 lg:col-span-2">
         <button type="submit" className="rounded-md bg-avvi-blue px-4 py-2 font-bold text-white"><Save className="mr-2 inline" size={16} />Salvar agendamento</button>
-        <div className="flex items-center gap-2">{deleteAccount && <button type="button" aria-label="Excluir conta fechada" title="Excluir conta fechada" onClick={deleteAccount} className="rounded-md border border-red-200 p-2 text-red-600 hover:bg-red-50"><Trash2 size={18} /></button>}<button type="button" onClick={openCheckout} className="rounded-md border border-orange-500 bg-orange-50 px-4 py-2 font-bold text-orange-600"><CircleDollarSign className="mr-2 inline" size={16} />Fechar conta</button></div>
+        <div className="flex items-center gap-2">{deleteAccount && <button type="button" aria-label="Excluir conta fechada" title="Excluir conta fechada" onClick={deleteAccount} className="rounded-md border border-red-200 p-2 text-red-600 hover:bg-red-50"><Trash2 size={18} /></button>}<button type="button" onClick={event => { if (event.currentTarget.form?.reportValidity()) openCheckout(); }} className="rounded-md border border-orange-500 bg-orange-50 px-4 py-2 font-bold text-orange-600"><CircleDollarSign className="mr-2 inline" size={16} />Fechar conta</button></div>
       </div>
       {error && <p role="alert" className="text-sm text-avvi-red lg:col-span-2">{error}</p>}
     </form>
@@ -3516,7 +3523,7 @@ function DataTable({ headers, rows }: { headers: string[]; rows: ReactNode[][] }
 }
 
 function makeAppointmentForm(professionalId: string, date: string, hour: number) {
-  return { patientId: "", patientName: "", phone: "", cpf: "", birthDate: "", patientNotes: "", procedureId: "", serviceId: "", additionalServices: [] as AppointmentService[], servicePrice: undefined as number | undefined, servicePriceType: undefined as Service["priceType"] | undefined, serviceDurationMinutes: undefined as number | undefined, durationMinutes: 60, professionalId, date, hour: String(Math.floor(hour)), minute: slotTime(hour).slice(3), status: "Agendado" as AppointmentStatus, eventType: "Novo Agendamento", notes: "" };
+  return { patientId: "", patientName: "", phone: "", email: "", gender: "Não informado" as NonNullable<Patient["gender"]>, cpf: "", birthDate: "", patientNotes: "", procedureId: "", serviceId: "", additionalServices: [] as AppointmentService[], servicePrice: undefined as number | undefined, servicePriceType: undefined as Service["priceType"] | undefined, serviceDurationMinutes: undefined as number | undefined, durationMinutes: 60, professionalId, date, hour: String(Math.floor(hour)), minute: slotTime(hour).slice(3), status: "Agendado" as AppointmentStatus, eventType: "Novo Agendamento", notes: "" };
 }
 
 function makeEntryForm() {

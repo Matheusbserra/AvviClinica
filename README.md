@@ -354,3 +354,8 @@ Ao lado de + Brindes, + Ultraformer permite buscar a ponteira e registrar os dis
 Reabrir ou cancelar a edição não consome disparos; salvar novamente reconcilia a quantidade sem duplicação, e excluir o fechamento devolve somente os disparos vinculados àquela conta. Registros manuais e demais contas são preservados. A Agenda carrega as ponteiras para este fluxo; contas padrão podem ajustar somente a utilização vinculada ao fechamento, validada no servidor. O saldo base das ponteiras continua editável apenas pelo administrador. Os novos campos ficam no JSON existente, sem SQL ou variáveis adicionais. Verificação: tests/checkout-ultraformer-ui.mjs, tests/ultraformer.mjs e tests/ultraformer-cloud.mjs.
 
 O formulário de Lançamento de Procedimentos não exibe mais o campo Observações do lançamento. As observações específicas do fechamento e do agendamento permanecem separadas.
+
+
+### E-mail e gênero no agendamento
+
+Novo evento e Detalhes do agendamento incluem E-mail e Gênero junto dos dados do paciente. Selecionar um cadastro preenche ambos; salvar um novo paciente grava os campos, e salvar um paciente já cadastrado atualiza apenas esses dois campos, preservando crédito, fotos e os demais dados. A edição pelo lápis mantém o formulário sincronizado. O e-mail é opcional e sua validade é conferida tanto para salvar o agendamento quanto para abrir o fechamento; o fechamento imediato recebe o contato recém-digitado. Não exige SQL ou variáveis novas. Teste de regressão: tests/appointment-patient-details-ui.mjs.
