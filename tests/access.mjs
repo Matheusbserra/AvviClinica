@@ -1,6 +1,11 @@
 import fs from "node:fs";import assert from "node:assert/strict";import ts from "typescript";
 async function load(file){const code=ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;return import("data:text/javascript;base64,"+Buffer.from(code).toString("base64"));}
-const {canAccessTab,standardTabs,canReadEntity}=await load("lib/access.ts");
+const {canAccessTab,standardTabs,canReadEntity,canWriteEntity,tabLabel}=await load("lib/access.ts");
+assert.equal(tabLabel('Cadastro de Procedimentos'),'Cadastro de Produtos');
+const existingProductUser={login:'catalog-qa',role:'standard',tabs:['Cadastro de Procedimentos']};
+assert.equal(canAccessTab(existingProductUser,'Cadastro de Procedimentos'),true);
+assert.equal(canReadEntity(existingProductUser,'procedures'),true);
+assert.equal(canWriteEntity(existingProductUser,'procedures'),true);
 assert.equal(standardTabs.length,8);for(const tab of standardTabs)assert.equal(canAccessTab("standard",tab),true);
 for(const tab of ["Metas","Dashboard","Receitas","Pagamento Profissional","Relatório Profissional","Lançamento de Procedimentos","Recibos de Pagamento"]){assert.equal(canAccessTab("standard",tab),false);assert.equal(canAccessTab("admin",tab),true);}
 for(const entity of ["revenues","monthly_goals","receipts","professional_receipts"])assert.equal(canReadEntity("standard",entity),false);

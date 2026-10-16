@@ -6,6 +6,15 @@ export function procedureLineTotal(line: ProcedureLine) {
   return cents(line.servicePrice * line.quantity);
 }
 
+export function procedureLineCostTotal(line: ProcedureLine) {
+  return cents(line.productCost * line.quantity);
+}
+
+export function changeProcedureLineCostTotal(line: ProcedureLine, total: number): ProcedureLine {
+  if (!Number.isFinite(total) || !Number.isFinite(line.quantity) || line.quantity <= 0) return line;
+  return { ...line, productCost: cents(total) / line.quantity };
+}
+
 // Store the equivalent unit price so existing reports and old records retain
 // their quantity × unit-price convention. Do not round repeating unit prices.
 export function overrideProcedureLineTotal(line: ProcedureLine, total: number): ProcedureLine {

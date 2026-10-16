@@ -55,3 +55,19 @@ assert.equal(a.overlappingAppointments([occupied],{date:saturday,professionalId:
 assert.equal(a.overlappingAppointments([occupied],{date:saturday,professionalId:"ana",hour:9.5}).length,1);
 assert.match(a.appointmentAvailabilityError({...professionals[1],closedShifts:[{weekday:6,shift:"afternoon"}]},[],saturday+"T12:00:00",saturday+"T12:30:00"),/fechada/);
 console.log("PASS: 30-minute adjacency, fractional starts, 20:30 selection, partial-period closure validation and correct half-hour overlap.");
+
+const visit=(id,professionalId,start='09:00',end='10:00',extra={})=>({id,professionalId,startsAt:saturday+'T'+start+':00',endsAt:saturday+'T'+end+':00',eventType:'Novo Agendamento',status:'Agendado',...extra});
+const parallel=[visit('one','one'),visit('two','two'),visit('three','three')],fourth={id:'four',active:true};
+assert.equal(a.appointmentAvailabilityError(fourth,parallel.slice(0,1),parallel[0].startsAt,parallel[0].endsAt),'');
+assert.equal(a.appointmentAvailabilityError(fourth,parallel.slice(0,2),parallel[0].startsAt,parallel[0].endsAt),'');
+assert.match(a.appointmentAvailabilityError(fourth,parallel,parallel[0].startsAt,parallel[0].endsAt),/3.*simult/);
+assert.equal(a.appointmentAvailabilityError(fourth,parallel,saturday+'T10:00:00',saturday+'T10:30:00'),'');
+assert.equal(a.appointmentAvailabilityError({...fourth,id:'three'},parallel,parallel[2].startsAt,parallel[2].endsAt,'three'),'');
+assert.match(a.appointmentAvailabilityError({...fourth,id:'one'},parallel.slice(0,1),parallel[0].startsAt,parallel[0].endsAt),/reservado/);
+assert.match(a.appointmentAvailabilityError(fourth,parallel,saturday+'T09:45:00',saturday+'T10:15:00'),/3.*simult/);
+assert.equal(a.appointmentAvailabilityError(fourth,parallel,parallel[0].startsAt,parallel[0].endsAt,undefined,'Registrar Ausência'),'');
+assert.equal(a.appointmentAvailabilityError(fourth,[...parallel.slice(0,2),{...parallel[2],eventType:'Registrar Ausência'}],parallel[0].startsAt,parallel[0].endsAt),'');
+assert.equal(a.appointmentAvailabilityError(fourth,[...parallel.slice(0,2),{...parallel[2],status:'Cancelado'}],parallel[0].startsAt,parallel[0].endsAt),'');
+// A long booking can intersect many different visits without exceeding capacity at any instant.
+assert.equal(a.appointmentAvailabilityError(fourth,[visit('a','a','08:00','09:00'),visit('b','b','09:00','10:00'),visit('c','c','10:00','11:00')],saturday+'T08:00:00',saturday+'T11:00:00'),'');
+console.log('PASS: up to three different professionals concurrently, fourth rejected, partial overlaps and resizing, own edit and adjacent times, absences/cancellations excluded from clinic capacity and peak occupancy rather than total overlapping records.');

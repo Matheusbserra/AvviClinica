@@ -61,7 +61,7 @@ export async function POST(request: Request) {
     if (selectedStockProducts.length) {
       const productIds = new Set((await rows("procedures")).map(row => row.record_id));
       for (const row of upserts) if (row.entity === "procedures" && canWriteEntity(user, "procedures")) productIds.add(row.record_id);
-      if (selectedStockProducts.some(row => !productIds.has(row.data.procedureId))) return Response.json({ error: "Selecione um produto do Cadastro de Procedimentos." }, { status: 400, headers });
+      if (selectedStockProducts.some(row => !productIds.has(row.data.procedureId))) return Response.json({ error: "Selecione um produto do Cadastro de Produtos." }, { status: 400, headers });
     }
     const packageUpdates = upserts.filter(row => row.entity === "service_packages");
     if (packageUpdates.length) {
@@ -140,14 +140,14 @@ export async function POST(request: Request) {
         if (update && stable(update.data) !== stable(after) || !update && stable(before) !== stable(after)) return Response.json({ error: "Os disparos devem corresponder ao fechamento da conta. Atualize a página e tente novamente." }, { status: 409, headers });
       }
     }
-    const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt));
+    const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt && old.eventType === item.eventType && !(old.status === "Cancelado" && item.status !== "Cancelado")));
     if (moved.length) {
       const professionals = (await rows("professionals")).map(row => row.data as unknown as import("@/lib/types").Professional);
       const deleted = new Set(removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids));
       const effectiveAppointments = [...stored.filter(item => !deleted.has(item.id) && !appointmentUpdates.some(next => next.id === item.id)), ...appointmentUpdates];
       for (const appointment of moved) {
         const professional = upserts.find(row => row.entity === "professionals" && row.record_id === appointment.professionalId)?.data ?? professionals.find(item => item.id === appointment.professionalId);
-        const error = appointmentAvailabilityError(professional, effectiveAppointments, appointment.startsAt, appointment.endsAt, appointment.id);
+        const error = appointmentAvailabilityError(professional, effectiveAppointments, appointment.startsAt, appointment.endsAt, appointment.id, appointment.eventType);
         if (error) return Response.json({ error }, { status: 409, headers });
       }
     }

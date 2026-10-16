@@ -28,7 +28,7 @@ type Props = {
   procedures: Procedure[]; services: Service[]; professionals: Professional[]; visibleProfessionals: Professional[];
   openSlot: (hour: number, professionalId: string, durationMinutes?: number) => void;
   markAbsent: (slots: AgendaSlot[]) => void; removeAbsence: (ids: string[]) => void; openAppointment: (id: string) => void;
-  updateStatus: (id: string, status: "Confirmado" | "Cancelado") => void;
+  updateStatus: (id: string, status: "Confirmado" | "Cancelado") => string;
   resizeAppointment: (id: string, endsAt: string) => string;
   openAccount: (id: string) => void; viewAccount: (id: string) => void;
 };
@@ -172,7 +172,7 @@ export function AgendaView(props: Props) {
       if (!candidate) return;
       changed = Math.abs(pointer.clientY - startY) > 3;
       if (!changed) { error = ""; setResizing(null); setResizeError(""); return; }
-      error = appointmentAvailabilityError(props.professionals.find(item => item.id === appointment.professionalId), props.appointments, appointment.startsAt, candidate, appointment.id);
+      error = appointmentAvailabilityError(props.professionals.find(item => item.id === appointment.professionalId), props.appointments, appointment.startsAt, candidate, appointment.id, appointment.eventType);
       setResizeError(error);
       endsAt = candidate;
       if (!error) setResizing({ id: appointment.id, endsAt });
@@ -314,7 +314,7 @@ export function AgendaView(props: Props) {
       {menu.appointmentIds.length > 1 && !isAbsence(menuAppointment) && <label className="block border-b border-slate-100 px-2 py-2 text-[10px] text-slate-500">Agendamento<select aria-label="Selecionar agendamento da paciente" value={menu.appointmentId} onChange={event => setMenu({ ...menu, appointmentId: event.target.value })} className="mt-1 block w-full min-w-0 rounded border border-avvi-line bg-white p-1 text-[10px] text-slate-700">{menu.appointmentIds.map(id => { const item = props.appointments.find(appointment => appointment.id === id); return item && <option key={id} value={id}>{item.startsAt.slice(11,16)} – {item.endsAt.slice(11,16)} · {serviceName(item)}</option>; })}</select></label>}
       {isAbsence(menuAppointment) ? <button type="button" role="menuitem" onClick={() => menuAction(() => props.removeAbsence(menu.appointmentIds))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-slate-700 hover:bg-slate-100"><X size={14} />Remover ausência</button> : <>
       <button type="button" role="menuitem" onClick={() => menuAction(() => props.openAppointment(menuAppointment.id))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-slate-700 hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"><Eye size={14} />Ver agendamento</button>
-      <button type="button" role="menuitem" onClick={() => menuAction(() => props.updateStatus(menuAppointment.id, "Confirmado"))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-green-700 hover:bg-green-50 focus:bg-green-50 focus:outline-none"><CheckCircle2 size={14} />Confirmado</button>
+      <button type="button" role="menuitem" onClick={() => menuAction(() => setResizeError(props.updateStatus(menuAppointment.id, "Confirmado")))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-green-700 hover:bg-green-50 focus:bg-green-50 focus:outline-none"><CheckCircle2 size={14} />Confirmado</button>
       <button type="button" role="menuitem" onClick={() => menuAction(() => props.updateStatus(menuAppointment.id, "Cancelado"))} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-red-600 hover:bg-red-50 focus:bg-red-50 focus:outline-none"><Ban size={14} />Cancelado</button>
       <button type="button" role="menuitem" onClick={() => menuAction(() => isClosed(menuAppointment) ? props.viewAccount(menuAppointment.id) : props.openAccount(menuAppointment.id))} className="flex w-full items-center gap-2 rounded border-t border-slate-100 px-2 py-2 text-left text-orange-600 hover:bg-orange-50 focus:bg-orange-50 focus:outline-none"><CircleDollarSign size={14} />{isClosed(menuAppointment) ? "Ver fechamento" : "Fechar conta"}</button>
       </>}

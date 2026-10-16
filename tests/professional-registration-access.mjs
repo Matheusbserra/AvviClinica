@@ -30,7 +30,7 @@ try{
  assert.equal((await route.POST(req(kept,change('ana',{closedShifts:[{weekday:8,shift:'morning'}]})))).status,400);assert.equal(writes,before);
  const cached={appointments:[],professionals:[records.get('ana').data,records.get('bia').data]};assert.deepEqual(snapshot.permittedSnapshot(cached,kept).professionals.map(item=>item.id),['ana']);assert.equal(snapshot.permittedSnapshot(cached,kept).professionals[0].commissionPercent,0);
  const admin={login:'admin',role:'admin'};assert.equal((await route.POST(req(admin,change('ana',{commissionPercent:60})))).status,200);assert.equal(records.get('ana').data.commissionPercent,60);
- const appointment=(id,start,end)=>({entity:'appointments',record_id:id,data:{id,professionalId:'ana',startsAt:'2026-10-10T'+start+':00',endsAt:'2026-10-10T'+end+':00',eventType:'Novo Agendamento',status:'Agendado',notes:''}});
+ const appointment=(id,start,end,professionalId='ana')=>({entity:'appointments',record_id:id,data:{id,professionalId,startsAt:'2026-10-10T'+start+':00',endsAt:'2026-10-10T'+end+':00',eventType:'Novo Agendamento',status:'Agendado',notes:''}});
  assert.equal((await route.POST(req(admin,{upserts:[appointment('first','08:00','09:20')]}))).status,200);
  before=writes;
  response=await route.POST(req(admin,{upserts:[appointment('conflict','09:15','09:45')]}));assert.equal(response.status,409);assert.match((await response.json()).error,/reservado/);assert.equal(writes,before);
@@ -42,6 +42,19 @@ try{
  assert.equal((await route.POST(req(admin,{upserts:[appointment('closed','11:00','12:00')]}))).status,409);
  assert.equal((await route.POST(req(admin,{upserts:[appointment('batch-one','16:00','18:00'),appointment('batch-two','17:30','19:00')]}))).status,409);
  assert.equal(records.has('batch-one'),false);
+ for(let index=1;index<=5;index++)records.set('parallel-pro-'+index,record('parallel-pro-'+index,'Paralelo '+index,50));
+ const parallel=Array.from({length:4},(_,index)=>appointment('parallel-'+index,'14:00','15:00','parallel-pro-'+(index+1)));
+ assert.equal((await route.POST(req(admin,{upserts:parallel.slice(0,2)}))).status,200);
+ assert.equal((await route.POST(req(admin,{upserts:parallel.slice(2,3)}))).status,200);
+ before=writes;response=await route.POST(req(admin,{upserts:parallel.slice(3)}));assert.equal(response.status,409);assert.match((await response.json()).error,/3.*simult/);assert.equal(writes,before);assert.equal(records.has('parallel-3'),false);
+ const batch=parallel.map(row=>({...row,record_id:row.record_id+'-batch',data:{...row.data,id:row.data.id+'-batch',startsAt:'2026-10-10T16:00:00',endsAt:'2026-10-10T17:00:00'}}));
+ assert.equal((await route.POST(req(admin,{upserts:batch}))).status,409);assert.equal(writes,before);assert.equal(records.has('parallel-0-batch'),false);
+ // Restoring a cancellation is a new reservation even if its times never change.
+ records.set(parallel[3].record_id,{...parallel[3],data:{...parallel[3].data,status:'Cancelado'}});
+ assert.equal((await route.POST(req(admin,{upserts:[{...parallel[3],data:{...parallel[3].data,status:'Confirmado'}}]}))).status,409);assert.equal(writes,before);
+ const absence=appointment('parallel-absence','14:00','15:00','parallel-pro-5');absence.data.eventType='Registrar Ausência';
+ assert.equal((await route.POST(req(admin,{upserts:[absence]}))).status,200);
+ console.log('PASS: API allows three simultaneous professionals, rejects a fourth and a four-booking batch before any writes, rechecks restored cancellations, and does not count absences as occupied rooms.');
  console.log('PASS: API rejects half-hour conflicts and closed shifts, allows adjacent half-hour appointments, rejects overlapping appointments in one batch before writing and preserves existing appointments after weekly closures.');
  stored[0].version++;assert.equal((await route.GET(req())).status,401);
  console.log('PASS: shared report/registration/strategy scope, deduplication, empty scope rejection, persisted scope, signed sessions revalidate stored permissions, selected-only API/cache, hidden commission, forged commission preserved, unauthorized writes/deletes blocked, weekly rule validation, admin unchanged and session revocation. Isolated files and mock network.');

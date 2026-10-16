@@ -33,24 +33,27 @@ export function InventoryView({ procedures, inventory, setInventory, appointment
       return existing ? current.map((item) => item.procedureId === procedureId ? saved : item) : [...current, saved];
     });
   }
+  function addProduct() {
+    if (!canMove || !available.some(item => item.id === productId)) return;
+    setInventory(current => {
+      const existing = current.find(item => item.procedureId === productId);
+      const saved = { ...existing, id: existing?.id ?? productId, procedureId: productId, quantity: existing?.quantity ?? 0, visibleInStock: true };
+      return existing ? current.map(item => item.id === existing.id ? saved : item) : [...current, saved];
+    });
+    setSearch(""); setAdding(false);
+  }
   return <section className="rounded-2xl border border-white/70 bg-white p-5 shadow-panel">
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
       <div><h3 className="flex items-center gap-2 text-lg font-bold"><Package size={20} />Estoque de produtos</h3><p className="mt-1 text-sm text-slate-500">{canMove ? "Edite a quantidade ou use as setas para adicionar e retirar unidades." : "Consulta do estoque"}</p></div>
       <input aria-label="Buscar procedimento no estoque" className="input max-w-sm" placeholder="Buscar procedimento" value={search} onChange={(event) => setSearch(event.target.value)} />
       {canMove && <button type="button" onClick={() => { setProductId(""); setAdding(true); }} className="flex items-center gap-2 rounded-lg bg-avvi-blue px-3 py-2 text-sm font-bold text-white"><Plus size={16}/>Produto</button>}
     </div>
-    {canMove && adding && <ClinicalDialog title="Adicionar produto ao estoque" onClose={() => setAdding(false)}>
-      <SearchSelect label="Produto do cadastro de procedimentos" options={available} value={productId} onChange={setProductId}/>
-      {!available.length && <p className="my-3 text-sm text-slate-500">Todos os produtos cadastrados já estão no estoque.</p>}
-      <button type="button" disabled={!available.some(item => item.id === productId)} onClick={() => {
-        if (!canMove || !available.some(item => item.id === productId)) return;
-        setInventory(current => {
-          const existing = current.find(item => item.procedureId === productId);
-          const saved = { ...existing, id: existing?.id ?? productId, procedureId: productId, quantity: existing?.quantity ?? 0, visibleInStock: true };
-          return existing ? current.map(item => item.id === existing.id ? saved : item) : [...current, saved];
-        });
-        setSearch(""); setAdding(false);
-      }} className="mt-4 rounded-lg bg-avvi-blue px-4 py-2 text-sm font-bold text-white disabled:opacity-40">Adicionar produto</button>
+    {canMove && adding && <ClinicalDialog title="Adicionar produto ao estoque" onClose={() => setAdding(false)} footer={<div className="flex w-full justify-end"><button type="button" disabled={!available.some(item => item.id === productId)} onClick={addProduct} className="w-full rounded-lg bg-avvi-blue px-4 py-2 text-sm font-bold text-white disabled:opacity-40 sm:w-auto">Adicionar produto</button></div>}>
+      <div className="min-h-[min(26rem,55dvh)]">
+        <p className="mb-2 text-sm font-semibold text-slate-600">Produto do cadastro</p>
+        <SearchSelect label="Produto do cadastro de produtos" options={available} value={productId} onChange={setProductId} inlineResults/>
+        {!available.length && <p className="my-3 text-sm text-slate-500">Todos os produtos cadastrados já estão no estoque.</p>}
+      </div>
     </ClinicalDialog>}
     <div className="overflow-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase text-slate-500"><tr><th className="px-3 py-3">Procedimento</th><th className="px-3 py-3">Quantidade em estoque</th></tr></thead><tbody>
       {rows.map((procedure) => {

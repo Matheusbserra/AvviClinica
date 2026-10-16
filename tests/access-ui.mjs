@@ -38,7 +38,7 @@ async function saved(){try{await page.getByRole("status",{name:"Status do salvam
 try{
  await page.goto(origin);assert.equal((await context.request.get(origin+"/api/access/data?entity=revenues")).status(),401);
  await login("avviclinica","avviclinica2026");await saved();await page.getByText("Perfil Usuário padrão · avviclinica",{exact:true}).waitFor();
- const allowed=["Agenda","Estoque","Follow Up","Custos","Cadastro de Procedimentos","Cadastro de Serviços","Cadastro de Profissionais","Cadastro de Pacientes"];
+ const allowed=["Agenda","Estoque","Follow Up","Custos","Cadastro de Produtos","Cadastro de Serviços","Cadastro de Profissionais","Cadastro de Pacientes"];
  const denied=["Dashboard","Receitas","Lançamento de Procedimentos","Pagamento Profissional","Relatório Profissional","Recibos de Pagamento","Metas"];
  for(const name of denied)assert.equal(await page.getByRole("button",{name,exact:true}).count(),0);
  for(const name of allowed){await tab(name).click();await page.getByRole("heading",{name,exact:true}).first().waitFor();}

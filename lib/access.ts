@@ -77,4 +77,4 @@ export function registrationOnly(user: AppUser) {
 }
 
 // Preserve saved account permissions while updating the visible navigation name.
-export function tabLabel(tab: string) { return tab === "Receitas" ? "Movimentações" : tab === "Relatórios" ? "Rankings" : tab; }
+export function tabLabel(tab: string) { return tab === "Receitas" ? "Movimentações" : tab === "Relatórios" ? "Rankings" : tab === "Cadastro de Procedimentos" ? "Cadastro de Produtos" : tab; }

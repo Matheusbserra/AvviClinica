@@ -48,7 +48,7 @@ export function reservedInterval(startsAt: string, endsAt: string) {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
   return { start: new Date(Math.floor(start / 1800000) * 1800000).toISOString().slice(0,19), end: new Date(Math.ceil(end / 1800000) * 1800000).toISOString().slice(0,19) };
 }
-export function appointmentAvailabilityError(professional: Professional | undefined, appointments: Appointment[], startsAt: string, endsAt: string, editingId?: string) {
+export function appointmentAvailabilityError(professional: Professional | undefined, appointments: Appointment[], startsAt: string, endsAt: string, editingId?: string, eventType?: Appointment["eventType"]) {
   const interval = reservedInterval(startsAt, endsAt);
   if (!professional?.active || !interval) return "Selecione um profissional ativo e um horário válido.";
   let day = interval.start.slice(0,10);
@@ -65,6 +65,24 @@ export function appointmentAvailabilityError(professional: Professional | undefi
   });
   if (conflicts.some(isAbsence)) return "O profissional está ausente nesse horário. Remova a ausência para agendar.";
   if (conflicts.length) return "Este horário já está reservado para outro atendimento deste profissional. Escolha um intervalo livre.";
+  // Absence markers occupy a professional's schedule, but never a treatment room.
+  if (eventType === "Registrar Ausência") return "";
+  const boundaries: { time: string; professionalId: string; delta: number }[] = [];
+  for (const appointment of appointments) {
+    if (appointment.id === editingId || isAbsence(appointment) || appointment.status === "Cancelado") continue;
+    const other = reservedInterval(appointment.startsAt, appointment.endsAt);
+    if (!other || other.start >= interval.end || other.end <= interval.start) continue;
+    boundaries.push({ time: other.start < interval.start ? interval.start : other.start, professionalId: appointment.professionalId, delta: 1 },
+      { time: other.end > interval.end ? interval.end : other.end, professionalId: appointment.professionalId, delta: -1 });
+  }
+  // Endings release their room before another appointment starts at the same time.
+  boundaries.sort((a, b) => a.time.localeCompare(b.time) || a.delta - b.delta);
+  const occupied = new Map<string, number>();
+  for (const boundary of boundaries) {
+    const count = (occupied.get(boundary.professionalId) ?? 0) + boundary.delta;
+    if (count) occupied.set(boundary.professionalId, count); else occupied.delete(boundary.professionalId);
+    if (occupied.size >= 3) return "A clínica permite até 3 pacientes simultâneos, com profissionais diferentes. Escolha outro horário.";
+  }
   return "";
 }
 

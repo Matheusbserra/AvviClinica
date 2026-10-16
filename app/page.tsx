@@ -80,7 +80,7 @@ import { originalAppointmentNotes } from "@/lib/appointmentNotes";
 import { checkoutCommission } from "@/lib/checkout";
 import { InvoiceView } from "@/app/components/InvoiceView";
 import { procedureEntryFromAccount } from "@/lib/accountProcedures";
-import { changeProcedureLineQuantity, overrideProcedureLineTotal, procedureLineTotal } from "@/lib/procedureEntryPricing";
+import { changeProcedureLineCostTotal, changeProcedureLineQuantity, overrideProcedureLineTotal, procedureLineCostTotal, procedureLineTotal } from "@/lib/procedureEntryPricing";
 import { applyCheckoutInventory } from "@/lib/inventory";
 import { importedServices } from "@/lib/importedServices";
 import { appointmentServices, totalServiceMinutes } from "@/lib/appointmentServices";
@@ -609,8 +609,12 @@ export default function Home() {
       if (isSupabaseConfigured && !lastSyncedSnapshot.current) {
         // Also preserve edits made when the very first connection fails.
         const initial = permittedSnapshot(startupSnapshot.current, currentUser);
-        lastSyncedSnapshot.current = local?.syncedData ?? local?.data ?? latestDraft.current ?? initial;
+        lastSyncedSnapshot.current = permittedSnapshot(local?.syncedData ?? local?.data ?? latestDraft.current ?? initial, currentUser);
       }
+      // Restore every category from the same permitted snapshot as its baseline.
+      // Leaving startup costs/entries in state makes an Agenda-only user's next
+      // booking send unrelated forbidden writes/deletions after reconnection.
+      if (isSupabaseConfigured) snapshot = permittedSnapshot(latestDraft.current ?? snapshot ?? startupSnapshot.current, currentUser);
       if (snapshot) {
         setPatients(snapshot.patients);
         setProfessionals(snapshot.professionals);
@@ -1016,7 +1020,7 @@ export default function Home() {
   function resizeAgendaAppointment(appointmentId: string, endsAt: string) {
     const appointment = appointments.find(item => item.id === appointmentId);
     if (!appointment || isAbsence(appointment)) return "Agendamento indisponível.";
-    const error = appointmentAvailabilityError(professionals.find(item => item.id === appointment.professionalId), appointments, appointment.startsAt, endsAt, appointmentId);
+    const error = appointmentAvailabilityError(professionals.find(item => item.id === appointment.professionalId), appointments, appointment.startsAt, endsAt, appointmentId, appointment.eventType);
     if (error) return error;
     setAppointments(current => current.map(item => item.id === appointmentId ? { ...item, endsAt } : item));
     return "";
@@ -1065,8 +1069,8 @@ export default function Home() {
     const startsAt = `${appointmentForm.date}T${appointmentForm.hour.padStart(2, "0")}:${appointmentForm.minute}:00`;
     const endsAt = format(addMinutes(parseISO(startsAt), appointmentForm.durationMinutes), "yyyy-MM-dd'T'HH:mm:ss");
     const existing = appointments.find(item => item.id === selectedAppointmentId);
-    if (!existing || existing.professionalId !== appointmentForm.professionalId || existing.startsAt !== startsAt || existing.endsAt !== endsAt) {
-      const error = appointmentAvailabilityError(professionals.find(item => item.id === appointmentForm.professionalId), appointments, startsAt, endsAt, selectedAppointmentId ?? undefined);
+    if (!existing || existing.professionalId !== appointmentForm.professionalId || existing.startsAt !== startsAt || existing.endsAt !== endsAt || existing.eventType !== appointmentForm.eventType || existing.status === "Cancelado" && appointmentForm.status !== "Cancelado") {
+      const error = appointmentAvailabilityError(professionals.find(item => item.id === appointmentForm.professionalId), appointments, startsAt, endsAt, selectedAppointmentId ?? undefined, appointmentForm.eventType);
       if (error) { setAppointmentError(error); return; }
     }
     let patientId = appointmentForm.patientId;
@@ -1092,6 +1096,7 @@ export default function Home() {
       setPatients(current => current.map(patient => patient.id === patientId ? { ...patient, email: appointmentForm.email.trim(), gender: appointmentForm.gender } : patient));
     }
     const created: Appointment = {
+      ...existing,
       id: selectedAppointmentId || id("appointment"),
       patientId,
       professionalId: appointmentForm.professionalId,
@@ -1170,13 +1175,23 @@ export default function Home() {
   }
 
   function updateAgendaStatus(appointmentId: string, status: "Confirmado" | "Cancelado") {
+    const appointment = appointments.find(item => item.id === appointmentId);
+    if (appointment?.status === "Cancelado" && status === "Confirmado") {
+      const error = appointmentAvailabilityError(professionals.find(item => item.id === appointment.professionalId), appointments, appointment.startsAt, appointment.endsAt, appointmentId, appointment.eventType);
+      if (error) return error;
+    }
     setAppointments((current) => current.map((appointment) => appointment.id === appointmentId ? { ...appointment, status } : appointment));
+    return "";
   }
 
   function finishCheckout(result: CheckoutResult) {
     if (!checkoutDraft || (!result.products.length && !result.ultraformerShots.length && !checkoutAllowsNoProducts(result.lines, services))) return;
     const currentAppointment = appointments.find((appointment) => appointment.id === checkoutDraft.appointment.id);
     if (!currentAppointment?.patientId) return;
+    if (currentAppointment.status === "Cancelado") {
+      const error = appointmentAvailabilityError(professionals.find(item => item.id === currentAppointment.professionalId), appointments, currentAppointment.startsAt, currentAppointment.endsAt, currentAppointment.id, currentAppointment.eventType);
+      if (error) { window.alert(error); return; }
+    }
     const previousAccount = currentAppointment.closedAccount ?? entries.find((entry) => !entry.sourceAccountId && entry.accountClosed && entry.id === checkoutDraft.entryId);
     const creditBalance=Number(patients.find(patient=>patient.id===currentAppointment.patientId)?.futureCredit)||0;
     if(creditBalance+futureCreditUsed(previousAccount)-(currentAppointment.closedAccount?.creditAdded??0)+result.creditAdded-result.payments.filter(payment=>payment.method==="Crédito Futuro").reduce((sum,payment)=>sum+payment.amount,0)<-0.001){window.alert("O crédito deste fechamento já foi utilizado. Estorne primeiro a conta em que ele foi usado.");return;}
@@ -2070,6 +2085,7 @@ function FinancialView(props: {
   const summary = calculateEntry(props.entryForm);
   const productCost = productCostOnly(props.entryForm);
   const totalServices = servicesTotal(props.entryForm);
+  const totalReceived = props.entryForm.payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
   const totalCost = productCost + summary.discount + summary.machineFee;
   const profit = totalServices - totalCost;
   const initialPeriod = monthPeriod(props.selectedMonth);
@@ -2193,7 +2209,7 @@ function FinancialView(props: {
                   <MoneyInput value={procedureLineTotal(line)} onChange={(value) => updateLine(index, overrideProcedureLineTotal(line, value))} />
                 </FormField>
                 <FormField label="Custo médio">
-                  <MoneyInput value={line.productCost} onChange={(value) => updateLine(index, { productCost: value })} />
+                  <MoneyInput value={procedureLineCostTotal(line)} onChange={(value) => updateLine(index, changeProcedureLineCostTotal(line, value))} />
                 </FormField>
                 <FormField label="% profissional">
                   <input type="number" value={line.professionalPercent} onChange={(event) => updateLine(index, { professionalPercent: Number(event.target.value) })} className="input" />
@@ -2208,12 +2224,13 @@ function FinancialView(props: {
           </div>
         </div>
         <PaymentEditor form={props.entryForm} setForm={props.setEntryForm} patients={props.patients} />
-        <div className="mt-4 grid gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-[11px] md:grid-cols-8">
+        <div className="mt-4 grid grid-cols-2 gap-2 rounded-md border border-amber-200 bg-avvi-soft p-3 text-[11px] sm:grid-cols-3 xl:grid-cols-9">
           <SummaryItem label="Custo médio" value={currency(productCost)} />
           <SummaryItem label="Descontos" value={currency(summary.discount)} tone="red" />
           <SummaryItem label="Taxa maquininha" value={currency(summary.machineFee)} tone="red" />
           <SummaryItem label="Custo total" value={currency(totalCost)} />
           <SummaryItem label="Total de procedimentos" value={currency(totalServices)} tone="blue" />
+          <SummaryItem label="Valor recebido" value={currency(totalReceived)} tone="blue" />
           <SummaryItem label="Lucro" value={currency(profit)} tone="green" />
           <SummaryItem label="Valor empresa" value={currency(summary.companyValue)} tone="blue" />
           <SummaryItem label="Valor profissional" value={currency(summary.professionalValue)} tone="violet" />
@@ -2721,7 +2738,7 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
   function exportProceduresExcel() {
     import("xlsx").then((xlsx) => {
       const rows = sortedProcedures.map((procedure) => ({
-        Procedimento: procedure.name,
+        Produto: procedure.name,
         Categoria: procedure.category,
         "Custo do produto": procedure.productCost ?? procedure.averageCost,
         Imposto: procedure.price * ((procedure.taxPercent ?? 0) / 100),
@@ -2735,14 +2752,14 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
         { wch: 16 }, { wch: 16 }
       ];
       const workbook = xlsx.utils.book_new();
-      xlsx.utils.book_append_sheet(workbook, worksheet, "Procedimentos");
-      xlsx.writeFile(workbook, "avvi-procedimentos.xlsx");
+      xlsx.utils.book_append_sheet(workbook, worksheet, "Produtos");
+      xlsx.writeFile(workbook, "avvi-produtos.xlsx");
     });
   }
 
   function exportProceduresPdf() {
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-    const headers = ["Procedimento", "Categoria", "Custo do produto", "Imposto", "Custo da clínica", "Custo médio", "Preço"];
+    const headers = ["Produto", "Categoria", "Custo do produto", "Imposto", "Custo da clínica", "Custo médio", "Preço"];
     const widths = [52, 34, 37, 27, 37, 32, 27];
     const drawHeader = (y: number) => {
       doc.setFontSize(16);
@@ -2750,10 +2767,10 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
       doc.text("AVVI Clínica", 10, y);
       doc.setFontSize(11);
       doc.setTextColor(0, 0, 0);
-      doc.text("Cadastro de procedimentos", 10, y + 7);
+      doc.text("Cadastro de Produtos", 10, y + 7);
       doc.setFontSize(8);
       doc.setTextColor(100, 116, 139);
-      doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")} · ${sortedProcedures.length} procedimento(s)`, 10, y + 12);
+      doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")} · ${sortedProcedures.length} produto(s)`, 10, y + 12);
       return y + 20;
     };
 
@@ -2777,7 +2794,7 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
       }
       y += drawPdfRow(doc, values, widths, 10, y, false);
     });
-    doc.save("avvi-procedimentos.pdf");
+    doc.save("avvi-produtos.pdf");
   }
 
   return (
@@ -2785,10 +2802,10 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
       <Panel>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-lg font-bold">Cadastro de procedimentos</h3>
+            <h3 className="text-lg font-bold">Cadastro de Produtos</h3>
             <p className="text-sm text-slate-500">Preço, custo e comissão preenchidos automaticamente nos lançamentos.</p>
           </div>
-          <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{procedures.length} procedimentos</span>
+          <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{procedures.length} produtos</span>
         </div>
         <div className="grid gap-3 md:grid-cols-3">
           <FormField label="Nome"><input className="input" value={procedureForm.name} onChange={(event) => setProcedureForm({ ...procedureForm, name: event.target.value })} /></FormField>
@@ -2804,12 +2821,12 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
           </div>
           <FormField label="Observações"><input className="input" value={procedureForm.notes} onChange={(event) => setProcedureForm({ ...procedureForm, notes: event.target.value })} /></FormField>
         </div>
-        <button onClick={saveProcedure} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white">Salvar procedimento</button>
+        <button onClick={saveProcedure} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white">Salvar produto</button>
       </Panel>
       <Panel>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-lg font-bold">Procedimentos cadastrados</h3>
+            <h3 className="text-lg font-bold">Produtos cadastrados</h3>
             <p className="text-sm text-slate-500">Exporte a lista completa em PDF ou Excel.</p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -2818,7 +2835,7 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
           </div>
         </div>
         <DataTable
-          headers={["Procedimento", "Categoria", "Preço", "Custo médio", "Ações"]}
+          headers={["Produto", "Categoria", "Preço", "Custo médio", "Ações"]}
           rows={sortedProcedures.map((procedure) => [procedure.name, procedure.category, currency(procedure.price), currency(procedure.averageCost), (
             <div key={procedure.id} className="flex flex-wrap items-center gap-2">
               <ActionButtons
