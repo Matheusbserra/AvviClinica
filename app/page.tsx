@@ -508,8 +508,6 @@ export default function Home() {
   const [syncRetry, setSyncRetry] = useState(0);
   const [refreshError, setRefreshError] = useState("");
 
-  const agendaProfessionals = professionals.filter(professional => professional.showInAgenda !== false);
-  const visibleProfessionals = agendaProfessionals.some(professional => professional.id === professionalFilter) ? agendaProfessionals.filter(professional => professional.id === professionalFilter) : agendaProfessionals;
   const accounting = useMemo(() => excludeZeroAccounts(appointments, entries, services), [appointments, entries, services]);
   const accountingRevenues = revenues.filter(item => !accounting.entryIds.has(item.sourceFinancialEntryId));
   const accountingCosts = costs.filter(item => !accounting.entryIds.has(item.sourceFinancialEntryId));
@@ -1715,15 +1713,12 @@ export default function Home() {
               setViewMode={setViewMode}
               selectedDate={selectedDate}
               setSelectedDate={setSelectedDate}
-              professionalFilter={professionalFilter}
-              setProfessionalFilter={setProfessionalFilter}
               appointments={appointments}
               entries={entries}
               patients={patients}
               procedures={procedures}
               services={services}
               professionals={professionals}
-              visibleProfessionals={visibleProfessionals}
               markAbsent={markAgendaAbsent}
               removeAbsence={removeAgendaAbsence}
               openSlot={openSlot}
@@ -1982,6 +1977,10 @@ function MobileTabs({ activeTab, setActiveTab, allowedTabs }: { activeTab: Tab; 
 
 function AppointmentForm({ form, setForm, patients, services, professionals, saveAppointment, openCheckout, openHistory, editPatient, deleteAccount, error }: { form: ReturnType<typeof makeAppointmentForm>; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; services: Service[]; professionals: Professional[]; saveAppointment: () => void; openCheckout: () => void; openHistory: () => void; editPatient: () => void; deleteAccount?: () => void; error: string }) {
   const hasServices = !!form.serviceId || form.additionalServices.some(item => item.serviceId);
+  const serviceOptions = (selectedId: string) => services.filter(service => service.active || service.id === selectedId).map(service => ({
+    id: service.id,
+    name: `${service.name} · ${service.priceType === "from" ? "A partir de " : ""}${currency(service.price)}${service.active ? "" : " (inativo)"}`
+  }));
   function updateServices(patch: Partial<typeof form>) {
     const next = { ...form, ...patch };
     const primaryMinutes = next.serviceId ? next.serviceDurationMinutes ?? services.find(item => item.id === next.serviceId)?.durationMinutes ?? 0 : 0;
@@ -2016,19 +2015,16 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
       <FormField label="Data de nascimento"><input type="date" value={form.birthDate} onChange={(event) => setForm({ ...form, birthDate: event.target.value })} className="input" /></FormField>
       <div className="space-y-2 lg:col-span-2">
         <FormField label="Serviço">
-          <div className="flex items-center gap-2"><select aria-label="Serviço" value={form.serviceId} onChange={(event) => {
-            const service = services.find((item) => item.id === event.target.value);
-            updateServices({ serviceId: event.target.value, procedureId: service ? "" : form.procedureId,
+          <div className="flex items-center gap-2"><div className="min-w-0 flex-1"><SearchSelect label="Serviço" options={serviceOptions(form.serviceId)} value={form.serviceId} onChange={serviceId => {
+            const service = services.find((item) => item.id === serviceId);
+            updateServices({ serviceId, procedureId: service ? "" : form.procedureId,
               serviceDurationMinutes: service?.durationMinutes, servicePrice: service?.price, servicePriceType: service?.priceType });
-          }} className="input min-w-0 flex-1">
-            <option value="">Selecione um serviço</option>
-            {services.filter((service) => service.active || service.id === form.serviceId).slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((service) => <option key={service.id} value={service.id}>{service.name} · {service.priceType === "from" ? "A partir de " : ""}{currency(service.price)}{service.active ? "" : " (inativo)"}</option>)}
-          </select><button type="button" aria-label="Adicionar outro serviço ao agendamento" title="Adicionar outro serviço" onClick={() => setForm({ ...form, additionalServices: [...form.additionalServices, { id: id("scheduled-service"), serviceId: "", name: "", price: 0, priceType: "fixed", durationMinutes: 0 }] })} className="shrink-0 rounded-lg border border-avvi-line bg-amber-50 p-2.5 text-avvi-blue"><Plus size={18} /></button></div>
+          }}/></div><button type="button" aria-label="Adicionar outro serviço ao agendamento" title="Adicionar outro serviço" onClick={() => setForm({ ...form, additionalServices: [...form.additionalServices, { id: id("scheduled-service"), serviceId: "", name: "", price: 0, priceType: "fixed", durationMinutes: 0 }] })} className="shrink-0 rounded-lg border border-avvi-line bg-amber-50 p-2.5 text-avvi-blue"><Plus size={18} /></button></div>
         </FormField>
-        {form.additionalServices.map((item, index) => <div key={item.id} className="flex items-center gap-2"><select aria-label={`Serviço adicional ${index + 1}`} value={item.serviceId} className="input min-w-0 flex-1" onChange={(event) => {
-          const service = services.find((entry) => entry.id === event.target.value);
+        {form.additionalServices.map((item, index) => <div key={item.id} className="flex items-center gap-2"><div className="min-w-0 flex-1"><SearchSelect label={`Serviço adicional ${index + 1}`} options={serviceOptions(item.serviceId)} value={item.serviceId} onChange={serviceId => {
+          const service = services.find((entry) => entry.id === serviceId);
           updateServices({ additionalServices: form.additionalServices.map((entry) => entry.id === item.id ? { ...entry, serviceId: service?.id ?? "", name: service?.name ?? "", price: service?.price ?? 0, priceType: service?.priceType ?? "fixed", durationMinutes: service?.durationMinutes ?? 0 } : entry) });
-        }}><option value="">Selecione outro serviço</option>{services.filter((service) => service.active || service.id === item.serviceId).slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((service) => <option key={service.id} value={service.id}>{service.name} · {service.priceType === "from" ? "A partir de " : ""}{currency(service.price)}{service.active ? "" : " (inativo)"}</option>)}</select><button type="button" aria-label={`Remover serviço adicional ${index + 1}`} onClick={() => updateServices({ additionalServices: form.additionalServices.filter((entry) => entry.id !== item.id) })} className="shrink-0 rounded p-2.5 text-slate-400 hover:text-red-500"><Trash2 size={16} /></button></div>)}
+        }}/></div><button type="button" aria-label={`Remover serviço adicional ${index + 1}`} onClick={() => updateServices({ additionalServices: form.additionalServices.filter((entry) => entry.id !== item.id) })} className="shrink-0 rounded p-2.5 text-slate-400 hover:text-red-500"><Trash2 size={16} /></button></div>)}
       </div>
       <FormField label="Profissional">
         <select value={form.professionalId} onChange={(event) => setForm({ ...form, professionalId: event.target.value })} className="input">

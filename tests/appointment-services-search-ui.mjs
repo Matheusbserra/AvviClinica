@@ -1,0 +1,73 @@
+import assert from 'node:assert/strict';
+import {navigationButton} from './navigation-helper.mjs';
+import {selectSearchOption} from './search-select-helper.mjs';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE??'file:///C:/Users/mathe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs');
+if(!process.env.AVVI_TEST_ADMIN_PASSWORD)throw Error('Configure AVVI_TEST_ADMIN_PASSWORD.');
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH??'C:/Program Files/Google/Chrome/Application/chrome.exe'});
+const page=await browser.newPage({viewport:{width:1440,height:1000}}),key='avvi.data.snapshot.v1',errors=[];
+page.on('pageerror',error=>errors.push(error.message));
+const tab=name=>navigationButton(page,name),details=page.getByTestId('appointment-details-window');
+const input=label=>details.getByRole('combobox',{name:label,exact:true});
+const list=label=>details.getByRole('listbox',{name:`Resultados de ${label}`,exact:true});
+const duration=()=>details.getByLabel('Duração (minutos)',{exact:true}).inputValue();
+const add=()=>details.getByRole('button',{name:'Adicionar outro serviço ao agendamento'}).click();
+try{
+ await page.goto(process.env.AVVI_TEST_URL??'http://127.0.0.1:3107');
+ await page.getByLabel('Login',{exact:true}).fill('admin');await page.getByLabel('Senha',{exact:true}).fill(process.env.AVVI_TEST_ADMIN_PASSWORD);await tab('Entrar').click();
+ await page.getByRole('status',{name:'Status do salvamento',exact:true}).filter({hasText:'Prévia local'}).waitFor();
+ await page.evaluate(key=>{
+  const snapshot=JSON.parse(localStorage.getItem(key)),d=snapshot.data;
+  for(const entity of Object.keys(d))d[entity]=[];
+  d.professionals=[{id:'qa',name:'Profissional QA',active:true,showInAgenda:true,closedShifts:[],commissionPercent:70}];
+  d.services=[{id:'return',name:'Retorno QA',durationMinutes:30},{id:'labial',name:'Preenchimento labial QA',durationMinutes:60},{id:'evaluation',name:'Avaliação facial QA',durationMinutes:30},{id:'eyes',name:'Preenchimento de olheiras QA',durationMinutes:45}].map(s=>({...s,active:true,price:100,priceType:'fixed'}));
+  d.services.push({id:'inactive',name:'Serviço inativo QA',durationMinutes:20,price:50,priceType:'fixed',active:false});
+  localStorage.setItem(key,JSON.stringify(snapshot));
+ },key);
+ await page.reload();await tab('Agenda').click();
+ await page.locator('[data-agenda-slot][data-professional-id="qa"][data-hour="8"]').getByRole('button').click();await page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
+ await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente busca QA');
+ await add();
+ // Reproduces the reported second-field failure before choosing any other item.
+ await input('Serviço adicional 1').fill('LABIAL',{timeout:3000});
+ assert.equal(await list('Serviço adicional 1').getByRole('option').count(),1);
+ await list('Serviço adicional 1').getByRole('option').click();assert.equal(await duration(),'60');
+ await selectSearchOption(details,'Serviço','Retorno QA');assert.equal(await duration(),'90');
+ await add();await input('Serviço adicional 2').fill('  facial AVALIACAO  ');
+ assert.equal(await list('Serviço adicional 2').getByRole('option').count(),1);
+ await input('Serviço adicional 2').press('Enter');assert.equal(await duration(),'120');
+ await add();await input('Serviço adicional 3').fill('olheiras preenchimento');
+ assert.equal(await list('Serviço adicional 3').getByRole('option').count(),1);
+ await list('Serviço adicional 3').getByRole('option').click();assert.equal(await duration(),'165');
+ await input('Serviço adicional 2').fill('inativo');assert.equal(await list('Serviço adicional 2').getByRole('option').count(),0);
+ await selectSearchOption(details,'Serviço adicional 2','Avaliação facial QA');
+ await details.getByRole('button',{name:'Remover serviço adicional 1',exact:true}).click();assert.equal(await duration(),'105');
+ assert.match(await input('Serviço adicional 1').inputValue(),/^Avaliação facial QA/);
+ assert.match(await input('Serviço adicional 2').inputValue(),/^Preenchimento de olheiras QA/);
+ await input('Serviço adicional 1').fill('nenhum resultado QA');await details.getByText('Nenhum resultado encontrado.',{exact:true}).waitFor();assert.equal(await duration(),'75');
+ await selectSearchOption(details,'Serviço adicional 1','Preenchimento labial QA');assert.equal(await duration(),'135');
+ await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.waitFor({state:'hidden'});
+ await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)).data.appointments.length===1,key);
+ await page.reload();await tab('Agenda').click();
+ const snapshot=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)).data,key),visit=snapshot.appointments[0];
+ assert.deepEqual(visit.services.map(s=>s.serviceId),['return','labial','eyes']);
+ assert.equal(visit.endsAt.slice(11,16),'10:15');assert.equal(visit.services.reduce((sum,s)=>sum+s.price,0),300);
+ await page.getByTestId('appointment-'+visit.id).click();await page.getByRole('menuitem',{name:'Ver agendamento',exact:true}).click();
+ assert.match(await input('Serviço adicional 1').inputValue(),/^Preenchimento labial QA/);assert.equal(await duration(),'135');
+ // Existing selected inactive services remain visible when editing; new inactive choices stay hidden.
+ await details.getByRole('button',{name:'Fechar',exact:true}).click();
+ const user={id:'service-search-qa',login:'service-search-qa',role:'standard',tabs:['Agenda'],revision:1};
+ await page.evaluate(({key,user})=>{
+  const snapshot=JSON.parse(localStorage.getItem(key));snapshot.data.services.find(s=>s.id==='labial').active=false;
+  localStorage.setItem(`avvi.data.snapshot.user.${user.id}.${user.revision}.v1`,JSON.stringify(snapshot));
+ },{key,user});
+ await page.route('**/api/access',route=>route.fulfill({json:{user}}));await page.reload();await page.setViewportSize({width:390,height:844});
+ await page.getByTestId('appointment-'+visit.id).click();await page.getByRole('menuitem',{name:'Ver agendamento',exact:true}).click();
+ assert.match(await input('Serviço adicional 1').inputValue(),/inativo/);
+ await add();await input('Serviço adicional 3').fill('avaliacao');await input('Serviço adicional 3').press('Enter');assert.equal(await duration(),'165');
+ await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.waitFor({state:'hidden'});
+ await page.reload();await page.getByTestId('appointment-'+visit.id).click();await page.getByRole('menuitem',{name:'Ver agendamento',exact:true}).click();
+ assert.match(await input('Serviço adicional 3').inputValue(),/^Avaliação facial QA/);assert.equal(await duration(),'165');
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+ assert.deepEqual(errors,[]);
+ console.log('PASS: typed keyword search in primary and every added service, case/accents/reordered terms, keyboard/mouse, empty results, independent rows after removal, inactive selection preservation, durations/prices, save/reload/edit, standard profile and mobile. Isolated fixtures.');
+}finally{await browser.close();}

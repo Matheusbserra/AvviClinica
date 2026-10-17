@@ -25,7 +25,7 @@ export function overlappingAppointments(appointments: Appointment[], slot: Agend
 }
 export function slotAvailable(professionals: Professional[], appointments: Appointment[], slot: AgendaSlot) {
   const professional = professionals.find(item => item.id === slot.professionalId);
-  return !!professional?.active && agendaSlots.includes(slot.hour) && !shiftClosed(professional, slot.date, slot.hour) && !overlappingAppointments(appointments, slot).length;
+  return !!professional?.active && agendaSlots.includes(slot.hour) && !shiftClosed(professional, slot.date, slot.hour) && !overlappingAppointments(appointments, slot).some(item => item.status !== "Cancelado");
 }
 export function rectangleSlots(date: string, ids: string[], origin: { professionalId: string; hour: number }, target: { professionalId: string; hour: number }): AgendaSlot[] {
   const from = ids.indexOf(origin.professionalId), to = ids.indexOf(target.professionalId);
@@ -59,7 +59,7 @@ export function appointmentAvailabilityError(professional: Professional | undefi
     day = new Date(Date.parse(day + "T00:00:00Z") + 86400000).toISOString().slice(0,10);
   }
   const conflicts = appointments.filter(item => {
-    if (item.id === editingId || item.professionalId !== professional.id) return false;
+    if (item.id === editingId || item.professionalId !== professional.id || item.status === "Cancelado") return false;
     const other = reservedInterval(item.startsAt, item.endsAt);
     return other && other.start < interval.end && other.end > interval.start;
   });

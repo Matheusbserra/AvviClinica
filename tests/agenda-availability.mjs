@@ -71,3 +71,18 @@ assert.equal(a.appointmentAvailabilityError(fourth,[...parallel.slice(0,2),{...p
 // A long booking can intersect many different visits without exceeding capacity at any instant.
 assert.equal(a.appointmentAvailabilityError(fourth,[visit('a','a','08:00','09:00'),visit('b','b','09:00','10:00'),visit('c','c','10:00','11:00')],saturday+'T08:00:00',saturday+'T11:00:00'),'');
 console.log('PASS: up to three different professionals concurrently, fourth rejected, partial overlaps and resizing, own edit and adjacent times, absences/cancellations excluded from clinic capacity and peak occupancy rather than total overlapping records.');
+
+// Past dates remain bookable; a cancelled record is history, not a reservation.
+for(const date of ['2025-10-10','2026-07-15']){
+ const cancelled={...visit('cancelled','bia'),startsAt:date+'T09:00:00',endsAt:date+'T10:00:00',status:'Cancelado'};
+ const slot={date,professionalId:'bia',hour:9};
+ assert.equal(a.slotAvailable(professionals,[],slot),true);
+ assert.equal(a.slotAvailable(professionals,[cancelled],slot),true,'Hidden cancellation must not block a free slot');
+ assert.equal(a.appointmentAvailabilityError(professionals[1],[cancelled],cancelled.startsAt,cancelled.endsAt),'');
+ assert.equal(a.overlappingAppointments([cancelled],slot).length,1,'Keep cancelled records available to the visibility filter');
+ const active={...cancelled,id:'active',status:'Confirmado'};
+ assert.equal(a.slotAvailable(professionals,[active],slot),false);
+ assert.match(a.appointmentAvailabilityError(professionals[1],[cancelled,active],cancelled.startsAt,cancelled.endsAt),/reservado/);
+ assert.equal(a.newAbsences(professionals,[cancelled],[slot],()=> 'absence-after-cancel').length,1);
+}
+console.log('PASS: past dates allowed, cancelled slots reusable without deleting history, active appointments still block double booking.');

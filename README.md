@@ -400,3 +400,21 @@ Regressões: `tests/agenda-cloud-saving-ui.mjs` mantém duas sessões independen
 ### Busca geral por palavras-chave
 
 Os campos com lupa usam uma única regra de busca em qualquer posição do nome, para todos os itens do catálogo. Serviços, produtos, pacotes, pacientes e ponteiras ignoram maiúsculas/minúsculas, acentos e espaços extras. Quando há várias palavras, todas devem existir no nome, em qualquer ordem: `labial` encontra `Preenchimento labial` e `olheiras preenchimento` encontra `Preenchimento de olheiras`. A busca não depende de termos cadastrados manualmente nem de exemplos específicos. Os filtros de disponibilidade e as permissões de cada campo são preservados. Testes: `tests/search.mjs`, `tests/checkout-invoices-ui.mjs` e `tests/inventory-product-picker-ui.mjs`.
+
+### Retorno à agenda com todos os profissionais
+
+O filtro de profissional da agenda pertence somente à própria tela e começa em Todos a cada entrada pelo menu. Filtrar profissionais no dashboard ou nas telas financeiras não afeta mais as colunas da agenda; filtrar temporariamente a agenda também não altera o filtro dessas outras telas. Permanecem respeitados Mostrar na agenda e a paginação responsiva de profissionais. O teste `tests/agenda-return-professionals-ui.mjs` reproduz a falha anterior ao filtrar o dashboard e voltar à agenda, além de verificar retorno após filtro local, navegação móvel, perfil padrão e profissionais ocultos. Usa somente dados fictícios na prévia isolada 3107 e requer `AVVI_TEST_ADMIN_PASSWORD`.
+
+### Agendamentos em datas passadas e horários cancelados
+
+Datas passadas permitem novos agendamentos. Um agendamento cancelado permanece no histórico e no filtro de cancelados, mas libera o horário para outra marcação e para ausências. A mesma validação vale no navegador e na API; reativar um cancelamento verifica novamente conflitos, turnos fechados e capacidade da clínica. O menu Novo agendamento abre o formulário com o intervalo selecionado mesmo se outro usuário ocupar o horário durante a seleção; nesse caso, salvar apresenta o conflito antes de criar paciente ou agendamento.
+
+Regressões: `tests/agenda-availability.mjs`, `tests/past-appointments-ui.mjs` (prévia isolada 3107) e `tests/agenda-cloud-saving-ui.mjs` (Supabase simulado). Cobrem abertura do formulário em horário cancelado oculto, datas de 2025/2026, salvamento e recarregamento com perfis padrão e administrador, sincronização entre usuários e conflito surgido com o menu aberto. Nenhum registro real é utilizado.
+
+### Busca nos serviços do agendamento
+
+O primeiro serviço e todas as linhas adicionais usam o mesmo campo com lupa e busca digitável por palavras-chave, sem distinção de acentos ou maiúsculas. Preços e indicação de serviço inativo já selecionado continuam visíveis. Selecionar, trocar, limpar e remover serviços mantém o cálculo da duração e os dados salvos de cada linha. A regressão `tests/appointment-services-search-ui.mjs` cobre várias linhas independentes, seleção por teclado/mouse, termos fora do início do nome, gravação/reabertura, serviços inativos preservados e uso no celular com perfil padrão. Os testes anteriores de duração, agenda, dados do paciente e salvamento compartilhado continuam exercitando suas verificações com os campos digitáveis.
+
+### Saldo de fechamento como dívida
+
+O controle Deixar o restante como dívida permite concluir um fechamento com pagamento parcial ou sem pagamento. Começa desligado em contas novas e ligado ao editar um fechamento com saldo pendente. O saldo é persistido em `closedAccount.balanceDue`, aparece em Ver fechamento e é recalculado ao ajustar os pagamentos; apenas o valor recebido compõe a receita. A opção de guardar excedentes como crédito permanece independente. Não exige migração SQL. Regressões: `tests/checkout-debt-ui.mjs` cobre desconto, pagamentos divididos, persistência, edição/quitação, crédito preservado, estoque sem baixa duplicada e perfil padrão; `tests/agenda-cloud-saving-ui.mjs` verifica gravação pelo gateway protegido e exibição do saldo ao administrador. O teste `tests/zero-dashboard-cpf-ui.mjs` continua garantindo que retornos zerados fecham sem pagamento ou ativação da dívida.

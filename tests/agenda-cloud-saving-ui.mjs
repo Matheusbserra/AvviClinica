@@ -1,3 +1,4 @@
+import {selectSearchOption} from './search-select-helper.mjs';
 // Isolated Next server + real data gateway/Supabase SDK; no production credentials or records.
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -71,7 +72,7 @@ try{
   const {page}=s,slot=page.locator(`[data-agenda-slot][data-professional-id="${professional}"][data-hour="${hour}"]`);
   await slot.getByRole('button').click();await page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
   const details=page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill(name);
-  if(service)await details.getByLabel('Serviço',{exact:true}).selectOption(service);
+  if(service)await selectSearchOption(details,'Serviço',service==='evaluation'?'Avaliação QA':'Serviço QA');
   await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.waitFor({state:'hidden'});
  }
  const appointmentFor=name=>[...records.values()].find(row=>row.entity==='appointments'&&records.get('patients:'+row.data.patientId)?.data.name===name)?.data;
@@ -137,7 +138,7 @@ try{
  console.log('PASS: two open users share new bookings and closures/reversals in both directions without reload; later saves preserve the other user’s bookings.');
  await admin.page.reload();await saved(admin);
  const fourthSlot=admin.page.locator('[data-agenda-slot][data-professional-id="fourth"][data-hour="14"]');await fourthSlot.getByRole('button').click();await admin.page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
- const details=admin.page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente excedente');await details.getByLabel('Serviço',{exact:true}).selectOption('service');await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.getByRole('alert').filter({hasText:/3.*simult/}).waitFor();assert.equal(appointmentFor('Paciente excedente'),undefined);await details.getByRole('button',{name:'Fechar',exact:true}).click();
+ const details=admin.page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente excedente');await selectSearchOption(details,'Serviço','Serviço QA');await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.getByRole('alert').filter({hasText:/3.*simult/}).waitFor();assert.equal(appointmentFor('Paciente excedente'),undefined);await details.getByRole('button',{name:'Fechar',exact:true}).click();
  const fourth={id:'fourth-overflow',professionalId:'fourth',patientId:'patient',startsAt:date+'T14:00:00',endsAt:date+'T15:00:00',eventType:'Novo Agendamento',status:'Agendado',notes:''};
  for(const s of [standard,admin])assert.equal((await s.context.request.post(origin+'/api/access/data',{data:{upserts:[{entity:'appointments',record_id:fourth.id,data:fourth}]}})).status(),409);
  const adminVisit=appointmentFor('Paciente paralelo ana');await admin.page.getByTestId('appointment-'+adminVisit.id).click();await admin.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();const adminCheckout=admin.page.getByRole('dialog',{name:/Fechamento de conta/i});
@@ -162,6 +163,62 @@ try{
  await book(standard,'bia',12,'Paciente após exclusão remota');await saved(standard);
  assert.equal(records.has('appointments:remote-visit'),false,'A later save must not resurrect a remote deletion');
  console.log('PASS: remote inserts/patient names update while a local save is pending; retry retains both records; remote deletions disappear and are not resurrected.');
+ // A cancelled record hidden from the grid must not swallow historical bookings.
+ const past='2025-10-10';
+ put('appointments',{id:'past-cancelled',patientId:'patient',professionalId:'ana',startsAt:past+'T09:00:00',endsAt:past+'T10:00:00',eventType:'Novo Agendamento',status:'Cancelado',notes:'Preservar histórico QA'});
+ async function pastDate(s){
+  const day=s.page.getByRole('button',{name:'Selecionar dia 10/10/2025',exact:true});
+  for(let i=0;!await day.count();i++){assert.ok(i<36);await s.page.getByRole('button',{name:'Mês anterior',exact:true}).click();}
+  await day.click();
+ }
+ for(const s of [standard,admin]){await s.page.reload();await saved(s);await pastDate(s);}
+ assert.equal(await standard.page.getByTestId('appointment-past-cancelled').count(),0);
+ await book(standard,'ana',9,'Paciente passado padrão');await saved(standard);
+ const pastStandard=appointmentFor('Paciente passado padrão');assert.equal(pastStandard.startsAt,past+'T09:00:00');
+ await admin.page.getByTestId('appointment-'+pastStandard.id).waitFor({timeout:20000});
+ await book(admin,'bia',10,'Paciente passado administrador');await saved(admin);
+ const pastAdmin=appointmentFor('Paciente passado administrador');assert.equal(pastAdmin.startsAt,past+'T10:00:00');
+ await standard.page.getByTestId('appointment-'+pastAdmin.id).waitFor({timeout:20000});
+ for(const s of [standard,admin]){
+  await s.page.reload();await saved(s);await pastDate(s);
+  await s.page.getByTestId('appointment-'+pastStandard.id).waitFor();await s.page.getByTestId('appointment-'+pastAdmin.id).waitFor();
+ }
+ assert.equal(records.get('appointments:past-cancelled').data.status,'Cancelado');
+ // Agenda-only standard users can explicitly keep the unpaid part as debt.
+ await standard.page.getByTestId('appointment-'+pastStandard.id).click();await standard.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();
+ const debtCheckout=standard.page.getByRole('dialog',{name:'Fechamento de conta',exact:true});
+ await debtCheckout.getByRole('button',{name:'Produtos',exact:true}).click();await debtCheckout.getByRole('combobox',{name:'Adicionar produto ao consumo',exact:true}).fill('Produto QA');
+ await debtCheckout.getByRole('option',{name:'Produto QA',exact:true}).click();await debtCheckout.getByRole('button',{name:'Adicionar produto',exact:true}).click();
+ await debtCheckout.getByLabel('Receber por Pix',{exact:true}).check();await debtCheckout.getByLabel('Valor pago por Pix',{exact:true}).fill('100');
+ await debtCheckout.getByText('Deixar o restante como dívida',{exact:true}).click();
+ await debtCheckout.getByRole('button',{name:'Fechar Conta',exact:true}).click();await debtCheckout.waitFor({state:'hidden'});await saved(standard);
+ const debtAccount=records.get('appointments:'+pastStandard.id).data.closedAccount;
+ assert.equal(debtAccount.balanceDue,200);assert.equal(debtAccount.payments[0].amount,100);
+ assert.equal(records.get('revenues:receita-entry-'+debtAccount.id).data.total,100);
+ await admin.page.getByTestId('appointment-'+pastStandard.id).filter({hasText:'Finalizado'}).waitFor({timeout:20000});
+ await admin.page.getByTestId('appointment-'+pastStandard.id).click();await admin.page.getByRole('menuitem',{name:'Ver fechamento',exact:true}).click();
+ await admin.page.getByRole('dialog',{name:'Detalhes do fechamento',exact:true}).getByText('Saldo em aberto:',{exact:true}).locator('..').filter({hasText:'200,00'}).waitFor();
+ await admin.page.getByRole('button',{name:'Fechar detalhes do fechamento',exact:true}).click();
+ console.log('PASS: standard user saves partial-payment debt through protected API; only received money becomes revenue and administrator sees the remaining debt in the shared closure.');
+ // Reactivating the old cancellation still rejects a real occupied interval.
+ const restore=await admin.context.request.post(origin+'/api/access/data',{data:{upserts:[{entity:'appointments',record_id:'past-cancelled',data:{...records.get('appointments:past-cancelled').data,status:'Confirmado'}}]}});
+ assert.equal(restore.status(),409);assert.match((await restore.json()).error,/reservado/);
+ // A shared refresh between selection and click must open the form, then explain
+ // the conflict on save, rather than turning Novo agendamento into a silent no-op.
+ await standard.page.locator('[data-agenda-slot][data-professional-id="ana"][data-hour="11"]').getByRole('button').click();
+ put('appointments',{id:'past-remote',patientId:'patient',professionalId:'ana',startsAt:past+'T11:00:00',endsAt:past+'T12:00:00',eventType:'Novo Agendamento',status:'Agendado',notes:''});
+ await standard.page.getByTestId('appointment-past-remote').waitFor({timeout:20000});
+ await standard.page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
+ const pastForm=standard.page.getByTestId('appointment-details-window');await pastForm.waitFor();
+ await pastForm.getByLabel('Nome do paciente',{exact:true}).fill('Paciente conflito histórico QA');
+ await selectSearchOption(pastForm,'Serviço','Serviço QA');
+ await pastForm.getByRole('button',{name:'Salvar agendamento',exact:true}).click();
+ await pastForm.getByRole('alert').filter({hasText:/reservado/}).waitFor();
+ assert.equal(appointmentFor('Paciente conflito histórico QA'),undefined);
+ assert.equal([...records.values()].some(row=>row.entity==='patients'&&row.data.name==='Paciente conflito histórico QA'),false);
+ await pastForm.getByRole('button',{name:'Fechar',exact:true}).click();
+ assert.deepEqual(errors,[]);
+ console.log('PASS: admin/standard save past appointments through real gateway, reuse cancelled time, share both ways without reload and persist after reload; cancellation history and reactivation conflicts preserved; remote conflict while menu is open produces an explicit error and no orphan patient.');
  console.log('PASS: administrator saving and reload, three professionals at one time, fourth rejected in browser and server for both roles, lost acknowledgement retries without duplicate patients/bookings. Isolated mock cloud only.');
 }catch(error){console.error(error.message);throw error;}finally{
  mock.closeAllConnections();

@@ -23,9 +23,8 @@ function statusColors(status: AppointmentStatus) {
 type Props = {
   viewMode: ViewMode; setViewMode: (mode: ViewMode) => void;
   selectedDate: string; setSelectedDate: (date: string) => void;
-  professionalFilter: string; setProfessionalFilter: (value: string) => void;
   appointments: Appointment[]; entries: FinancialEntry[]; patients: Patient[];
-  procedures: Procedure[]; services: Service[]; professionals: Professional[]; visibleProfessionals: Professional[];
+  procedures: Procedure[]; services: Service[]; professionals: Professional[];
   openSlot: (hour: number, professionalId: string, durationMinutes?: number) => void;
   markAbsent: (slots: AgendaSlot[]) => void; removeAbsence: (ids: string[]) => void; openAppointment: (id: string) => void;
   updateStatus: (id: string, status: "Confirmado" | "Cancelado") => string;
@@ -34,6 +33,9 @@ type Props = {
 };
 
 export function AgendaView(props: Props) {
+  // This filter belongs to this visit to the agenda, never to financial screens.
+  // Remounting after menu navigation starts with every eligible professional.
+  const [professionalFilter, setProfessionalFilter] = useState("todos");
   const [showCancelled, setShowCancelled] = useState(false);
   const [menu, setMenu] = useState<{ appointmentId: string; appointmentIds: string[]; left: number; top: number } | null>(null);
   const [hover, setHover] = useState<{ appointmentIds: string[]; left: number; top: number; bottom: number } | null>(null);
@@ -152,9 +154,10 @@ export function AgendaView(props: Props) {
     dragCleanup.current = cleanup;
   }
   function bookSelection(professionalId: string) {
-    const selection = selectedSlots.filter(item => slotAvailable(props.professionals, props.appointments, item));
-    if (!selection.some(item => item.professionalId === professionalId)) return;
-    const { hour, durationMinutes } = bookingDuration(selection, professionalId);
+    // Always open the selected time. Saving validates the latest shared agenda
+    // and reports conflicts instead of silently dropping a click after a refresh.
+    if (!selectedSlots.some(item => item.professionalId === professionalId)) return;
+    const { hour, durationMinutes } = bookingDuration(selectedSlots, professionalId);
     menuAction(() => props.openSlot(hour, professionalId, durationMinutes));
   }
   function resizeBooking(event: React.PointerEvent<HTMLButtonElement>, appointment: Appointment) {
@@ -198,10 +201,13 @@ export function AgendaView(props: Props) {
   }, []);
   const selected = parseISO(`${props.selectedDate}T00:00:00`);
   const days = eachDayOfInterval({ start: startOfMonth(selected), end: endOfMonth(selected) });
+  const agendaProfessionals = props.professionals.filter(professional => professional.showInAgenda !== false);
+  const visibleProfessionals = agendaProfessionals.some(professional => professional.id === professionalFilter)
+    ? agendaProfessionals.filter(professional => professional.id === professionalFilter) : agendaProfessionals;
   const columnsPerPage = Math.max(1, Math.floor((size.width - 34) / 148));
-  const pageCount = Math.max(1, Math.ceil(props.visibleProfessionals.length / columnsPerPage));
+  const pageCount = Math.max(1, Math.ceil(visibleProfessionals.length / columnsPerPage));
   const page = Math.min(professionalPage, pageCount - 1);
-  const visible = props.visibleProfessionals.slice(page * columnsPerPage, (page + 1) * columnsPerPage);
+  const visible = visibleProfessionals.slice(page * columnsPerPage, (page + 1) * columnsPerPage);
   const rowHeight = Math.max(0, (size.height - 56) / hours.length);
   const compactRows = rowHeight < 38;
   const denseRows = rowHeight < 29;
@@ -237,7 +243,7 @@ export function AgendaView(props: Props) {
       </div>
     </section>
     <section className="space-y-2 rounded-lg border border-avvi-line bg-white p-2.5 shadow-sm">
-      <label className="block text-[10px] font-semibold text-slate-500">Profissional<select aria-label="Filtrar profissional da agenda" value={props.professionals.some(professional => professional.id === props.professionalFilter && professional.showInAgenda !== false) ? props.professionalFilter : "todos"} onChange={(event) => { props.setProfessionalFilter(event.target.value); setProfessionalPage(0); }} className="mt-1 w-full min-w-0 rounded border border-avvi-line bg-white px-1.5 py-1.5 text-[11px]"><option value="todos">Todos</option>{props.professionals.filter(professional => professional.showInAgenda !== false).map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}</select></label>
+      <label className="block text-[10px] font-semibold text-slate-500">Profissional<select aria-label="Filtrar profissional da agenda" value={props.professionals.some(professional => professional.id === professionalFilter && professional.showInAgenda !== false) ? professionalFilter : "todos"} onChange={(event) => { setProfessionalFilter(event.target.value); setProfessionalPage(0); }} className="mt-1 w-full min-w-0 rounded border border-avvi-line bg-white px-1.5 py-1.5 text-[11px]"><option value="todos">Todos</option>{props.professionals.filter(professional => professional.showInAgenda !== false).map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}</select></label>
       <div><p className="mb-1 text-[10px] font-semibold text-slate-500">Visão</p><div className="grid grid-cols-3 gap-1">{(["Dia", "Semana", "Mês"] as ViewMode[]).map((mode) => <button type="button" key={mode} onClick={() => props.setViewMode(mode)} className={`rounded px-1 py-1.5 text-[10px] font-semibold ${props.viewMode === mode ? "bg-avvi-blue text-white" : "bg-slate-100 text-slate-600"}`}>{mode}</button>)}</div></div>
       <div className="space-y-1 border-t border-avvi-line pt-2 text-[9px] text-slate-500">{[["bg-blue-200", "Agendado"], ["bg-green-200", "Confirmado / compareceu"], ["bg-red-200", "Cancelados"], ["bg-red-200", "Faltou / reagendado"], ["bg-orange-200", "Finalizado"], ["bg-slate-300", "Ausente"], ["bg-[#f0f7ff]", "Agenda fechada"]].map(([color, label]) => label === "Cancelados" ? <button key={label} type="button" aria-label="Mostrar agendamentos cancelados" aria-pressed={showCancelled} onClick={() => { closeHover(); setMenu(null); setSlotMenu(null); setSlotList(null); setSelectedSlots([]); setShowCancelled(current => !current); }} className={`flex w-full items-center gap-1.5 rounded px-1 py-1 text-left ${showCancelled ? "bg-red-50 font-semibold text-red-700 ring-1 ring-inset ring-red-200" : "hover:bg-red-50"}`}><span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${color} ${showCancelled ? "ring-1 ring-red-400" : ""}`}/>{label}</button> : <p key={label} className="flex items-center gap-1.5 px-1"><span className={`h-2 w-2 shrink-0 rounded-full ${color}`} />{label}</p>)}</div>
     </section>
@@ -250,11 +256,11 @@ export function AgendaView(props: Props) {
         <button type="button" title="Dia anterior" onClick={() => changeDate(format(addDays(selected, -1), "yyyy-MM-dd"))} className="rounded border border-avvi-line p-1"><ChevronLeft size={14} /></button>
         <div className="min-w-0 text-center text-[11px] font-bold"><span className="block whitespace-nowrap">{format(selected, "dd MMM yyyy", { locale: ptBR })}</span><span className="block truncate text-[9px] font-normal text-slate-500">{format(selected, "EEEE", { locale: ptBR })}</span></div>
         <button type="button" title="Próximo dia" onClick={() => changeDate(format(addDays(selected, 1), "yyyy-MM-dd"))} className="rounded border border-avvi-line p-1"><ChevronRight size={14} /></button>
-        <button type="button" onClick={() => { const professional = props.visibleProfessionals.find((item) => item.active); if (professional) { const hour = agendaSlots.find(hour => slotAvailable(props.professionals, props.appointments, { date: props.selectedDate, professionalId: professional.id, hour })); if (hour !== undefined) props.openSlot(hour, professional.id); } }} disabled={!props.visibleProfessionals.some((item) => item.active)} className="ml-auto flex shrink-0 items-center gap-1 rounded bg-avvi-blue px-2 py-1.5 text-[11px] font-bold text-white disabled:opacity-30"><Plus size={13} />Agendar</button>
+        <button type="button" onClick={() => { const professional = visibleProfessionals.find((item) => item.active); if (professional) { const hour = agendaSlots.find(hour => slotAvailable(props.professionals, props.appointments, { date: props.selectedDate, professionalId: professional.id, hour })); if (hour !== undefined) props.openSlot(hour, professional.id); } }} disabled={!visibleProfessionals.some((item) => item.active)} className="ml-auto flex shrink-0 items-center gap-1 rounded bg-avvi-blue px-2 py-1.5 text-[11px] font-bold text-white disabled:opacity-30"><Plus size={13} />Agendar</button>
       </div>
       <div className="flex shrink-0 justify-end border-b border-avvi-line px-2 py-0.5">
 
-        <div className="flex shrink-0 items-center gap-1 text-[9px] text-slate-500"><button type="button" aria-label="Profissionais anteriores" disabled={page === 0} onClick={() => { setProfessionalPage(page - 1); setMenu(null); setSlotMenu(null); setSelectedSlots([]); }} className="rounded border border-avvi-line p-1 disabled:opacity-25"><ChevronLeft size={12} /></button><span data-testid="professional-page">{props.visibleProfessionals.length ? `${page * columnsPerPage + 1}–${Math.min((page + 1) * columnsPerPage, props.visibleProfessionals.length)}` : "0"} de {props.visibleProfessionals.length}</span><button type="button" aria-label="Próximos profissionais" disabled={page === pageCount - 1} onClick={() => { setProfessionalPage(page + 1); setMenu(null); setSlotMenu(null); setSelectedSlots([]); }} className="rounded border border-avvi-line p-1 disabled:opacity-25"><ChevronRight size={12} /></button></div>
+        <div className="flex shrink-0 items-center gap-1 text-[9px] text-slate-500"><button type="button" aria-label="Profissionais anteriores" disabled={page === 0} onClick={() => { setProfessionalPage(page - 1); setMenu(null); setSlotMenu(null); setSelectedSlots([]); }} className="rounded border border-avvi-line p-1 disabled:opacity-25"><ChevronLeft size={12} /></button><span data-testid="professional-page">{visibleProfessionals.length ? `${page * columnsPerPage + 1}–${Math.min((page + 1) * columnsPerPage, visibleProfessionals.length)}` : "0"} de {visibleProfessionals.length}</span><button type="button" aria-label="Próximos profissionais" disabled={page === pageCount - 1} onClick={() => { setProfessionalPage(page + 1); setMenu(null); setSlotMenu(null); setSelectedSlots([]); }} className="rounded border border-avvi-line p-1 disabled:opacity-25"><ChevronRight size={12} /></button></div>
       </div>
       {resizeError && <p role="alert" className="shrink-0 border-b border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{resizeError}</p>}
       <div ref={gridRef} data-testid="agenda-grid" className="grid min-h-0 min-w-0 flex-1 overflow-hidden" style={{ gridTemplateColumns: `34px repeat(${Math.max(1, visible.length)}, minmax(0, 1fr))`, gridTemplateRows: `56px repeat(${agendaSlots.length}, minmax(0, 1fr))` }}>
