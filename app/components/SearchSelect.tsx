@@ -1,11 +1,11 @@
 "use client";
 import { useId, useState } from "react";
 import { Search } from "lucide-react";
-const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+import { matchesSearch } from "@/lib/search";
 export function SearchSelect({label, options, value, onChange, inlineResults = false}: {label: string; options: {id: string; name: string}[]; value: string; onChange: (id: string) => void; inlineResults?: boolean}) {
   const [query, setQuery] = useState(""); const [open, setOpen] = useState(false); const [index, setIndex] = useState(0); const id=useId();
   const selected=options.find(option=>option.id===value);
-  const matches=options.filter(option=>normalize(option.name).includes(normalize(query))).sort((a,b)=>a.name.localeCompare(b.name,"pt-BR"));
+  const matches=options.filter(option=>matchesSearch(option.name,query)).sort((a,b)=>a.name.localeCompare(b.name,"pt-BR"));
   function select(option: {id: string; name: string}) {onChange(option.id);setQuery(option.name);setOpen(false);}
   return <div className="relative mt-1 min-w-0" onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node))setOpen(false);}}>
     <Search size={15} className="pointer-events-none absolute left-3 top-3 text-slate-400"/>

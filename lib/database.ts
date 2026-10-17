@@ -2,6 +2,7 @@ import type { ServicePackage } from "./servicePackages";
 import { supabase } from "./supabase";
 import type { AppRole, AppUser } from "./access";
 import { canReadEntity } from "./access";
+import type { DataSnapshot } from "./persistence";
 let accessUser: AppRole | AppUser = "admin";
 const usesGateway = () => typeof accessUser === "object" || accessUser === "standard" || isProtectedDatabase;
 export const isProtectedDatabase = process.env.NEXT_PUBLIC_AVVI_PROTECTED_DATABASE === "true";
@@ -97,6 +98,19 @@ export type EntitySelectResult<T extends EntityName> = {
 export async function selectEntity<T extends EntityName>(entity: T): Promise<EntityPayloadMap[T][]> {
   const result = await selectEntityState(entity);
   return result.records;
+}
+
+// Conditional polling works with the custom clinic session and protected RLS,
+// unlike a browser Realtime subscription authenticated with only the anon key.
+export async function selectCloudState(revision = ""): Promise<{ revision: string; data: Partial<DataSnapshot> } | null> {
+  const response = await fetch("/api/access/data?sync=1", {
+    cache: "no-store", signal: AbortSignal.timeout(25000),
+    headers: revision ? { "If-None-Match": revision } : {}
+  });
+  if (response.status === 304) return null;
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error ?? "Não foi possível atualizar a agenda compartilhada.");
+  return data;
 }
 
 export async function selectEntityState<T extends EntityName>(entity: T): Promise<EntitySelectResult<T>> {

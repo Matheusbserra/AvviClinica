@@ -92,10 +92,10 @@ import { importedCosts } from "@/lib/importedCosts";
 import { applyProcedureCostOverrides } from "@/lib/procedureCosts";
 import { calculateEntry, currency, excludeZeroAccounts, monthKey, percent, splitDiscountImpact, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { appDataTableMissing, selectEntityState, syncEntityDiffs, setDatabaseAccess, isProtectedDatabase } from "@/lib/database";
+import { appDataTableMissing, selectEntityState, selectCloudState, syncEntityDiffs, setDatabaseAccess } from "@/lib/database";
 import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, AnamneseRecord, ProfessionalStrategy, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
-import { hasSnapshotChanges, snapshotChanges, recoverPendingChanges, recordIsPending, snapshotEntities } from "@/lib/persistence";
+import { hasSnapshotChanges, snapshotChanges, recoverPendingChanges, snapshotEntities } from "@/lib/persistence";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
 import { readBrowserSnapshot, writeBrowserSnapshot } from "@/lib/browserPersistence";
 import { tabLabel, canManageProfessional, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey } from "@/lib/access";
@@ -411,12 +411,6 @@ function upsertMonthlyGoal(goals: MonthlyGoals[], goal: MonthlyGoals) {
   return goals.some((item) => item.month === goal.month) ? goals.map((item) => item.month === goal.month ? goal : item) : [...goals, goal];
 }
 
-function applyRemoteList<T extends { id?: string; month?: string }>(current: T[], recordId: string, record: T, remove: boolean) {
-  const matches = (item: T) => (item.id || item.month) === recordId;
-  if (remove) return current.filter((item) => !matches(item));
-  return current.some(matches) ? current.map((item) => matches(item) ? record : item) : [record, ...current];
-}
-
 async function readLocalSnapshot(user: AppUser): Promise<LocalSnapshot | null> {
   if (typeof window === "undefined") return null;
   try {
@@ -512,6 +506,7 @@ export default function Home() {
   const [syncError, setSyncError] = useState(() => isSupabaseConfigured ? "" : "Supabase não configurado. Preencha NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local.");
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncRetry, setSyncRetry] = useState(0);
+  const [refreshError, setRefreshError] = useState("");
 
   const agendaProfessionals = professionals.filter(professional => professional.showInAgenda !== false);
   const visibleProfessionals = agendaProfessionals.some(professional => professional.id === professionalFilter) ? agendaProfessionals.filter(professional => professional.id === professionalFilter) : agendaProfessionals;
@@ -519,58 +514,16 @@ export default function Home() {
   const accountingRevenues = revenues.filter(item => !accounting.entryIds.has(item.sourceFinancialEntryId));
   const accountingCosts = costs.filter(item => !accounting.entryIds.has(item.sourceFinancialEntryId));
 
-  function applyRemoteRecord(entity: string, eventType: string, recordId: string, data: unknown) {
-    if (!cloudLoaded.current || !snapshotEntities.includes(entity as typeof snapshotEntities[number])) return;
-    // A realtime echo or another browser must not erase an edit still waiting to be saved.
-    if (lastSyncedSnapshot.current && latestDraft.current && recordIsPending(lastSyncedSnapshot.current, latestDraft.current, entity as typeof snapshotEntities[number], recordId)) return;
-    const remove = eventType === "DELETE";
-    if (entity === "patients") setPatients((current) => applyRemoteList(current, recordId, data as Patient, remove));
-    if (entity === "professionals") setProfessionals((current) => applyRemoteList(current, recordId, data as Professional, remove));
-    if (entity === "procedures") setProcedures((current) => applyRemoteList(current, recordId, data as Procedure, remove));
-    if (entity === "service_packages") setServicePackages((current) => applyRemoteList(current, recordId, data as ServicePackage, remove));
-    if (entity === "services") setServices((current) => applyRemoteList(current, recordId, data as Service, remove));
-    if (entity === "gifts") setGifts((current) => applyRemoteList(current, recordId, data as GiftStockItem, remove));
-    if (entity === "strategies") setStrategies((current) => applyRemoteList(current, recordId, data as ProfessionalStrategy, remove));
-    if (entity === "anamneses") setAnamneses((current) => applyRemoteList(current, recordId, data as AnamneseRecord, remove));
-    if (entity === "ultraformer_tips") setUltraformerTips((current) => applyRemoteList(current, recordId, data as UltraformerTip, remove));
-    if (entity === "inventory") setInventory((current) => applyRemoteList(current, recordId, data as InventoryItem, remove));
-    if (entity === "followup_rules") setFollowUpRules((current) => applyRemoteList(current, recordId, data as FollowUpRule, remove));
-    if (entity === "followup_contacts") setFollowUpContacts((current) => applyRemoteList(current, recordId, data as FollowUpContact, remove));
-    if (entity === "followup_logs") setFollowUpLogs((current) => applyRemoteList(current, recordId, data as FollowUpLog, remove));
-    if (entity === "appointments") setAppointments((current) => applyRemoteList(current, recordId, data as Appointment, remove));
-    if (entity === "financial_entries") setEntries((current) => applyRemoteList(current, recordId, data as FinancialEntry, remove));
-    if (entity === "revenues") setRevenues((current) => applyRemoteList(current, recordId, data as RevenueEntry, remove));
-    if (entity === "fixed_costs") setCosts((current) => applyRemoteList(current, recordId, data as FixedCost, remove));
-    if (entity === "receipts") setReceipts((current) => applyRemoteList(current, recordId, data as Receipt, remove));
-    if (entity === "professional_receipts") setProfessionalReceipts((current) => applyRemoteList(current, recordId, data as ProfessionalPaymentReceipt, remove));
-    if (entity === "monthly_goals") setMonthlyGoals((current) => applyRemoteList(current, recordId, data as MonthlyGoals, remove));
-
-    const snapshot = lastSyncedSnapshot.current;
-    if (!snapshot) return;
-    lastSyncedSnapshot.current = {
-      ...snapshot,
-      patients: entity === "patients" ? applyRemoteList(snapshot.patients, recordId, data as Patient, remove) : snapshot.patients,
-      professionals: entity === "professionals" ? applyRemoteList(snapshot.professionals, recordId, data as Professional, remove) : snapshot.professionals,
-      procedures: entity === "procedures" ? applyRemoteList(snapshot.procedures, recordId, data as Procedure, remove) : snapshot.procedures,
-      service_packages: entity === "service_packages" ? applyRemoteList(snapshot.service_packages, recordId, data as ServicePackage, remove) : snapshot.service_packages,
-      services: entity === "services" ? applyRemoteList(snapshot.services, recordId, data as Service, remove) : snapshot.services,
-      gifts: entity === "gifts" ? applyRemoteList(snapshot.gifts ?? [], recordId, data as GiftStockItem, remove) : snapshot.gifts,
-      strategies: entity === "strategies" ? applyRemoteList(snapshot.strategies, recordId, data as ProfessionalStrategy, remove) : snapshot.strategies,
-      anamneses: entity === "anamneses" ? applyRemoteList(snapshot.anamneses, recordId, data as AnamneseRecord, remove) : snapshot.anamneses,
-      ultraformer_tips: entity === "ultraformer_tips" ? applyRemoteList(snapshot.ultraformer_tips, recordId, data as UltraformerTip, remove) : snapshot.ultraformer_tips,
-      inventory: entity === "inventory" ? applyRemoteList(snapshot.inventory, recordId, data as InventoryItem, remove) : snapshot.inventory,
-      followup_rules: entity === "followup_rules" ? applyRemoteList(snapshot.followup_rules ?? [], recordId, data as FollowUpRule, remove) : snapshot.followup_rules,
-      followup_contacts: entity === "followup_contacts" ? applyRemoteList(snapshot.followup_contacts ?? [], recordId, data as FollowUpContact, remove) : snapshot.followup_contacts,
-      followup_logs: entity === "followup_logs" ? applyRemoteList(snapshot.followup_logs ?? [], recordId, data as FollowUpLog, remove) : snapshot.followup_logs,
-      appointments: entity === "appointments" ? applyRemoteList(snapshot.appointments, recordId, data as Appointment, remove) : snapshot.appointments,
-      financial_entries: entity === "financial_entries" ? applyRemoteList(snapshot.financial_entries, recordId, data as FinancialEntry, remove) : snapshot.financial_entries,
-      revenues: entity === "revenues" ? applyRemoteList(snapshot.revenues, recordId, data as RevenueEntry, remove) : snapshot.revenues,
-      fixed_costs: entity === "fixed_costs" ? applyRemoteList(snapshot.fixed_costs, recordId, data as FixedCost, remove) : snapshot.fixed_costs,
-      receipts: entity === "receipts" ? applyRemoteList(snapshot.receipts, recordId, data as Receipt, remove) : snapshot.receipts,
-      professional_receipts: entity === "professional_receipts" ? applyRemoteList(snapshot.professional_receipts, recordId, data as ProfessionalPaymentReceipt, remove) : snapshot.professional_receipts,
-      monthly_goals: entity === "monthly_goals" ? applyRemoteList(snapshot.monthly_goals, recordId, data as MonthlyGoals, remove) : snapshot.monthly_goals
-    };
-  }
+  const applyDataSnapshot = useCallback((snapshot: DataSnapshot) => {
+    setPatients(snapshot.patients); setProfessionals(snapshot.professionals);
+    setProcedures(snapshot.procedures); setServices(snapshot.services); setServicePackages(snapshot.service_packages);
+    setInventory(snapshot.inventory); setGifts(snapshot.gifts); setAnamneses(snapshot.anamneses); setStrategies(snapshot.strategies);
+    setUltraformerTips(snapshot.ultraformer_tips); setFollowUpRules(snapshot.followup_rules);
+    setFollowUpContacts(snapshot.followup_contacts); setFollowUpLogs(snapshot.followup_logs);
+    setAppointments(snapshot.appointments); setEntries(snapshot.financial_entries);
+    setRevenues(snapshot.revenues); setCosts(snapshot.fixed_costs); setReceipts(snapshot.receipts);
+    setProfessionalReceipts(snapshot.professional_receipts); setMonthlyGoals(snapshot.monthly_goals);
+  }, []);
 
   const persistLocalDraft = useCallback(async (data: DataSnapshot) => {
     const sequence = ++localWriteSequence.current;
@@ -816,18 +769,7 @@ export default function Home() {
 
     hydrateFromSupabase();
 
-    const channel = userRole === "admin" && !isProtectedDatabase ? supabase?.channel("avvi-records-sync")
-      .on("postgres_changes", { event: "*", schema: "public", table: "avvi_records" }, (payload) => {
-        const row = (payload.eventType === "DELETE" ? payload.old : payload.new) as { entity?: string; record_id?: string; data?: unknown };
-        if (!row?.entity) return;
-        applyRemoteRecord(row.entity, payload.eventType, String(row.record_id), row.data);
-      })
-      .subscribe() : undefined;
-
-    return () => {
-      cancelled = true;
-      if (channel) supabase?.removeChannel(channel);
-    };
+    return () => { cancelled = true; };
   // Hydration reads the database again only after a failed connection.
   }, [connectionRetry, isAuthenticated, userRole, currentUser, persistLocalDraft]);
 
@@ -892,6 +834,50 @@ export default function Home() {
       });
   }, [patients, professionals, procedures, services, servicePackages, inventory, gifts, anamneses, strategies, ultraformerTips, followUpRules, followUpContacts, followUpLogs, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !isDataReady || !isSupabaseConfigured) return;
+    let cancelled = false, queued = false, revision = "";
+    const refresh = () => {
+      if (cancelled || queued || document.visibilityState === "hidden" || !cloudLoaded.current) return;
+      queued = true;
+      // Reads and writes use the same queue. A response started before a save
+      // must never restore an older cloud version after that save succeeds.
+      syncQueue.current = syncQueue.current.catch(() => undefined).then(async () => {
+        if (cancelled || !cloudLoaded.current) return;
+        try {
+          const update = await selectCloudState(revision);
+          if (cancelled) return;
+          setRefreshError("");
+          if (!update) return;
+          const baseline = lastSyncedSnapshot.current, draft = latestDraft.current;
+          if (!baseline || !draft) return;
+          const remote = { ...baseline, ...update.data };
+          const merged = recoverPendingChanges(remote, baseline, draft);
+          revision = update.revision;
+          lastSyncedSnapshot.current = remote;
+          latestDraft.current = merged;
+          if (hasSnapshotChanges(draft, merged)) applyDataSnapshot(merged);
+          void persistLocalDraft(merged);
+          setHasPendingChanges(hasSnapshotChanges(remote, merged));
+        } catch {
+          if (!cancelled) setRefreshError("Não foi possível atualizar a agenda compartilhada. Tentaremos novamente quando a conexão voltar.");
+        }
+      }).finally(() => { queued = false; });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 10000);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [isAuthenticated, isDataReady, currentUser, applyDataSnapshot, persistLocalDraft]);
+
   function retrySaving() {
     if (cloudLoaded.current) setSyncRetry((current) => current + 1);
     else setConnectionRetry((current) => current + 1);
@@ -922,6 +908,7 @@ export default function Home() {
     setUserRole(user.role); setCurrentUser(user);
     localWriteSequence.current++; setIsSavingLocal(false);
     setIsDataReady(false); setHasPendingChanges(false); setStorageError(""); setLastSavedAt("");
+    setRefreshError("");
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
     setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
     setAnamneses([]); setHistoryPatientId(null); setEditingPatientId(null);
@@ -1716,6 +1703,7 @@ export default function Home() {
             </div>
           )}
           {storageError && <div role="alert" className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-avvi-red">{storageError}</div>}
+          {refreshError && <div role="status" aria-label="Atualização da agenda" className="mb-2 shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{refreshError}</div>}
           <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
             {!isDataReady ? "Carregando dados…" : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : hasPendingChanges || syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
           </div>

@@ -17,13 +17,31 @@ try{
  process.env.NEXT_PUBLIC_SUPABASE_URL='https://registration-test.supabase.co';process.env.SUPABASE_SERVICE_ROLE_KEY='sb_secret_qa';
  globalThis.fetch=async(raw,init={})=>{const url=new URL(raw),headers={'Content-Type':'application/json'},method=init.method??'GET';
  if(url.pathname==='/rest/v1/avvi_user_accounts')return new Response(JSON.stringify(stored),{status:200,headers});
- assert.equal(url.pathname,'/rest/v1/avvi_records');const entity=url.searchParams.get('entity')?.slice(3);
- if(method==='GET'){const id=url.searchParams.get('record_id')?.slice(3);const data=[...records.values()].filter(row=>row.entity===entity&&(!id||row.record_id===id));return new Response(JSON.stringify(new Headers(init.headers).get('accept')?.includes('vnd.pgrst.object')?(data[0]??null):data),{status:200,headers});}
+ assert.equal(url.pathname,'/rest/v1/avvi_records');const filter=url.searchParams.get('entity');const matches=row=>filter?.startsWith('eq.')?row.entity===filter.slice(3):filter?.startsWith('in.')?filter.slice(4,-1).split(',').map(value=>value.replaceAll('"','')).includes(row.entity):true;
+ if(method==='GET'){const id=url.searchParams.get('record_id')?.slice(3);const offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500);const data=[...records.values()].filter(row=>matches(row)&&(!id||row.record_id===id));return new Response(JSON.stringify(new Headers(init.headers).get('accept')?.includes('vnd.pgrst.object')?(data[0]??null):data.slice(offset,offset+limit)),{status:200,headers});}
  if(method==='POST'){writes++;for(const row of JSON.parse(init.body))records.set(row.record_id,structuredClone(row));return new Response('[]',{status:201,headers});}
  if(method==='DELETE'){writes++;return new Response(null,{status:204,headers});}throw Error('Unexpected request');};
  const req=(who=kept,payload)=>new Request('http://test/api/access/data?entity=professionals',{method:payload?'POST':'GET',headers:{origin:'http://test',cookie:auth.accessCookie+'='+auth.signAccess(who),'Content-Type':'application/json'},...(payload?{body:JSON.stringify(payload)}:{})});
  let response=await route.GET(req());assert.equal(response.status,200);const data=(await response.json()).records;assert.deepEqual(data.map(item=>item.id),['ana']);assert.equal(data[0].commissionPercent,0);assert.equal(data[0].monthlyGoal,undefined); // Limited reports expose goals only through their scoped projection.
  response=await route.GET(req({...kept,professionalRegistration:{professionalIds:['bia']}}));assert.deepEqual((await response.json()).records.map(item=>item.id),['ana']);
+ const refresh=(who=kept,etag='')=>new Request('http://test/api/access/data?sync=1',{headers:{cookie:auth.accessCookie+'='+auth.signAccess(who),...(etag?{'If-None-Match':etag}:{})}});
+ assert.equal((await route.GET(new Request('http://test/api/access/data?sync=1'))).status,401);
+ response=await route.GET(refresh());assert.equal(response.status,200);
+ const cloud=await response.json(),etag=response.headers.get('etag');
+ assert.deepEqual(Object.keys(cloud.data),['professionals']);assert.deepEqual(cloud.data.professionals.map(item=>item.id),['ana']);
+ assert.equal(cloud.data.professionals[0].commissionPercent,0);assert.equal(cloud.data.professionals[0].monthlyGoal,undefined);
+ assert.equal(response.headers.get('cache-control'),'no-store');assert.equal(response.headers.get('vary'),'Cookie');
+ response=await route.GET(refresh(kept,etag));assert.equal(response.status,304);assert.equal(await response.text(),'');
+ const oldAna=structuredClone(records.get('ana'));records.delete('ana');
+ response=await route.GET(refresh(kept,etag));assert.equal(response.status,200);assert.deepEqual((await response.json()).data.professionals,[]);
+ records.set('ana',oldAna);
+ // Changes on later metadata pages must invalidate the revision as well.
+ for(let i=0;i<1001;i++)records.set('page-'+i,record('page-'+i,'Fixture '+i,40));
+ response=await route.GET(refresh());const pagesEtag=response.headers.get('etag');
+ records.get('page-1000').updated_at='2026-10-17T12:00:00Z';
+ assert.equal((await route.GET(refresh(kept,pagesEtag))).status,200);
+ for(let i=0;i<1001;i++)records.delete('page-'+i);
+ console.log('PASS: shared refresh authenticates, preserves professional/financial scopes, uses private conditional responses, detects deletion and changes past 1000 metadata rows.');
  const change=(id,patch)=>({upserts:[{entity:'professionals',record_id:id,data:{...records.get(id).data,...patch}}]});
  response=await route.POST(req(kept,change('ana',{name:'Ana atualizada',commissionPercent:99,closedShifts:[{weekday:1,shift:'morning'}]})));assert.equal(response.status,200);assert.equal(records.get('ana').data.commissionPercent,30);assert.equal(records.get('ana').data.monthlyGoal,1000);assert.equal(records.get('ana').data.closedShifts.length,1);
  let before=writes;assert.equal((await route.POST(req(kept,change('bia',{name:'Unauthorized'})))).status,403);assert.equal((await route.POST(req(kept,{removed:[{entity:'professionals',ids:['bia']}]}))).status,403);assert.equal(writes,before);

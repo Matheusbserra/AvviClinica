@@ -1,5 +1,7 @@
 import { validServicePackage } from "@/lib/servicePackages";
 import { createClient } from "@supabase/supabase-js";
+import { createHash } from "node:crypto";
+import type { AppUser } from "@/lib/access";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
 import { canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { checkoutStockUpdates } from "@/lib/stockAccess";
@@ -28,11 +30,7 @@ async function rows(entity: string) {
     result.push(...data); if (data.length < 500) return result;
   }
 }
-export async function GET(request: Request) {
-  const user = await resolveAccess(request); if (!user) return Response.json({ error: "Autentique-se novamente." }, { status: 401, headers });
-  const entity = new URL(request.url).searchParams.get("entity") ?? "";
-  if (!entityNames.includes(entity as EntityName) || !canReadEntity(user, entity)) return Response.json({ error: "Esta informação é restrita ao administrador." }, { status: 403, headers });
-  try {
+async function permittedRecords(user: AppUser, entity: string) {
     const records = await rows(entity);
     const permitted = entity === "strategies" ? records.filter(row => canAccessProfessional(user, String(row.data.professionalId))) : entity === "professionals" && registrationOnly(user) ? records.filter(row => canAccessProfessional(user, row.record_id)) : records;
     const data = permitted.map((row) => {
@@ -47,7 +45,38 @@ export async function GET(request: Request) {
       const entry = row.data as unknown as FinancialEntry;
       return stockHistoryEntry(entry);
     });
-    return Response.json({ records: data, latestUpdatedAt: records.map((row) => row.updated_at ?? "").sort().at(-1) ?? "" }, { headers });
+    return { records: data, latestUpdatedAt: records.map((row) => row.updated_at ?? "").sort().at(-1) ?? "" };
+}
+
+// All profiles share avvi_records. A private session only limits which categories
+// and fields may be returned; it never creates a separate agenda for that user.
+async function cloudRevision(user: AppUser, entities: EntityName[]) {
+  const db = database(), hash = createHash("sha256").update(JSON.stringify(user));
+  if (!entities.length) return `"${hash.digest("hex")}"`;
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await db.from("avvi_records").select("entity,record_id,updated_at")
+      .in("entity", entities).order("entity").order("record_id").range(offset, offset + 499);
+    if (error) throw error;
+    for (const row of data ?? []) hash.update(JSON.stringify([row.entity, row.record_id, row.updated_at]));
+    if (!data || data.length < 500) return `"${hash.digest("hex")}"`;
+  }
+}
+
+export async function GET(request: Request) {
+  const user = await resolveAccess(request); if (!user) return Response.json({ error: "Autentique-se novamente." }, { status: 401, headers });
+  const query = new URL(request.url).searchParams;
+  try {
+    if (query.get("sync") === "1") {
+      const entities = entityNames.filter(entity => canReadEntity(user, entity));
+      const revision = await cloudRevision(user, entities);
+      const syncHeaders = { ...headers, ETag: revision, Vary: "Cookie" };
+      if (request.headers.get("if-none-match") === revision) return new Response(null, { status: 304, headers: syncHeaders });
+      const data = Object.fromEntries(await Promise.all(entities.map(async entity => [entity, (await permittedRecords(user, entity)).records])));
+      return Response.json({ revision, data }, { headers: syncHeaders });
+    }
+    const entity = query.get("entity") ?? "";
+    if (!entityNames.includes(entity as EntityName) || !canReadEntity(user, entity)) return Response.json({ error: "Esta informação é restrita ao administrador." }, { status: 403, headers });
+    return Response.json(await permittedRecords(user, entity), { headers });
   } catch { return Response.json({ error: "Não foi possível consultar os dados permitidos na nuvem." }, { status: 503, headers }); }
 }
 export async function POST(request: Request) {

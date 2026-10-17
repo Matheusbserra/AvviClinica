@@ -6,7 +6,7 @@ globalThis.__testDatabase=client;
 const accessCode=ts.transpileModule(fs.readFileSync("lib/access.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.ES2022}}).outputText;
 const accessUrl="data:text/javascript;base64,"+Buffer.from(accessCode).toString("base64");
 const code=ts.transpileModule(fs.readFileSync("lib/database.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText.replaceAll('"./access"',JSON.stringify(accessUrl)).replace(/import \{ supabase \} from [^;]+;/,"const supabase=globalThis.__testDatabase;");
-const {selectEntityState,syncEntityDiffs,getRecordId,appDataTableMissing}=await import("data:text/javascript;base64,"+Buffer.from(code).toString("base64"));
+const {selectEntityState,selectCloudState,syncEntityDiffs,getRecordId,appDataTableMissing}=await import("data:text/javascript;base64,"+Buffer.from(code).toString("base64"));
 let loaded=await selectEntityState("patients");assert.equal(loaded.records.length,1201);assert.equal(new Set(loaded.records.map(record=>record.id)).size,1201);assert.equal(loaded.latestUpdatedAt,"2026-10-08T18:00:00Z");
 readFailure=true;await assert.rejects(()=>selectEntityState("patients"),error=>error.message==="failed second page");
 assert.throws(()=>getRecordId({}),/identificador/);assert.equal(getRecordId({month:"2026-10"}),"2026-10");
@@ -14,4 +14,13 @@ const changes=[{entity:"gifts",previous:[{id:"gone",quantity:2}],next:[{id:"kept
 deleteFailure=true;await assert.rejects(()=>syncEntityDiffs(changes),error=>error.message==="failed deletion");assert.equal(requests[0].batch.length,2);assert.equal(requests[1].kind,"delete");
 deleteFailure=false;requests=[];await syncEntityDiffs(changes);assert.equal(requests.length,2);assert.deepEqual(requests[1].ids,["gone"]);
 assert.equal(appDataTableMissing({code:"PGRST205"}),true);assert.equal(appDataTableMissing({message:"permission denied for avvi_records"}),false);
+let syncStatus=200;
+globalThis.fetch=async(url,init)=>{
+ assert.equal(url,'/api/access/data?sync=1');assert.equal(init.cache,'no-store');assert.equal(init.headers['If-None-Match'],'"revision-qa"');
+ return syncStatus===304?new Response(null,{status:304}):Response.json(syncStatus===200?{revision:'"next-qa"',data:{appointments:[{id:'shared-qa'}]}}:{error:'Cloud read failed'},{status:syncStatus});
+};
+assert.deepEqual(await selectCloudState('"revision-qa"'),{revision:'"next-qa"',data:{appointments:[{id:'shared-qa'}]}});
+syncStatus=304;assert.equal(await selectCloudState('"revision-qa"'),null);
+syncStatus=503;await assert.rejects(()=>selectCloudState('"revision-qa"'),/Cloud read failed/);
+console.log('PASS: authenticated refresh uses no-store conditional requests, accepts unchanged 304 without parsing an empty body, and reports a failed read instead of applying an empty agenda.');
 console.log("PASS: Reads all 1201 records, reports failed pagination without accepting a partial list, refuses missing IDs, retries partial upsert/deletion safely, and distinguishes missing tables from denied access.");
