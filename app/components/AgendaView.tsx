@@ -8,7 +8,7 @@ import { ptBR } from "date-fns/locale";
 import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Plus, X, Eye, CircleDollarSign, Ban, Phone, User, Syringe, Info } from "lucide-react";
 import { agendaHours, agendaSlots, slotTime, bookingDuration, isAbsence, overlappingAppointments, rectangleSlots, shiftClosed, slotAvailable, resizedAgendaEnd, appointmentAvailabilityError } from "@/lib/agendaAvailability";
 import type { AgendaSlot } from "@/lib/agendaAvailability";
-import { agendaGroups } from "@/lib/agendaGroups";
+import { positionedAgendaGroups } from "@/lib/agendaGroups";
 import { appointmentServices } from "@/lib/appointmentServices";
 import type { Appointment, AppointmentStatus, FinancialEntry, Patient, Procedure, Professional, Service, ViewMode } from "@/lib/types";
 
@@ -222,7 +222,7 @@ export function AgendaView(props: Props) {
   const agendaAppointments = props.appointments.filter(item => showCancelled || item.status !== "Cancelado");
   const displayedAppointments = resizing ? agendaAppointments.map(item => item.id === resizing.id ? { ...item, endsAt: resizing.endsAt } : item) : agendaAppointments;
   const appointmentsAt = (professionalId: string, hour: number) => overlappingAppointments(displayedAppointments, { date: props.selectedDate, professionalId, hour });
-  const displayGroups = new Map(visible.map(professional => [professional.id, agendaGroups(displayedAppointments, props.selectedDate, professional.id)]));
+  const displayGroups = new Map(visible.map(professional => [professional.id, positionedAgendaGroups(displayedAppointments, props.selectedDate, professional.id)]));
   const hoverAppointments = hover ? agendaAppointments.filter(item => hover.appointmentIds.includes(item.id)) : [];
   const hoverAppointment = hoverAppointments[0];
   const hoverPatient = hoverAppointment ? props.patients.find(item => item.id === hoverAppointment.patientId) : undefined;
@@ -270,19 +270,20 @@ export function AgendaView(props: Props) {
         {agendaSlots.map((time, index) => <Fragment key={time}>
           {index % 2 === 0 && <div data-testid={`agenda-hour-${time}`} className="flex min-h-0 items-center justify-center overflow-hidden border-b border-avvi-line bg-slate-50 text-[10px] text-slate-500" style={{ gridRow: `${index + 2} / span 2`, gridColumn: 1 }}>{time}h</div>}
           {visible.map((professional, column) => {
-            const group = displayGroups.get(professional.id)?.find(item => item.startIndex === index);
-            const appointment = group?.appointments[0];
-            const resizeTarget = group && !isAbsence(group.appointments[0]) ? group.appointments.slice().sort((a, b) => a.endsAt.localeCompare(b.endsAt) || a.startsAt.localeCompare(b.startsAt)).at(-1) : undefined;
+            const groups = displayGroups.get(professional.id)?.filter(item => item.startIndex === index) ?? [];
             const occupied = appointmentsAt(professional.id, time).length > 0;
             const slot = { date: props.selectedDate, professionalId: professional.id, hour: time };
             const closed = shiftClosed(professional, props.selectedDate, time);
             const selectedSlot = selectedSlots.some(item => item.date === slot.date && item.professionalId === slot.professionalId && item.hour === time);
-            const fullHeight = !!group && group.slotCount > 1;
-            const names = group ? [...new Set(group.appointments.map(serviceName))].join(" · ") : "";
-            const statuses = group ? [...new Set(group.appointments.map(item => item.status))].join(" · ") : "";
-            const otherPatients = group ? new Set(group.overlaps.filter(item => !group.appointments.some(own => own.id === item.id)).map(item => item.patientId ?? item.id)).size : 0;
             return <div key={`${professional.id}-${time}`} data-agenda-slot="true" data-hour={time} data-professional-id={professional.id} className={`relative min-h-0 min-w-0 border-b border-l border-avvi-line ${index % 2 === 0 ? "border-b-transparent hover:border-b-slate-300 focus-within:border-b-slate-300" : ""} ${selectedSlot ? "bg-avvi-soft ring-2 ring-inset ring-avvi-blue" : ""}`} style={{ gridRow: index + 2, gridColumn: column + 2 }}>
-              {group && appointment ? <div data-testid="appointment-group" data-appointment-ids={group.appointments.map(item => item.id).join(",")} data-slot-count={group.slotCount} className="absolute left-0 top-0 z-10 w-full p-0.5" style={{ height: `calc(${group.slotCount * 100}% + ${group.slotCount - 1}px)` }}>
+              {groups.map(group => {
+                const appointment = group.appointments[0];
+                const resizeTarget = !isAbsence(appointment) ? group.appointments.slice().sort((a, b) => a.endsAt.localeCompare(b.endsAt) || a.startsAt.localeCompare(b.startsAt)).at(-1) : undefined;
+                const fullHeight = group.slotCount > 1;
+                const names = [...new Set(group.appointments.map(serviceName))].join(" · ");
+                const statuses = [...new Set(group.appointments.map(item => item.status))].join(" · ");
+                const otherPatients = new Set(group.overlaps.filter(item => !group.appointments.some(own => own.id === item.id)).map(item => item.patientId ?? item.id)).size;
+                return <div key={appointment.id} data-testid="appointment-group" data-appointment-ids={group.appointments.map(item => item.id).join(",")} data-slot-count={group.slotCount} className="absolute top-0 z-10 p-0.5" style={{ left: `${group.lane * 100 / group.columns}%`, width: `${100 / group.columns}%`, height: `calc(${group.slotCount * 100}% + ${group.slotCount - 1}px)` }}>
                 <button type="button" onPointerEnter={event => { if (event.pointerType !== "touch" && !isAbsence(appointment)) scheduleHover(event.currentTarget, group.appointments.map(item => item.id)); }} onPointerLeave={leaveHover} aria-describedby={hover?.appointmentIds.includes(appointment.id) ? "agenda-patient-hover" : undefined} onClick={event => showMenu(appointment.id, event.currentTarget, group.appointments.map(item => item.id))} onContextMenu={event => { event.preventDefault(); showMenu(appointment.id, event.currentTarget, group.appointments.map(item => item.id)); }} aria-haspopup="menu" aria-expanded={!!menu && group.appointments.some(item => item.id === menu.appointmentId)} data-testid={`appointment-${appointment.id}`} data-status={appointment.status} data-compact={!fullHeight} aria-label={`${patientName(appointment)}, ${names}, ${statuses}`} className={`flex h-full w-full min-w-0 flex-col justify-center overflow-hidden rounded border-l-[3px] px-1 text-center ${isAbsence(appointment) ? "bg-slate-200 border-slate-400 text-slate-600" : statusColors(appointment.status)}`}>
                   <span data-testid="appointment-patient" className={`flex w-full min-w-0 shrink-0 items-center justify-center gap-1 font-bold ${fullHeight && group.slotCount > 2 ? "text-[10px] leading-[11px]" : denseRows ? "text-[7px] leading-[7px]" : compactRows ? "text-[8px] leading-[8px]" : "text-[10px] leading-[11px]"} ${otherPatients ? "px-6" : ""}`}><span className="truncate">{patientName(appointment)}</span>{group.appointments.every(isClosed) && <CheckCircle2 size={10} aria-label="Conta fechada" className="shrink-0 text-green-600" />}</span>
                   {fullHeight && !isAbsence(appointment) && <><span data-testid="appointment-service" className={`block w-full shrink-0 truncate text-slate-600 ${denseRows && group.slotCount === 2 ? "text-[7px] leading-[7px]" : compactRows && group.slotCount === 2 ? "text-[8px] leading-[8px]" : "text-[9px] leading-[11px]"}`}>{names}</span>
@@ -290,7 +291,9 @@ export function AgendaView(props: Props) {
                 </button>
                 {resizeTarget && <button type="button" data-testid={`resize-appointment-${resizeTarget.id}`} aria-label={`Ajustar duração de ${patientName(appointment)}`} title="Arraste para ajustar a duração" onPointerDown={event => resizeBooking(event, props.appointments.find(item => item.id === resizeTarget.id)!)} onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); closeHover(); const target = props.appointments.find(item => item.id === resizeTarget.id)!; const end = resizedAgendaEnd(target, event.key === "ArrowDown" ? 1 : -1); if (end) setResizeError(props.resizeAppointment(target.id, end)); } }} className="absolute bottom-0 left-1/4 z-20 flex h-[30%] max-h-2 w-1/2 touch-none cursor-ns-resize select-none items-center justify-center rounded opacity-0 hover:bg-white/60 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-avvi-blue"><span aria-hidden className="h-0.5 w-7 rounded bg-current opacity-40"/></button>}
                 {otherPatients > 0 && <button type="button" aria-label={`Ver outros pacientes às ${slotTime(time)} com ${professional.name}`} onClick={() => setSlotList({ professionalId: professional.id, hour: time, page: 0, appointmentIds: group.overlaps.map(item => item.id) })} className="absolute right-1 top-0.5 rounded bg-white/90 px-1 text-[9px] font-bold text-slate-600 shadow-sm">+{otherPatients}</button>}
-              </div> : !occupied && <button type="button" aria-label={`Agendar às ${slotTime(time)} com ${professional.name}`} disabled={closed || !professional.active} onPointerDown={event => selectSlot(event, slot)} onClick={event => { if (event.detail === 0) showSlotMenu(event.currentTarget, [slot]); }} onContextMenu={event => { event.preventDefault(); if (!closed && professional.active) showSlotMenu(event.currentTarget, [slot]); }} aria-haspopup="menu" aria-expanded={!!slotMenu && selectedSlot} className={`h-full w-full touch-none select-none rounded text-[9px] ${closed ? "bg-[#f0f7ff] text-slate-400" : !professional.active ? "bg-slate-50 text-slate-400" : "hover:bg-avvi-soft"}`}>{!closed && !professional.active ? "Inativo" : null}</button>}
+              </div>;
+              })}
+              {!occupied && <button type="button" aria-label={`Agendar às ${slotTime(time)} com ${professional.name}`} disabled={closed || !professional.active} onPointerDown={event => selectSlot(event, slot)} onClick={event => { if (event.detail === 0) showSlotMenu(event.currentTarget, [slot]); }} onContextMenu={event => { event.preventDefault(); if (!closed && professional.active) showSlotMenu(event.currentTarget, [slot]); }} aria-haspopup="menu" aria-expanded={!!slotMenu && selectedSlot} className={`h-full w-full touch-none select-none rounded text-[9px] ${closed ? "bg-[#f0f7ff] text-slate-400" : !professional.active ? "bg-slate-50 text-slate-400" : "hover:bg-avvi-soft"}`}>{!closed && !professional.active ? "Inativo" : null}</button>}
             </div>;
           })}
           {!visible.length && <div className="min-h-0 border-b border-avvi-line" style={{ gridRow: index + 2, gridColumn: 2 }} />}
