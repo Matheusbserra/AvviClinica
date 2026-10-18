@@ -4,6 +4,8 @@ import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, UserRound, X } from "luci
 import { SearchSelect } from "./SearchSelect";
 import { packageCheckoutLines } from "@/lib/servicePackages";
 import type { ServicePackage } from "@/lib/servicePackages";
+import { patientPackageBalances, validPackageSessionUses } from "@/lib/packageSessions";
+import type { PackageSessionUse } from "@/lib/packageSessions";
 import { availableUltraformerTips, validCheckoutShots } from "@/lib/ultraformer";
 import { currency } from "@/lib/calculations";
 import { checkoutTotals, checkoutCommission, settleCheckoutPayments, checkoutAllowsNoProducts, moneyRound, paymentChoiceKey, paymentChoices, toggleCheckoutPayment } from "@/lib/checkout";
@@ -12,9 +14,10 @@ import type { Appointment, DiscountSplit, Patient, PaymentItem, Procedure, Proce
 export type CheckoutDraft = {
   appointment: Appointment; client: Patient; professional?: Professional;
   lines: ProcedureLine[]; products: ProductUsage[]; gifts?: GiftUsage[]; ultraformerShots?: UltraformerShots[]; payments: PaymentItem[]; entryId?: string;
+  packageSessionUses?: PackageSessionUse[];
   discountSplit: DiscountSplit; notes: string; checkoutNotes?: string; previousFutureCredit: number; previousCreditAdded?: number; storedCreditPayments?: PaymentItem[]; clinicPatient?: boolean;
 };
-export type CheckoutResult = { client: Patient; lines: ProcedureLine[]; products: ProductUsage[]; gifts: GiftUsage[]; ultraformerShots: UltraformerShots[]; payments: PaymentItem[]; total: number; discount: number; balanceDue: number; change: number; creditAdded: number; creditPayments: PaymentItem[]; clinicPatient: boolean; checkoutNotes: string };
+export type CheckoutResult = { client: Patient; lines: ProcedureLine[]; products: ProductUsage[]; gifts: GiftUsage[]; ultraformerShots: UltraformerShots[]; packageSessionUses: PackageSessionUse[]; payments: PaymentItem[]; total: number; discount: number; balanceDue: number; change: number; creditAdded: number; creditPayments: PaymentItem[]; clinicPatient: boolean; checkoutNotes: string };
 
 export function AccountCheckout({ draft, gifts, procedures, services, packages = [], ultraformerTips, appointments, onCancel, onConfirm, onDelete }: {
   draft: CheckoutDraft; ultraformerTips: UltraformerTip[]; gifts: GiftStockItem[]; procedures: Procedure[]; services: Service[]; packages?: ServicePackage[]; appointments: Appointment[];
@@ -36,6 +39,18 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
   const [adding, setAdding] = useState<"service" | "product" | "gift" | "package" | "ultraformer" | null>(null);
   const [packageId, setPackageId] = useState("");
   const [packageQuantity, setPackageQuantity] = useState(1);
+  const [packageMode, setPackageMode] = useState<"sale" | "use">("sale");
+  const [packageSessionUses, setPackageSessionUses] = useState(() => (draft.packageSessionUses ?? []).map(use => ({ ...use })));
+  const [balanceId, setBalanceId] = useState("");
+  const [sessionQuantity, setSessionQuantity] = useState(1);
+  const packageBalances = patientPackageBalances(appointments, client.id, draft.appointment.id);
+  const treatmentDate = draft.appointment.startsAt.slice(0, 10);
+  const usableBalances = packageBalances.filter(balance => balance.purchasedOn <= treatmentDate && (!balance.expiresOn || balance.expiresOn >= treatmentDate));
+  const balanceOptions = usableBalances.map(balance => {
+    const selected = packageSessionUses.find(use => use.sourceAppointmentId === balance.sourceAppointmentId && use.sourceAccountId === balance.sourceAccountId && use.purchaseKey === balance.purchaseKey && use.serviceId === balance.serviceId)?.quantity ?? 0;
+    const remaining = balance.remaining - selected;
+    return { id: balance.id, remaining, name: `${balance.packageName} · ${balance.serviceName} · ${remaining} sessões · ${displayDate(balance.purchasedOn)}` };
+  }).filter(balance => balance.remaining > 0);
   const [serviceId, setServiceId] = useState("");
   const [serviceQuantity, setServiceQuantity] = useState(1);
   const [procedureId, setProcedureId] = useState("");
@@ -51,10 +66,11 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
     ...(!draft.payments.some((payment) => payment.method === "Crédito Futuro") ? ["Pré-pago"] : [])
   ]);
   const totals = checkoutTotals(lines, payments);
-  const allowsNoProducts = checkoutAllowsNoProducts(lines, services);
+  const packageSaleOnly = lines.length > 0 && lines.every(line => !!line.packageId) && !packageSessionUses.length;
+  const allowsNoProducts = packageSaleOnly || checkoutAllowsNoProducts([...lines, ...packageSessionUses.map(use => ({ serviceId: use.serviceId, manualProcedure: use.serviceName, quantity: use.quantity }))], services);
   const visits = appointments.filter((appointment) => appointment.patientId === client.id && appointment.status === "Finalizado");
   const lastVisit = visits.map((appointment) => appointment.startsAt.slice(0, 10)).sort().at(-1);
-  const displayDate = (date?: string) => date ? date.slice(0, 10).split("-").reverse().join("/") : "-";
+  function displayDate(date?: string) { return date ? date.slice(0, 10).split("-").reverse().join("/") : "-"; }
   const groups = [
     { name: "PIX", choices: paymentChoices.filter((choice) => choice.method === "Pix") },
     { name: "Crédito", choices: paymentChoices.filter((choice) => choice.method === "Crédito") },
@@ -96,6 +112,21 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
     try { const added = packageCheckoutLines(pack, packageQuantity); setLines(current => [...current, ...added]); setPackageId(""); setPackageQuantity(1); setAdding(null); setError(""); }
     catch (error) { setError(error instanceof Error ? error.message : "Confira o pacote."); }
   }
+  function usePackage() {
+    const balance = usableBalances.find(item => item.id === balanceId);
+    const existing = packageSessionUses.find(item => item.sourceAppointmentId === balance?.sourceAppointmentId && item.sourceAccountId === balance?.sourceAccountId && item.purchaseKey === balance?.purchaseKey && item.serviceId === balance?.serviceId);
+    if (!balance || !Number.isSafeInteger(sessionQuantity) || sessionQuantity < 1 || (existing?.quantity ?? 0) + sessionQuantity > balance.remaining) { setError("Confira o saldo e a quantidade de sessões do pacote."); return; }
+    const use: PackageSessionUse = { id: existing?.id ?? crypto.randomUUID(), sourceAppointmentId: balance.sourceAppointmentId, sourceAccountId: balance.sourceAccountId, purchaseKey: balance.purchaseKey, packageId: balance.packageId, packageName: balance.packageName, serviceId: balance.serviceId, serviceName: balance.serviceName, quantity: (existing?.quantity ?? 0) + sessionQuantity };
+    setPackageSessionUses(current => existing ? current.map(item => item.id === existing.id ? use : item) : [...current, use]);
+    // A prepaid session replaces the matching ordinary service charge.
+    let covered = sessionQuantity;
+    setLines(current => current.flatMap(line => {
+      if (line.packageId || line.serviceId !== balance.serviceId || covered <= 0) return [line];
+      const removed = Math.min(covered, line.quantity); covered -= removed;
+      return line.quantity === removed ? [] : [{ ...line, quantity: line.quantity - removed, discount: moneyRound((line.discount ?? 0) * (line.quantity - removed) / line.quantity) }];
+    }));
+    setBalanceId(""); setSessionQuantity(1); setAdding(null); setError("");
+  }
   function addProduct() {
     const procedure = procedures.find((item) => item.id === procedureId);
     if (!procedure || !Number.isInteger(procedureQuantity) || procedureQuantity <= 0) return;
@@ -127,7 +158,8 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
   }
   function confirm(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!client.name.trim() || !lines.length) { setError("Informe o cliente e adicione ao menos um serviço à conta."); return; }
+    if (!client.name.trim() || !lines.length && !packageSessionUses.length) { setError("Informe o cliente e adicione ao menos um serviço à conta."); return; }
+    if (!validPackageSessionUses(packageSessionUses) || packageSessionUses.some(use => !usableBalances.some(balance => balance.sourceAppointmentId === use.sourceAppointmentId && balance.sourceAccountId === use.sourceAccountId && balance.purchaseKey === use.purchaseKey && balance.serviceId === use.serviceId && balance.remaining >= use.quantity))) { setError("O pacote está vencido ou não possui sessões suficientes. Atualize os dados e confira o saldo."); return; }
     if (lines.some((line) => !Number.isInteger(line.quantity) || line.quantity <= 0 || !Number.isFinite(line.servicePrice) || line.servicePrice < 0
       || !Number.isFinite(line.discount ?? 0) || (line.discount ?? 0) < 0 || (line.discount ?? 0) > moneyRound(line.quantity * line.servicePrice))) {
       setError("Confira as quantidades, os preços e os descontos dos itens."); return;
@@ -143,7 +175,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
     try {
       const settled = settleCheckoutPayments(payments,totals.change,keepCredit);
       const professionalPercent=checkoutCommission(draft.professional?.commissionPercent??0,clinicPatient);
-      onConfirm({ client, lines: lines.map(line=>({...line,professionalPercent: line.packageCommissionPercent === undefined ? professionalPercent : checkoutCommission(line.packageCommissionPercent,clinicPatient)})), products, gifts: selectedGifts, ultraformerShots: selectedShots, ...settled, clinicPatient, checkoutNotes, total: totals.total, discount: totals.discount, balanceDue: totals.remaining });
+      onConfirm({ client, lines: lines.map(line=>({...line,professionalPercent: line.packageCommissionPercent === undefined ? professionalPercent : checkoutCommission(line.packageCommissionPercent,clinicPatient)})), products, gifts: selectedGifts, ultraformerShots: selectedShots, packageSessionUses, ...settled, clinicPatient, checkoutNotes, total: totals.total, discount: totals.discount, balanceDue: totals.remaining });
     } catch (error) {setError(error instanceof Error?error.message:"Confira os pagamentos.");}
 
   }
@@ -169,13 +201,14 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
             <label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do serviço a adicionar" className="input mt-1" type="number" min={1} step={1} value={serviceQuantity} onChange={(event) => setServiceQuantity(Number(event.target.value))} /></label>
             <button type="button" disabled={!serviceId || !Number.isInteger(serviceQuantity) || serviceQuantity < 1} onClick={addService} className="self-end rounded-md bg-lime-400 px-3 py-2 text-sm font-bold disabled:opacity-40">Adicionar serviço</button>
           </div>}
-          {adding === "package" && <div className="mb-4 grid gap-3 rounded-md border border-avvi-line bg-avvi-soft p-3 sm:grid-cols-[1fr_100px_auto]">
+          {adding === "package" && <div className="mb-4 rounded-md border border-avvi-line bg-avvi-soft p-3"><div className="mb-3 flex flex-wrap gap-2">{([["sale", "Vender pacote"], ["use", "Usar pacote já pago"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={packageMode === value} onClick={() => { setPackageMode(value); setError(""); }} className={`rounded-md px-3 py-2 text-xs font-bold ${packageMode === value ? "bg-avvi-blue text-white" : "bg-white text-slate-600"}`}>{label}</button>)}</div>{packageMode === "sale" ? <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
             <label className="text-xs font-semibold">Pacote<SearchSelect label="Adicionar pacote à conta" options={packages.filter(pack => pack.active)} value={packageId} onChange={setPackageId}/></label>
             <label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do pacote a adicionar" className="input mt-1" type="number" min={1} max={10000} step={1} value={packageQuantity} onChange={event => setPackageQuantity(Number(event.target.value))}/></label>
             <button type="button" disabled={!packageId || !Number.isSafeInteger(packageQuantity) || packageQuantity < 1 || packageQuantity > 10000} onClick={addPackage} className="self-end rounded-md bg-avvi-blue px-3 py-2 text-sm font-bold text-white disabled:opacity-40">Adicionar pacote</button>
             {packageId && <p className="text-xs text-slate-600 sm:col-span-3">{currency((packages.find(pack => pack.id === packageId)?.salePrice ?? 0) * packageQuantity)} · {packages.find(pack => pack.id === packageId)?.items.map(item => `${item.quantity * packageQuantity}× ${item.name}`).join(" · ")}</p>}
             {!packages.some(pack => pack.active) && <p className="text-xs text-slate-500 sm:col-span-3">Cadastre um pacote em Cadastro de Serviços → Pacotes.</p>}
-          </div>}
+          </div> : <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]"><label className="min-w-0 text-xs font-semibold">Pacote do paciente<SearchSelect label="Pacote já pago do paciente" options={balanceOptions} value={balanceId} onChange={setBalanceId}/></label><label className="text-xs font-semibold">Sessões<input aria-label="Sessões do pacote a utilizar" className="input mt-1" type="number" min={1} max={10000} step={1} value={sessionQuantity} onChange={event => setSessionQuantity(Number(event.target.value))}/></label><button type="button" disabled={!balanceId} onClick={usePackage} className="self-end rounded-md bg-avvi-blue px-3 py-2 text-sm font-bold text-white disabled:opacity-40">Utilizar sessões</button>{!balanceOptions.length && <p className="text-xs text-slate-600 sm:col-span-3">Este paciente não possui sessões disponíveis em um pacote pago.</p>}</div>}</div>}
+          {!!packageSessionUses.length && <section aria-label="Sessões de pacotes utilizadas" className="mb-4 rounded-lg border border-avvi-line bg-avvi-soft p-3"><h3 className="text-xs font-bold text-avvi-blue">Pacotes já pagos</h3>{packageSessionUses.map(use => <div key={use.id} className="mt-2 flex items-center justify-between gap-3 text-xs"><div><strong>{use.packageName}</strong><p>{use.serviceName} · {use.quantity} sessão(ões) · Sem nova cobrança</p></div><button type="button" aria-label={`Remover utilização de ${use.serviceName}`} onClick={() => setPackageSessionUses(current => current.filter(item => item.id !== use.id))} className="rounded p-2 text-red-500"><Trash2 size={15}/></button></div>)}</section>}
           {adding === "product" && <div className="mb-4 grid gap-3 rounded-md border border-lime-200 bg-lime-50 p-3 sm:grid-cols-[1fr_100px_auto]">
             <label className="text-xs font-semibold">Produto<SearchSelect label="Adicionar produto ao consumo" options={procedures} value={procedureId} onChange={setProcedureId}/></label>
             <label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do produto a adicionar" className="input mt-1" type="number" min={1} step={1} value={procedureQuantity} onChange={(event) => setProcedureQuantity(Number(event.target.value))} /></label>
@@ -212,7 +245,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
           <div className="rounded-md bg-white p-3 text-sm shadow-panel"><div className="flex justify-between border-b py-2"><span>Total</span><strong data-testid="checkout-total">{currency(totals.total)}</strong></div><div className="flex justify-between border-b py-2"><span>Recebido</span><strong data-testid="checkout-received" className="text-emerald-600">{currency(totals.received)}</strong></div><div className="flex justify-between py-2"><span>Falta</span><strong data-testid="checkout-remaining" className="text-red-500">{currency(totals.remaining)}</strong></div>{totals.change > 0 && <div className="flex justify-between py-2"><span>{keepCredit?"Crédito a guardar":"Troco"}</span><strong data-testid="checkout-excess">{currency(totals.change)}</strong></div>}<div className="mt-3 space-y-3"><CheckoutSwitch label="Deixar o restante como dívida" checked={leaveDebt} onChange={setLeaveDebt}/><CheckoutSwitch label="Guardar valor pago a mais como crédito" checked={keepCredit} onChange={setKeepCredit}/><CheckoutSwitch label="Paciente da clínica" checked={clinicPatient} onChange={setClinicPatient}/><p className="text-xs text-slate-500">Crédito disponível: <strong data-testid="checkout-credit-balance">{currency(availableCredit)}</strong></p></div></div>
         </aside>
       </div>
-      <footer className="shrink-0 border-t border-avvi-line px-5 py-4">{allowsNoProducts && <p className="mb-2 text-xs text-slate-500">Avaliação ou retorno: produtos são opcionais. Para fechar sem cobrança, deixe o valor a pagar em R$ 0,00. Sem produtos, não será gerado um lançamento de procedimentos.</p>}{error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}<div className="flex justify-end gap-3"><button type="button" onClick={onCancel} className="rounded border border-orange-500 px-4 py-2 text-sm font-semibold text-orange-600">Cancelar</button>{onDelete && <button type="button" aria-label="Excluir conta fechada" title="Excluir conta fechada" onClick={onDelete} className="rounded-md border border-red-200 p-2 text-red-600 hover:bg-red-50"><Trash2 size={18} /></button>}<button type="submit" className="rounded bg-orange-500 px-5 py-2 text-sm font-bold text-white hover:bg-orange-600">Fechar Conta</button></div></footer>
+      <footer className="shrink-0 border-t border-avvi-line px-5 py-4">{allowsNoProducts && !packageSaleOnly && <p className="mb-2 text-xs text-slate-500">Avaliação ou retorno: produtos são opcionais. Para fechar sem cobrança, deixe o valor a pagar em R$ 0,00. Sem produtos, não será gerado um lançamento de procedimentos.</p>}{error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}<div className="flex justify-end gap-3"><button type="button" onClick={onCancel} className="rounded border border-orange-500 px-4 py-2 text-sm font-semibold text-orange-600">Cancelar</button>{onDelete && <button type="button" aria-label="Excluir conta fechada" title="Excluir conta fechada" onClick={onDelete} className="rounded-md border border-red-200 p-2 text-red-600 hover:bg-red-50"><Trash2 size={18} /></button>}<button type="submit" className="rounded bg-orange-500 px-5 py-2 text-sm font-bold text-white hover:bg-orange-600">Fechar Conta</button></div></footer>
     </form>
   </div>;
 }

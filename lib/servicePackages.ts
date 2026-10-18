@@ -27,6 +27,7 @@ export function validServicePackage(value: unknown): value is ServicePackage {
 export function packageCheckoutLines(pack: ServicePackage, quantity: number): ProcedureLine[] {
   if (!validServicePackage(pack) || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 10000) throw new Error("Confira os dados e a quantidade do pacote.");
   const total = Math.round(pack.salePrice * 100);
+  const purchaseKey = crypto.randomUUID();
   const weights = pack.items.map(item => item.unitPrice * item.quantity);
   const sum = weights.reduce((a, b) => a + b, 0);
   const units = pack.items.reduce((a, b) => a + b.quantity, 0);
@@ -41,6 +42,7 @@ export function packageCheckoutLines(pack: ServicePackage, quantity: number): Pr
       id: `line-${crypto.randomUUID()}`, serviceId: item.serviceId, manualProcedure: item.name,
       quantity: part.quantity * quantity, servicePrice: part.cents / 100, productCost: 0,
       professionalPercent: pack.commissionPercent, discount: 0, packageId: pack.id, packageName: pack.name,
+      packagePurchaseKey: purchaseKey,
       packageCommissionPercent: pack.commissionPercent, ...(pack.validityEnabled ? { packageValidityMonths: pack.validityMonths } : {})
     }));
   });

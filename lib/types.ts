@@ -113,6 +113,7 @@ export type ProcedureLine = {
   id: string;
   serviceId?: string;
   packageId?: string;
+  packagePurchaseKey?: string;
   packageName?: string;
   packageCommissionPercent?: number;
   packageValidityMonths?: number;
@@ -153,6 +154,7 @@ export type FinancialEntry = {
 
 // Billing is stored separately from the independently editable procedure ledger.
 export type ClosedAccount = FinancialEntry & {
+  packageSessionUses?: import("./packageSessions").PackageSessionUse[];
   checkoutNotes?: string;
   clinicPatient?: boolean;
   creditAdded?: number;

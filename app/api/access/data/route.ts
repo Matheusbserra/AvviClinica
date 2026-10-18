@@ -1,4 +1,5 @@
 import { validServicePackage } from "@/lib/servicePackages";
+import { hasPackageSessionData, packageSessionError, validPackageSessionUses } from "@/lib/packageSessions";
 import { createClient } from "@supabase/supabase-js";
 import { createHash } from "node:crypto";
 import type { AppUser } from "@/lib/access";
@@ -132,10 +133,17 @@ export async function POST(request: Request) {
       }
     }
     const appointmentUpdates = upserts.filter((row) => row.entity === "appointments").map((row) => row.data as Appointment);
+    if (appointmentUpdates.some(item => item.closedAccount?.packageSessionUses !== undefined && !validPackageSessionUses(item.closedAccount.packageSessionUses))) return Response.json({ error: "Confira os pacotes e as sessões utilizadas." }, { status: 409, headers });
     const stockUpdates = upserts.filter(row => ["inventory", "gifts"].includes(row.entity));
     const stockRestricted = user.role === "standard" && !canMoveStock(user);
     const deletedAppointments = removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids);
     const stored = appointmentUpdates.length || deletedAppointments.length || stockRestricted && stockUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
+    const packageSensitive = [...appointmentUpdates, ...stored.filter(item => deletedAppointments.includes(item.id) || appointmentUpdates.some(next => next.id === item.id))].some(hasPackageSessionData);
+    if (packageSensitive) {
+      const effective = [...stored.filter(item => !deletedAppointments.includes(item.id) && !appointmentUpdates.some(next => next.id === item.id)), ...appointmentUpdates];
+      const packageError = packageSessionError(effective);
+      if (packageError) return Response.json({ error: packageError }, { status: 409, headers });
+    }
     if (stockRestricted) {
       if (removed.some(item => ["inventory", "gifts"].includes(item.entity) && item.ids?.length)) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
       if (stockUpdates.length) {
@@ -265,6 +273,16 @@ export async function POST(request: Request) {
           : entries.has(row.record_id) || (row.data.sourceAccountId && appointmentUpdates.some((appointment) => appointment.id === row.data.appointmentId && !appointment.accountClosed)));
         if (!permitted) return Response.json({ error: "Exclusão financeira restrita ao administrador." }, { status: 403, headers });
       }
+    }
+    if (packageSensitive) {
+      if (!process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) return Response.json({ error: "Configure SUPABASE_SERVICE_ROLE_KEY no servidor para salvar sessões de pacotes." }, { status: 503, headers });
+      const { error } = await db.rpc("avvi_save_package_checkout", { p_upserts: upserts, p_removed: removed });
+      if (error) {
+        if (error.code === "PGRST202" || error.code === "42883") return Response.json({ error: "Execute supabase/package-sessions.sql no SQL Editor para habilitar as sessões de pacotes. Os registros existentes serão preservados." }, { status: 503, headers });
+        if (error.code === "P0001") return Response.json({ error: error.message }, { status: 409, headers });
+        throw error;
+      }
+      return Response.json({ saved: true }, { headers });
     }
     for (const item of removed) for (let offset = 0; offset < item.ids.length; offset += 50) {
       const { error } = await db.from("avvi_records").delete().eq("entity", item.entity).in("record_id", item.ids.slice(offset, offset + 50)); if (error) throw error;

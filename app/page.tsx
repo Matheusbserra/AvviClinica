@@ -66,6 +66,7 @@ import { PatientRegistrationEditor } from "@/app/components/PatientRegistrationE
 import { ClinicalDialog } from "@/app/components/ClinicalDialog";
 import { PackagesView } from "@/app/components/PackagesView";
 import type { ServicePackage } from "@/lib/servicePackages";
+import { packageSessionError, isPackageSessionTreatment } from "@/lib/packageSessions";
 import { SearchSelect } from "@/app/components/SearchSelect";
 import { History } from "lucide-react";
 import { UltraformerView } from "@/app/components/UltraformerView";
@@ -1130,11 +1131,12 @@ export default function Home() {
       manualProcedure: service?.name ?? procedure?.name ?? "", quantity: 1,
       servicePrice: appointment.servicePrice ?? procedure?.price ?? 0, productCost: 0,
       professionalPercent: professionals.find((item) => item.id === appointment.professionalId)?.commissionPercent ?? 0, discount: 0 }] : [];
-    const existingLines = existing?.procedureLines?.length ? existing.procedureLines : existing ? [entryToLine(existing)] : initialLines;
+    const existingLines = existing?.procedureLines && (existing.procedureLines.length || appointment.closedAccount?.packageSessionUses?.length) ? existing.procedureLines : existing ? [entryToLine(existing)] : initialLines;
     const restoredItems = existing ? restoreCheckoutItems(existingLines, existing.products, procedures, services) : { lines: initialLines, products: [] };
     return { appointment, client: { ...client, ...(useAppointmentForm ? { email: appointmentForm.email.trim(), gender: appointmentForm.gender } : {}) }, professional: professionals.find((item) => item.id === appointment.professionalId),
       lines: distributeCheckoutDiscount(restoredItems.lines, existing?.commercialDiscount ?? 0), products: restoredItems.products, gifts: appointment.closedAccount?.gifts?.map((gift) => ({ ...gift })) ?? [], ultraformerShots: appointment.closedAccount?.ultraformerShots?.map(shot => ({ ...shot })) ?? [],
       payments: existing?.payments.map((payment) => ({ ...payment })) ?? [], entryId: existing?.id,
+      packageSessionUses: appointment.closedAccount?.packageSessionUses?.map(use => ({ ...use })) ?? [],
       discountSplit: existing?.discountSplit ?? "Empresa e profissional dividem", notes: originalAppointmentNotes(existing?.notes ?? appointment.notes), checkoutNotes: appointment.closedAccount?.checkoutNotes ?? "",
       storedCreditPayments: appointment.closedAccount?.creditPayments, previousCreditAdded: appointment.closedAccount?.creditAdded ?? 0, clinicPatient: appointment.closedAccount?.clinicPatient, previousFutureCredit: futureCreditUsed(existing) };
   }
@@ -1170,7 +1172,7 @@ export default function Home() {
   }
 
   function finishCheckout(result: CheckoutResult) {
-    if (!checkoutDraft || (!result.products.length && !result.ultraformerShots.length && !checkoutAllowsNoProducts(result.lines, services))) return;
+    if (!checkoutDraft || (!result.products.length && !result.ultraformerShots.length && !(result.lines.length && result.lines.every(line => !!line.packageId) && !result.packageSessionUses.length) && !checkoutAllowsNoProducts([...result.lines, ...result.packageSessionUses.map(use => ({ serviceId: use.serviceId, manualProcedure: use.serviceName, quantity: use.quantity }))], services))) return;
     const currentAppointment = appointments.find((appointment) => appointment.id === checkoutDraft.appointment.id);
     if (!currentAppointment?.patientId) return;
     if (currentAppointment.status === "Cancelado") {
@@ -1188,6 +1190,7 @@ export default function Home() {
       professionalId: currentAppointment.professionalId, accountClosed: true, balanceDue: result.balanceDue,
       closedAt: new Date().toISOString(), change: result.change, creditAdded: result.creditAdded, creditPayments: result.creditPayments.map(payment=>({...payment,fee:payment.method === "Crédito" ? calculateCardFee(payment.amount,payment.cardBrand,payment.installments) : payment.method === "Débito" ? calculateDebitFee(payment.amount) : 0})), clinicPatient: result.clinicPatient,
       procedureLines: result.lines.map((line) => ({ ...line })), products: result.products.map((product) => ({ ...product })), gifts: result.gifts.map((gift) => ({ ...gift })), ultraformerShots: result.ultraformerShots.map(shot => ({ ...shot })),
+      packageSessionUses: result.packageSessionUses.map(use => ({ ...use })),
       procedureId: undefined, manualProcedure: first?.manualProcedure, quantity: first?.quantity ?? 1,
       servicePrice: first?.servicePrice ?? 0, productCost: 0, machineFee: 0,
       commercialDiscount: result.discount, discountSplit: checkoutDraft.discountSplit,
@@ -1197,6 +1200,8 @@ export default function Home() {
         fee: payment.method === "Crédito" ? calculateCardFee(payment.amount, payment.cardBrand, payment.installments)
           : payment.method === "Débito" ? calculateDebitFee(payment.amount) : 0 }))
     };
+    const packageError = packageSessionError(appointments.map(item => item.id === currentAppointment.id ? { ...item, accountClosed: true, closedAccount: account } : item));
+    if (packageError) { window.alert(packageError); return; }
     let nextTips: UltraformerTip[];
     try { nextTips = applyCheckoutUltraformer(ultraformerTips, { ...currentAppointment, accountClosed: true, closedAccount: account }, result.client.name.trim(), professional?.name ?? "Profissional", { id: currentUser.id ?? currentUser.login, login: currentUser.login, name: currentUser.name?.trim() || currentUser.login }); }
     catch (error) { window.alert(error instanceof Error ? error.message : "Confira os disparos do Ultraformer."); return; }
@@ -1210,9 +1215,10 @@ export default function Home() {
       const preserved = current.filter((entry) => entry.id !== legacyEntryId && (result.total > 0 || entry.sourceAccountId !== accountId));
       return procedureEntry && !preserved.some((entry) => entry.id === procedureEntry.id) ? [procedureEntry, ...preserved] : preserved;
     });
-    const stockUpdate = applyCheckoutInventory(inventory, currentAppointment.stockConsumption, result.total > 0 ? result.products : []);
+    const consumesStock = result.total > 0 || isPackageSessionTreatment(account);
+    const stockUpdate = applyCheckoutInventory(inventory, currentAppointment.stockConsumption, consumesStock ? result.products : []);
     setInventory(stockUpdate.inventory);
-    const giftUpdate = applyCheckoutGifts(gifts, currentAppointment.giftConsumption ?? currentAppointment.closedAccount?.gifts, result.total > 0 ? result.gifts : []);
+    const giftUpdate = applyCheckoutGifts(gifts, currentAppointment.giftConsumption ?? currentAppointment.closedAccount?.gifts, consumesStock ? result.gifts : []);
     setGifts(giftUpdate.gifts);
     const creditAdjustments = new Map<string, number>();
     if (previousAccount) creditAdjustments.set(previousAccount.patientId, futureCreditUsed(previousAccount)-(currentAppointment.closedAccount?.creditAdded ?? 0));
@@ -1240,6 +1246,8 @@ export default function Home() {
     if (!appointment) return false;
     const account = appointment.closedAccount ?? entries.find((entry) => entry.accountClosed && (entry.id === appointment.financialEntryId || entry.appointmentId === appointment.id));
     if (!appointment.accountClosed && !account) return false;
+    const packageError = packageSessionError(appointments.map(item => item.id === appointmentId ? { ...item, accountClosed: false, closedAccount: undefined } : item));
+    if (packageError) { window.alert(packageError); return false; }
     const existingCredit = Number(patients.find(item=>item.id===(account?.patientId??appointment.patientId))?.futureCredit)||0;
     if(existingCredit+futureCreditUsed(account)<(appointment.closedAccount?.creditAdded??0)){window.alert("O crédito deste fechamento já foi utilizado. Estorne primeiro a conta em que ele foi usado.");return false;}
     const linked = entries.filter((entry) => account ? entry.sourceAccountId === account.id || entry.id === account.id || entry.id === appointment.closedAccount?.generatedEntryId : entry.id === appointment.financialEntryId);

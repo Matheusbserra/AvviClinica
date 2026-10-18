@@ -1,6 +1,7 @@
 import { applyCheckoutInventory } from "./inventory";
 import { applyCheckoutGifts } from "./gifts";
 import { checkoutTotals } from "./checkout";
+import { isPackageSessionTreatment } from "./packageSessions";
 import type { Appointment, InventoryItem, GiftStockItem } from "./types";
 
 const stable = (value: unknown): string => JSON.stringify(value, (_key, item) =>
@@ -19,7 +20,7 @@ export function checkoutStockUpdates(
     .map(item => ({ ...item, accountClosed: false, closedAccount: undefined, stockConsumption: [], giftConsumption: [] }));
   for (const next of [...appointments, ...deleted]) {
     const old = previous.find(item => item.id === next.id);
-    const paidAccount = next.accountClosed && next.closedAccount && checkoutTotals(next.closedAccount.procedureLines, next.closedAccount.payments ?? []).total > 0;
+    const paidAccount = next.accountClosed && next.closedAccount && (checkoutTotals(next.closedAccount.procedureLines, next.closedAccount.payments ?? []).total > 0 || isPackageSessionTreatment(next.closedAccount));
     const products = paidAccount ? next.closedAccount!.products : [];
     const selectedGifts = paidAccount ? next.closedAccount!.gifts ?? [] : [];
     if (!Array.isArray(products) || !Array.isArray(selectedGifts) ||
