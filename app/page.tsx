@@ -1182,7 +1182,7 @@ export default function Home() {
     const previousAccount = currentAppointment.closedAccount ?? entries.find((entry) => !entry.sourceAccountId && entry.accountClosed && entry.id === checkoutDraft.entryId);
     const creditBalance=Number(patients.find(patient=>patient.id===currentAppointment.patientId)?.futureCredit)||0;
     if(creditBalance+futureCreditUsed(previousAccount)-(currentAppointment.closedAccount?.creditAdded??0)+result.creditAdded-result.payments.filter(payment=>payment.method==="Crédito Futuro").reduce((sum,payment)=>sum+payment.amount,0)<-0.001){window.alert("O crédito deste fechamento já foi utilizado. Estorne primeiro a conta em que ele foi usado.");return;}
-    const accountId = previousAccount?.id ?? id("account");
+    const accountId = previousAccount?.id ?? result.accountId;
     const professional = professionals.find((item) => item.id === currentAppointment.professionalId);
     const first = result.lines[0];
     const account: ClosedAccount = {

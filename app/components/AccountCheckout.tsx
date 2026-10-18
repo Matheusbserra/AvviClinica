@@ -5,7 +5,7 @@ import { SearchSelect } from "./SearchSelect";
 import { packageCheckoutLines } from "@/lib/servicePackages";
 import type { ServicePackage } from "@/lib/servicePackages";
 import { patientPackageBalances, validPackageSessionUses } from "@/lib/packageSessions";
-import type { PackageSessionUse } from "@/lib/packageSessions";
+import type { PackageSessionBalance, PackageSessionUse } from "@/lib/packageSessions";
 import { availableUltraformerTips, validCheckoutShots } from "@/lib/ultraformer";
 import { currency } from "@/lib/calculations";
 import { checkoutTotals, checkoutCommission, settleCheckoutPayments, checkoutAllowsNoProducts, moneyRound, paymentChoiceKey, paymentChoices, toggleCheckoutPayment } from "@/lib/checkout";
@@ -17,12 +17,13 @@ export type CheckoutDraft = {
   packageSessionUses?: PackageSessionUse[];
   discountSplit: DiscountSplit; notes: string; checkoutNotes?: string; previousFutureCredit: number; previousCreditAdded?: number; storedCreditPayments?: PaymentItem[]; clinicPatient?: boolean;
 };
-export type CheckoutResult = { client: Patient; lines: ProcedureLine[]; products: ProductUsage[]; gifts: GiftUsage[]; ultraformerShots: UltraformerShots[]; packageSessionUses: PackageSessionUse[]; payments: PaymentItem[]; total: number; discount: number; balanceDue: number; change: number; creditAdded: number; creditPayments: PaymentItem[]; clinicPatient: boolean; checkoutNotes: string };
+export type CheckoutResult = { accountId: string; client: Patient; lines: ProcedureLine[]; products: ProductUsage[]; gifts: GiftUsage[]; ultraformerShots: UltraformerShots[]; packageSessionUses: PackageSessionUse[]; payments: PaymentItem[]; total: number; discount: number; balanceDue: number; change: number; creditAdded: number; creditPayments: PaymentItem[]; clinicPatient: boolean; checkoutNotes: string };
 
 export function AccountCheckout({ draft, gifts, procedures, services, packages = [], ultraformerTips, appointments, onCancel, onConfirm, onDelete }: {
   draft: CheckoutDraft; ultraformerTips: UltraformerTip[]; gifts: GiftStockItem[]; procedures: Procedure[]; services: Service[]; packages?: ServicePackage[]; appointments: Appointment[];
   onDelete?: () => void; onCancel: () => void; onConfirm: (result: CheckoutResult) => void;
 }) {
+  const [checkoutAccountId] = useState(() => draft.appointment.closedAccount?.id ?? draft.entryId ?? `account-${crypto.randomUUID()}`);
   const [client, setClient] = useState({ ...draft.client });
   const [checkoutNotes, setCheckoutNotes] = useState(draft.checkoutNotes ?? "");
   const [lines, setLines] = useState(() => draft.lines.map((line) => ({ ...line })));
@@ -43,10 +44,19 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
   const [packageSessionUses, setPackageSessionUses] = useState(() => (draft.packageSessionUses ?? []).map(use => ({ ...use })));
   const [balanceId, setBalanceId] = useState("");
   const [sessionQuantity, setSessionQuantity] = useState(1);
-  const packageBalances = patientPackageBalances(appointments, client.id, draft.appointment.id);
   const treatmentDate = draft.appointment.startsAt.slice(0, 10);
+  const currentSale: Appointment = { ...draft.appointment, patientId: client.id, accountClosed: true, closedAccount: {
+    id: checkoutAccountId, patientId: client.id, professionalId: draft.appointment.professionalId,
+    date: treatmentDate, quantity: 1, servicePrice: 0, productCost: 0, machineFee: 0, professionalPercent: 0,
+    commercialDiscount: lines.reduce((sum, line) => sum + (line.discount ?? 0), 0), discountSplit: draft.discountSplit,
+    notes: draft.notes, procedureLines: lines, products, payments
+  } };
+  const withCurrentSale = (sale: Appointment) => [...appointments.filter(item => item.id !== sale.id), sale];
+  const packageBalances = patientPackageBalances(withCurrentSale(currentSale), client.id, draft.appointment.id);
+  // Preview the purchased sessions before entering payment. Saving still requires a fully paid sale.
+  const saleBalances = patientPackageBalances(withCurrentSale({ ...currentSale, closedAccount: { ...currentSale.closedAccount!, payments: [{ id: "preview", method: "Pix", amount: lines.reduce((sum, line) => sum + line.quantity * line.servicePrice, 0), fee: 0, discount: 0 }] } }), client.id, draft.appointment.id).filter(balance => balance.sourceAppointmentId === draft.appointment.id);
   const usableBalances = packageBalances.filter(balance => balance.purchasedOn <= treatmentDate && (!balance.expiresOn || balance.expiresOn >= treatmentDate));
-  const balanceOptions = usableBalances.map(balance => {
+  const balanceOptions = usableBalances.filter(balance => balance.sourceAppointmentId !== draft.appointment.id).map(balance => {
     const selected = packageSessionUses.find(use => use.sourceAppointmentId === balance.sourceAppointmentId && use.sourceAccountId === balance.sourceAccountId && use.purchaseKey === balance.purchaseKey && use.serviceId === balance.serviceId)?.quantity ?? 0;
     const remaining = balance.remaining - selected;
     return { id: balance.id, remaining, name: `${balance.packageName} · ${balance.serviceName} · ${remaining} sessões · ${displayDate(balance.purchasedOn)}` };
@@ -112,14 +122,13 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
     try { const added = packageCheckoutLines(pack, packageQuantity); setLines(current => [...current, ...added]); setPackageId(""); setPackageQuantity(1); setAdding(null); setError(""); }
     catch (error) { setError(error instanceof Error ? error.message : "Confira o pacote."); }
   }
-  function usePackage() {
-    const balance = usableBalances.find(item => item.id === balanceId);
+  function consumePackageSessions(balance: PackageSessionBalance | undefined, quantity: number) {
     const existing = packageSessionUses.find(item => item.sourceAppointmentId === balance?.sourceAppointmentId && item.sourceAccountId === balance?.sourceAccountId && item.purchaseKey === balance?.purchaseKey && item.serviceId === balance?.serviceId);
-    if (!balance || !Number.isSafeInteger(sessionQuantity) || sessionQuantity < 1 || (existing?.quantity ?? 0) + sessionQuantity > balance.remaining) { setError("Confira o saldo e a quantidade de sessões do pacote."); return; }
-    const use: PackageSessionUse = { id: existing?.id ?? crypto.randomUUID(), sourceAppointmentId: balance.sourceAppointmentId, sourceAccountId: balance.sourceAccountId, purchaseKey: balance.purchaseKey, packageId: balance.packageId, packageName: balance.packageName, serviceId: balance.serviceId, serviceName: balance.serviceName, quantity: (existing?.quantity ?? 0) + sessionQuantity };
+    if (!balance || !Number.isSafeInteger(quantity) || quantity < 1 || (existing?.quantity ?? 0) + quantity > balance.remaining) { setError("Confira o saldo e a quantidade de sessões do pacote."); return; }
+    const use: PackageSessionUse = { id: existing?.id ?? crypto.randomUUID(), sourceAppointmentId: balance.sourceAppointmentId, sourceAccountId: balance.sourceAccountId, purchaseKey: balance.purchaseKey, packageId: balance.packageId, packageName: balance.packageName, serviceId: balance.serviceId, serviceName: balance.serviceName, quantity: (existing?.quantity ?? 0) + quantity };
     setPackageSessionUses(current => existing ? current.map(item => item.id === existing.id ? use : item) : [...current, use]);
     // A prepaid session replaces the matching ordinary service charge.
-    let covered = sessionQuantity;
+    let covered = quantity;
     setLines(current => current.flatMap(line => {
       if (line.packageId || line.serviceId !== balance.serviceId || covered <= 0) return [line];
       const removed = Math.min(covered, line.quantity); covered -= removed;
@@ -159,7 +168,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
   function confirm(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!client.name.trim() || !lines.length && !packageSessionUses.length) { setError("Informe o cliente e adicione ao menos um serviço à conta."); return; }
-    if (!validPackageSessionUses(packageSessionUses) || packageSessionUses.some(use => !usableBalances.some(balance => balance.sourceAppointmentId === use.sourceAppointmentId && balance.sourceAccountId === use.sourceAccountId && balance.purchaseKey === use.purchaseKey && balance.serviceId === use.serviceId && balance.remaining >= use.quantity))) { setError("O pacote está vencido ou não possui sessões suficientes. Atualize os dados e confira o saldo."); return; }
+    if (!validPackageSessionUses(packageSessionUses) || packageSessionUses.some(use => !usableBalances.some(balance => balance.sourceAppointmentId === use.sourceAppointmentId && balance.sourceAccountId === use.sourceAccountId && balance.purchaseKey === use.purchaseKey && balance.serviceId === use.serviceId && balance.remaining >= use.quantity))) { setError("Confira o pagamento integral do pacote, a validade e o saldo de sessões."); return; }
     if (lines.some((line) => !Number.isInteger(line.quantity) || line.quantity <= 0 || !Number.isFinite(line.servicePrice) || line.servicePrice < 0
       || !Number.isFinite(line.discount ?? 0) || (line.discount ?? 0) < 0 || (line.discount ?? 0) > moneyRound(line.quantity * line.servicePrice))) {
       setError("Confira as quantidades, os preços e os descontos dos itens."); return;
@@ -175,7 +184,7 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
     try {
       const settled = settleCheckoutPayments(payments,totals.change,keepCredit);
       const professionalPercent=checkoutCommission(draft.professional?.commissionPercent??0,clinicPatient);
-      onConfirm({ client, lines: lines.map(line=>({...line,professionalPercent: line.packageCommissionPercent === undefined ? professionalPercent : checkoutCommission(line.packageCommissionPercent,clinicPatient)})), products, gifts: selectedGifts, ultraformerShots: selectedShots, packageSessionUses, ...settled, clinicPatient, checkoutNotes, total: totals.total, discount: totals.discount, balanceDue: totals.remaining });
+      onConfirm({ accountId: checkoutAccountId, client, lines: lines.map(line=>({...line,professionalPercent: line.packageCommissionPercent === undefined ? professionalPercent : checkoutCommission(line.packageCommissionPercent,clinicPatient)})), products, gifts: selectedGifts, ultraformerShots: selectedShots, packageSessionUses, ...settled, clinicPatient, checkoutNotes, total: totals.total, discount: totals.discount, balanceDue: totals.remaining });
     } catch (error) {setError(error instanceof Error?error.message:"Confira os pagamentos.");}
 
   }
@@ -207,8 +216,12 @@ export function AccountCheckout({ draft, gifts, procedures, services, packages =
             <button type="button" disabled={!packageId || !Number.isSafeInteger(packageQuantity) || packageQuantity < 1 || packageQuantity > 10000} onClick={addPackage} className="self-end rounded-md bg-avvi-blue px-3 py-2 text-sm font-bold text-white disabled:opacity-40">Adicionar pacote</button>
             {packageId && <p className="text-xs text-slate-600 sm:col-span-3">{currency((packages.find(pack => pack.id === packageId)?.salePrice ?? 0) * packageQuantity)} · {packages.find(pack => pack.id === packageId)?.items.map(item => `${item.quantity * packageQuantity}× ${item.name}`).join(" · ")}</p>}
             {!packages.some(pack => pack.active) && <p className="text-xs text-slate-500 sm:col-span-3">Cadastre um pacote em Cadastro de Serviços → Pacotes.</p>}
-          </div> : <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]"><label className="min-w-0 text-xs font-semibold">Pacote do paciente<SearchSelect label="Pacote já pago do paciente" options={balanceOptions} value={balanceId} onChange={setBalanceId}/></label><label className="text-xs font-semibold">Sessões<input aria-label="Sessões do pacote a utilizar" className="input mt-1" type="number" min={1} max={10000} step={1} value={sessionQuantity} onChange={event => setSessionQuantity(Number(event.target.value))}/></label><button type="button" disabled={!balanceId} onClick={usePackage} className="self-end rounded-md bg-avvi-blue px-3 py-2 text-sm font-bold text-white disabled:opacity-40">Utilizar sessões</button>{!balanceOptions.length && <p className="text-xs text-slate-600 sm:col-span-3">Este paciente não possui sessões disponíveis em um pacote pago.</p>}</div>}</div>}
-          {!!packageSessionUses.length && <section aria-label="Sessões de pacotes utilizadas" className="mb-4 rounded-lg border border-avvi-line bg-avvi-soft p-3"><h3 className="text-xs font-bold text-avvi-blue">Pacotes já pagos</h3>{packageSessionUses.map(use => <div key={use.id} className="mt-2 flex items-center justify-between gap-3 text-xs"><div><strong>{use.packageName}</strong><p>{use.serviceName} · {use.quantity} sessão(ões) · Sem nova cobrança</p></div><button type="button" aria-label={`Remover utilização de ${use.serviceName}`} onClick={() => setPackageSessionUses(current => current.filter(item => item.id !== use.id))} className="rounded p-2 text-red-500"><Trash2 size={15}/></button></div>)}</section>}
+          </div> : <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]"><label className="min-w-0 text-xs font-semibold">Pacote do paciente<SearchSelect label="Pacote já pago do paciente" options={balanceOptions} value={balanceId} onChange={setBalanceId}/></label><label className="text-xs font-semibold">Sessões<input aria-label="Sessões do pacote a utilizar" className="input mt-1" type="number" min={1} max={10000} step={1} value={sessionQuantity} onChange={event => setSessionQuantity(Number(event.target.value))}/></label><button type="button" disabled={!balanceId} onClick={() => consumePackageSessions(usableBalances.find(item => item.id === balanceId), sessionQuantity)} className="self-end rounded-md bg-avvi-blue px-3 py-2 text-sm font-bold text-white disabled:opacity-40">Utilizar sessões</button>{!balanceOptions.length && <p className="text-xs text-slate-600 sm:col-span-3">Este paciente não possui sessões disponíveis em um pacote pago.</p>}</div>}</div>}
+          {!!saleBalances.length && <section aria-label="Consumir pacote nesta conta" className="mb-4 rounded-lg border border-avvi-line p-3"><h3 className="text-xs font-bold text-avvi-blue">Pacotes nesta conta</h3>{saleBalances.map(balance => {
+            const consumed = packageSessionUses.find(use => use.sourceAppointmentId === balance.sourceAppointmentId && use.sourceAccountId === balance.sourceAccountId && use.purchaseKey === balance.purchaseKey && use.serviceId === balance.serviceId)?.quantity ?? 0;
+            return <div key={balance.id} className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs"><div><strong>{balance.packageName}</strong><p>{balance.serviceName} · {balance.remaining - consumed} sessão(ões) restantes</p></div><button type="button" aria-label={`Consumir uma sessão de ${balance.serviceName}`} disabled={consumed >= balance.remaining} onClick={() => consumePackageSessions(balance, 1)} className="rounded-md bg-avvi-blue px-3 py-2 font-bold text-white disabled:opacity-40">Consumir uma sessão</button></div>;
+          })}</section>}
+          {!!packageSessionUses.length && <section aria-label="Sessões de pacotes utilizadas" className="mb-4 rounded-lg border border-avvi-line bg-avvi-soft p-3"><h3 className="text-xs font-bold text-avvi-blue">Utilização de pacotes</h3>{packageSessionUses.map(use => <div key={use.id} className="mt-2 flex items-center justify-between gap-3 text-xs"><div><strong>{use.packageName}</strong><p>{use.serviceName} · {use.quantity} sessão(ões) · Sem nova cobrança</p></div><button type="button" aria-label={`Remover utilização de ${use.serviceName}`} onClick={() => setPackageSessionUses(current => current.filter(item => item.id !== use.id))} className="rounded p-2 text-red-500"><Trash2 size={15}/></button></div>)}</section>}
           {adding === "product" && <div className="mb-4 grid gap-3 rounded-md border border-lime-200 bg-lime-50 p-3 sm:grid-cols-[1fr_100px_auto]">
             <label className="text-xs font-semibold">Produto<SearchSelect label="Adicionar produto ao consumo" options={procedures} value={procedureId} onChange={setProcedureId}/></label>
             <label className="text-xs font-semibold">Quantidade<input aria-label="Quantidade do produto a adicionar" className="input mt-1" type="number" min={1} step={1} value={procedureQuantity} onChange={(event) => setProcedureQuantity(Number(event.target.value))} /></label>

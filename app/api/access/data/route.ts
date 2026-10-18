@@ -80,10 +80,46 @@ export async function GET(request: Request) {
     return Response.json(await permittedRecords(user, entity), { headers });
   } catch { return Response.json({ error: "Não foi possível consultar os dados permitidos na nuvem." }, { status: 503, headers }); }
 }
-export async function POST(request: Request) {
+// Use the existing JSON table for a shared lease, including across server instances.
+// It is private to the gateway and is never included in a user's entity snapshot.
+const packageLockEntity = "_package_checkout_lock";
+async function packageLockedSave(request: Request, db: ReturnType<typeof database>): Promise<Response> {
+  const owner = crypto.randomUUID(), expiresAt = new Date(Date.now() + 300000).toISOString();
+  const lease = { entity: packageLockEntity, record_id: "checkout", data: { owner, expiresAt } };
+  let acquired = false;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const inserted = await db.from("avvi_records").insert(lease);
+    if (!inserted.error) { acquired = true; break; }
+    const previous = await db.from("avvi_records").select("data").eq("entity", packageLockEntity).eq("record_id", "checkout").maybeSingle();
+    if (previous.error) throw previous.error;
+    // A lost HTTP acknowledgement must not strand our own successful insertion.
+    if (previous.data?.data.owner === owner) { acquired = true; break; }
+    if (inserted.error.code !== "23505") throw inserted.error;
+    if (previous.data && previous.data.data.expiresAt < new Date().toISOString()) {
+      const claimed = await db.from("avvi_records").update({ data: lease.data }).eq("entity", packageLockEntity).eq("record_id", "checkout").eq("data", JSON.stringify(previous.data.data)).select("record_id");
+      if (claimed.error) throw claimed.error;
+      if (claimed.data?.length) { acquired = true; break; }
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (!acquired) return Response.json({ error: "Outro fechamento de pacote está sendo salvo. Tente novamente em instantes; suas alterações continuam pendentes." }, { status: 409, headers });
+  const ownsLease = async () => {
+    const result = await db.from("avvi_records").select("data").eq("entity", packageLockEntity).eq("record_id", "checkout").eq("data->>owner", owner).maybeSingle();
+    if (result.error) throw result.error;
+    // Leave a full HTTP timeout before expiry; never start a write on an old lease.
+    return !!result.data && Date.parse(result.data.data.expiresAt) - Date.now() > 30000;
+  };
+  try { return await saveData(request, ownsLease); }
+  finally {
+    await db.from("avvi_records").delete().eq("entity", packageLockEntity).eq("record_id", "checkout").eq("data->>owner", owner);
+  }
+}
+export async function POST(request: Request) { return saveData(request); }
+async function saveData(request: Request, ownsPackageLease?: () => Promise<boolean>): Promise<Response> {
   const user = await resolveAccess(request); if (!user) return Response.json({ error: "Autentique-se novamente." }, { status: 401, headers });
   if (!sameOrigin(request)) return Response.json({ error: "Origem não autorizada." }, { status: 403, headers });
   try {
+    const retryRequest = request.clone();
     const { upserts = [], removed = [] } = await request.json();
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
     const db = database();
@@ -276,15 +312,25 @@ export async function POST(request: Request) {
     }
     if (packageSensitive) {
       if (!process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) return Response.json({ error: "Configure SUPABASE_SERVICE_ROLE_KEY no servidor para salvar sessões de pacotes." }, { status: 503, headers });
-      const { error } = await db.rpc("avvi_save_package_checkout", { p_upserts: upserts, p_removed: removed });
-      if (error) {
-        if (error.code === "PGRST202" || error.code === "42883") return Response.json({ error: "Execute supabase/package-sessions.sql no SQL Editor para habilitar as sessões de pacotes. Os registros existentes serão preservados." }, { status: 503, headers });
-        if (error.code === "P0001") return Response.json({ error: error.message }, { status: 409, headers });
-        throw error;
+      // Re-run validation after taking the shared lease, using current cloud rows.
+      if (!ownsPackageLease) return await packageLockedSave(retryRequest, db);
+      if (!await ownsPackageLease()) return Response.json({ error: "Atualize os dados e tente salvar o pacote novamente." }, { status: 409, headers });
+      const consumesCurrentSale = appointmentUpdates.some(item => item.closedAccount?.packageSessionUses?.some(use => use.sourceAppointmentId === item.id));
+      // Older installed functions do not support consuming the sale being closed.
+      if (!consumesCurrentSale) {
+        const { error } = await db.rpc("avvi_save_package_checkout", { p_upserts: upserts, p_removed: removed });
+        if (!error) return Response.json({ saved: true }, { headers });
+        if (error.code !== "PGRST202" && error.code !== "42883") {
+          if (error.code === "P0001") return Response.json({ error: error.message }, { status: 409, headers });
+          throw error;
+        }
       }
-      return Response.json({ saved: true }, { headers });
+      // No extra SQL is required: the account already contains its paid sessions.
+      // Older installations use the same CRUD path as other account closures.
     }
+    const checkPackageLease = async () => { if (ownsPackageLease && !await ownsPackageLease()) throw new Error("A coordenação do fechamento expirou. Tente salvar novamente."); };
     for (const item of removed) for (let offset = 0; offset < item.ids.length; offset += 50) {
+      await checkPackageLease();
       const { error } = await db.from("avvi_records").delete().eq("entity", item.entity).in("record_id", item.ids.slice(offset, offset + 50)); if (error) throw error;
     }
     // Removing a closed account reverses its derived records even though restricted rows are not loaded by this user.
@@ -294,6 +340,7 @@ export async function POST(request: Request) {
         for (const entity of ["revenues", "fixed_costs", "financial_entries"]) {
           const ids = [old.closedAccount?.id, old.financialEntryId, old.closedAccount?.generatedEntryId].filter(Boolean);
           for (const id of ids) {
+            await checkPackageLease();
             const field = entity === "financial_entries" ? "sourceAccountId" : "sourceFinancialEntryId";
             const { error } = await db.from("avvi_records").delete().eq("entity", entity).eq(`data->>${field}`, id); if (error) throw error;
           }
@@ -301,7 +348,7 @@ export async function POST(request: Request) {
       }
     }
     // Write the account/stock state last: retries retain the stored account links until all reversals finish.
-    if (upserts.length) { const { error } = await db.from("avvi_records").upsert(upserts, { onConflict: "entity,record_id" }); if (error) throw error; }
+    if (upserts.length) { await checkPackageLease(); const { error } = await db.from("avvi_records").upsert(upserts, { onConflict: "entity,record_id" }); if (error) throw error; }
     return Response.json({ saved: true }, { headers });
   } catch { return Response.json({ error: "Não foi possível salvar. Suas alterações continuam pendentes." }, { status: 503, headers }); }
 }

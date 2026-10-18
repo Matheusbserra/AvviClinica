@@ -29,6 +29,14 @@ assert.equal(validPackageSessionUses([sessionUse(balances[0]),{...sessionUse(bal
 const legacy={...sale,closedAccount:{...sale.closedAccount,procedureLines:lines.map(({packagePurchaseKey,...line})=>line)}};
 assert.equal(patientPackageBalances([legacy],'p')[0].purchaseKey,'legacy:pack');assert.equal(patientPackageBalances([legacy],'p')[0].total,6);
 assert.equal(packageExpiry('2024-01-31',1),'2024-02-29');assert.equal(packageExpiry('2026-12-31',2),'2027-02-28');assert.equal(packageExpiry('2026-01-31',0),undefined);
+// Buying and consuming one session at the same checkout keeps the full sale price.
+const immediate={...sale,closedAccount:{...sale.closedAccount,packageSessionUses:[sessionUse(balances[0],1)]}};
+assert.equal(packageSessionError([immediate]),'');
+assert.equal(patientPackageBalances([immediate],'p')[0].remaining,5);
+assert.equal(patientPackageBalances([immediate],'p','sale')[0].remaining,6);
+assert.equal(immediate.closedAccount.payments[0].amount,500);
+assert.match(packageSessionError([{...immediate,closedAccount:{...immediate.closedAccount,payments:[]}}]),/pago/);
+assert.match(packageSessionError([{...immediate,closedAccount:{...immediate.closedAccount,packageSessionUses:[sessionUse(balances[0],7)]}}]),/suficientes/);
 // The valid use date remains valid after expiry; editing history cannot invent sessions.
 assert.equal(packageSessionError(snapshot),'');
 console.log('PASS: paid purchase snapshots, six sessions from two packages, independent purchases, legacy balances, patient/service isolation, exact exhaustion, edit/reversal restoration, unpaid/refunded purchase guards, expiry/month-end, immutable inputs and invalid/duplicate quantities.');

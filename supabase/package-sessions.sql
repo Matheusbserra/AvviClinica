@@ -72,8 +72,7 @@ begin
       v_key := jsonb_build_array(v_use->>'sourceAppointmentId', v_use->>'sourceAccountId', v_use->>'purchaseKey', v_use->>'serviceId')::text;
       v_balance := v_grants->v_key;
       if v_balance is null or v_balance->>'patientId' is distinct from v_appt->>'patientId'
-        or v_balance->>'packageId' is distinct from v_use->>'packageId'
-        or v_use->>'sourceAppointmentId' = v_appt->>'id' then
+        or v_balance->>'packageId' is distinct from v_use->>'packageId' then
         raise exception 'O pacote precisa estar pago e pertencer a este paciente. Confira as utilizações vinculadas.' using errcode = 'P0001';
       end if;
       v_date := (v_account->>'date')::date;

@@ -53,7 +53,7 @@ export function patientPackageBalances(appointments: Appointment[], patientId: s
       if (balance) { balance.used += use.quantity; balance.remaining = balance.total - balance.used; }
     }
   }
-  return [...balances.values()].filter(balance => balance.sourceAppointmentId !== editingAppointmentId);
+  return [...balances.values()];
 }
 export function packageSessionError(appointments: Appointment[]) {
   const byId = new Map(appointments.map(item => [item.id, item])), balances = purchases(appointments);
@@ -64,7 +64,7 @@ export function packageSessionError(appointments: Appointment[]) {
     if (!validPackageSessionUses(account.packageSessionUses)) return "Confira os pacotes e as sessões utilizadas.";
     for (const use of account.packageSessionUses) {
       const source = byId.get(use.sourceAppointmentId), balance = balances.get(key(use));
-      if (!balance || source?.patientId !== appointment.patientId || use.sourceAppointmentId === appointment.id || balance.packageId !== use.packageId) return "O pacote utilizado precisa estar pago e pertencer a este paciente. Restaure a venda ou remova a utilização vinculada.";
+      if (!balance || source?.patientId !== appointment.patientId || balance.packageId !== use.packageId) return "O pacote utilizado precisa estar pago e pertencer a este paciente. Restaure a venda ou remova a utilização vinculada.";
       if (account.date < balance.purchasedOn || balance.expiresOn && account.date > balance.expiresOn) return "A sessão está fora da validade do pacote.";
       balance.used += use.quantity;
       if (balance.used > balance.total) return "O pacote não possui sessões suficientes. Atualize os dados e confira o saldo.";

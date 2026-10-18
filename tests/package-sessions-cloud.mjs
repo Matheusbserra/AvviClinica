@@ -13,27 +13,31 @@ try{
  Object.assign(process.env,{AVVI_SESSION_SECRET:'isolated-package-sessions-secret-2026',NEXT_PUBLIC_SUPABASE_URL:'https://package-sessions-test.supabase.co',NEXT_PUBLIC_SUPABASE_ANON_KEY:'sb_publishable_isolated_test',SUPABASE_SERVICE_ROLE_KEY:'sb_secret_isolated_test',AVVI_LOCAL_ACCOUNTS_DIRECTORY:path.join(dir,'private')});delete process.env.VERCEL;
  const load=name=>import(pathToFileURL(path.join(dir,name+'.mjs'))),auth=await load('accessServer'),route=await load('route'),packages=await load('servicePackages');
  const operator={id:'operator',login:'operator',role:'standard',tabs:['Agenda'],version:1},admin={login:'admin',role:'admin'};
- let missingRpc=false,rpcCalls=0;
+ const noRpc=process.env.AVVI_PACKAGE_TEST_NO_RPC==='1';let missingRpc=noRpc,rpcCalls=0,loseInsertAck=false,rpcFailure=false;
  globalThis.fetch=async(raw,init={})=>{
   const url=new URL(raw),method=init.method??'GET';assert.equal(url.hostname,'package-sessions-test.supabase.co');
   if(url.pathname==='/rest/v1/avvi_user_accounts')return Response.json([operator]);
   if(url.pathname==='/rest/v1/rpc/avvi_save_package_checkout'){
-   rpcCalls++;if(missingRpc)return Response.json({code:'PGRST202',message:'Function unavailable'},{status:404});
+   rpcCalls++;if(rpcFailure)return Response.json({code:'XX000',message:'Isolated database failure'},{status:500});if(missingRpc)return Response.json({code:'PGRST202',message:'Function unavailable'},{status:404});
    const payload=JSON.parse(init.body);
    try{await db.query('select avvi_save_package_checkout($1::jsonb,$2::jsonb)',[JSON.stringify(payload.p_upserts),JSON.stringify(payload.p_removed)]);return Response.json({saved:true});}
    catch(error){return Response.json({code:error.code,message:error.message},{status:400});}
   }
   assert.equal(url.pathname,'/rest/v1/avvi_records');
   if(method==='POST'){
-   const body=JSON.parse(init.body);for(const row of Array.isArray(body)?body:[body])await db.query('insert into avvi_records(entity,record_id,data) values($1,$2,$3) on conflict(entity,record_id) do update set data=excluded.data,updated_at=clock_timestamp()',[row.entity,row.record_id,JSON.stringify(row.data)]);
+   const body=JSON.parse(init.body),merge=new Headers(init.headers).get('prefer')?.includes('resolution=merge-duplicates');
+   try{for(const row of Array.isArray(body)?body:[body])await db.query('insert into avvi_records(entity,record_id,data) values($1,$2,$3)'+(merge?' on conflict(entity,record_id) do update set data=excluded.data,updated_at=clock_timestamp()':''),[row.entity,row.record_id,JSON.stringify(row.data)]);}
+   catch(error){return Response.json({code:error.code,message:error.message},{status:409});}
+   if(loseInsertAck && (Array.isArray(body)?body[0]:body).entity==='_package_checkout_lock'){loseInsertAck=false;return Response.json({code:'NETWORK',message:'Acknowledgement lost'},{status:503});}
    return new Response('[]',{status:201});
   }
   const result=await db.query('select entity,record_id,data,updated_at from avvi_records order by entity,record_id');
   const matches=row=>[...url.searchParams].every(([field,value])=>{
-   const actual=field==='entity'?row.entity:field==='record_id'?row.record_id:field.startsWith('data->>')?row.data[field.slice(7)]:undefined;
-   return actual===undefined||!value.startsWith('eq.')||String(actual)===value.slice(3);
+   const actual=field==='entity'?row.entity:field==='record_id'?row.record_id:field==='data'?JSON.stringify(row.data):field.startsWith('data->>')?row.data[field.slice(7)]:undefined;
+   return actual===undefined||!value.startsWith('eq.')||(field==='data'?JSON.stringify(JSON.parse(String(actual)))===JSON.stringify(JSON.parse(value.slice(3))):String(actual)===value.slice(3));
   });
   const rows=result.rows.filter(matches);
+  if(method==='PATCH'){const body=JSON.parse(init.body);for(const row of rows)await db.query('update avvi_records set data=$3,updated_at=clock_timestamp() where entity=$1 and record_id=$2',[row.entity,row.record_id,JSON.stringify(body.data)]);return Response.json(rows.map(row=>({...row,...body})));}
   if(method==='DELETE'){for(const row of rows)await db.query('delete from avvi_records where entity=$1 and record_id=$2',[row.entity,row.record_id]);return new Response(null,{status:204});}
   const offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500);
   return Response.json(new Headers(init.headers).get('accept')?.includes('vnd.pgrst.object')?(rows[0]??null):rows.slice(offset,offset+limit));
@@ -49,14 +53,14 @@ try{
  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
  let response=await save([row('appointments',sale)]);assert.equal(response.status,503);assert.match((await response.json()).error,/SUPABASE_SERVICE_ROLE_KEY/);assert.equal(await read('appointments','sale'),undefined);
  process.env.SUPABASE_SERVICE_ROLE_KEY='sb_secret_isolated_test';
- missingRpc=true;response=await save([row('appointments',sale)]);assert.equal(response.status,503);assert.match((await response.json()).error,/package-sessions.sql/);assert.equal(await read('appointments','sale'),undefined);missingRpc=false;
+ missingRpc=true;response=await save([row('appointments',sale)]);assert.equal(response.status,200,await response.text());assert.equal((await read('appointments','sale')).closedAccount.id,'sale-account','Missing optional RPC must not prevent saving');missingRpc=noRpc;
  assert.equal((await save([row('appointments',sale)])).status,200);
  const use={id:'u',sourceAppointmentId:'sale',sourceAccountId:'sale-account',purchaseKey:sale.closedAccount.procedureLines[0].packagePurchaseKey,packageId:'pack',packageName:'Pacote QA',serviceId:'s',serviceName:'Serviço QA',quantity:2};
  function treatment(id,hour,uses=[use]){return {id,patientId:'p',professionalId:'pro',startsAt:`2026-10-11T${hour}:00:00`,endsAt:`2026-10-11T${Number(hour)+1}:00:00`,status:'Finalizado',eventType:'Novo Agendamento',accountClosed:true,closedAccount:{id:'account-'+id,appointmentId:id,patientId:'p',professionalId:'pro',accountClosed:true,date:'2026-10-11',procedureLines:[],products:[],payments:[],commercialDiscount:0,packageSessionUses:uses}};}
  const one=treatment('one','10'),two=treatment('two','12'),user={...operator,revision:1};
  assert.equal((await save([row('appointments',one)],null)).status,401);
- // Both requests read the same balance; the real PostgreSQL function rechecks it
- // under its transaction lock. Only one of two 2-session consumptions may commit.
+ // Both requests read the same balance. A shared database lease forces a fresh
+ // validation, even without the optional SQL function, before either can save.
  const responses=await Promise.all([save([row('appointments',one)],user),save([row('appointments',two)],admin)]);
  assert.deepEqual(responses.map(r=>r.status).sort(),[200,409]);
  const committed=await read('appointments','one')?'one':'two',other=committed==='one'?'two':'one',saved=await read('appointments',committed);
@@ -82,6 +86,24 @@ try{
  await assert.rejects(db.query('select avvi_save_package_checkout($1::jsonb,$2::jsonb)',[JSON.stringify([row('appointments',expired)]),'[]']),/validade/);
  await assert.rejects(db.query('select avvi_save_package_checkout($1::jsonb,$2::jsonb)',[JSON.stringify([row('appointments',{...legacy,closedAccount:{...legacy.closedAccount,payments:[{amount:100}]}})]),'[]']),/pago/);
  assert.equal((await read('appointments','legacy')).closedAccount.payments[0].amount,300,'Invalidating a used purchase rolls back');
+ // A sale may consume its own first session, with an immutable purchase reference.
+ const immediate={...sale,id:'immediate',startsAt:'2026-10-12T08:00:00',endsAt:'2026-10-12T09:00:00',closedAccount:{...sale.closedAccount,id:'immediate-account',appointmentId:'immediate',date:'2026-10-12',packageSessionUses:[{...use,id:'first',sourceAppointmentId:'immediate',sourceAccountId:'immediate-account',quantity:1}]}};
+ response=await save([row('appointments',immediate)],user);assert.equal(response.status,200,await response.text());
+ assert.equal((await read('appointments','immediate')).closedAccount.packageSessionUses[0].quantity,1);
+ assert.equal((await save([row('appointments',immediate)],user)).status,200,'Reclosing does not consume twice');
+ await db.query('select avvi_save_package_checkout($1::jsonb,$2::jsonb)',[JSON.stringify([row('appointments',immediate)]),'[]']);assert.equal((await read('appointments','immediate')).closedAccount.packageSessionUses[0].quantity,1,'Optional SQL also accepts same-sale consumption');
+ const overdrawn={...immediate,closedAccount:{...immediate.closedAccount,packageSessionUses:[{...immediate.closedAccount.packageSessionUses[0],quantity:4}]}};
+ assert.equal((await save([row('appointments',overdrawn)])).status,409);
+ assert.equal((await read('appointments','immediate')).closedAccount.packageSessionUses[0].quantity,1);
+ assert.equal((await save([row('appointments',{...immediate,closedAccount:{...immediate.closedAccount,payments:[]}})])).status,409,'Cannot consume an unpaid sale');
+ // An interrupted server's expired lease is reclaimed with a conditional write.
+ await db.query('insert into avvi_records(entity,record_id,data) values($1,$2,$3)',['_package_checkout_lock','checkout',JSON.stringify({owner:'interrupted',expiresAt:'2020-01-01T00:00:00.000Z'})]);
+ assert.equal((await save([row('appointments',immediate)])).status,200);
+ assert.equal(await read('_package_checkout_lock','checkout'),undefined,'Leases are released after successful saves');
+ loseInsertAck=true;assert.equal((await save([row('appointments',immediate)])).status,200,'Lost lock acknowledgement is recovered without waiting for lease expiry');assert.equal(loseInsertAck,false);
+ rpcFailure=true;assert.equal((await save([row('appointments',sale)])).status,503,'An actual RPC database failure cannot silently fall back to another write');rpcFailure=false;
+ assert.equal(await read('_package_checkout_lock','checkout'),undefined,'Lease released after an unsuccessful save');
+ const privateRead=await route.GET(new Request('http://test/api/access/data?entity=_package_checkout_lock',{headers:{cookie:auth.accessCookie+'='+auth.signAccess(admin)}}));assert.equal(privateRead.status,403);
  assert.ok(rpcCalls>=5);
- console.log('PASS: migration executes/reexecutes in isolated PostgreSQL, service-only RPC, missing-migration fails without writes, real authenticated gateway/admin/standard, stale concurrent consumptions serialize with one rejected, idempotent retry, patient/source/quantity guards, used-sale deletion blocked, consumption reversal, zero-charge stock consumption once, transactional rollback. No real cloud.');
+ console.log('PASS: migration executes/reexecutes in isolated PostgreSQL, service-only RPC, missing optional migration saves in the existing table, same-sale consumption, expired lease recovery, real authenticated gateway/admin/standard, stale concurrent consumptions serialize with one rejected, idempotent retry, patient/source/quantity guards, used-sale deletion blocked, consumption reversal, zero-charge stock consumption once, transactional rollback. No real cloud.');
 }finally{await db.close();fs.rmSync(dir,{recursive:true,force:true});}
