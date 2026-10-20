@@ -238,6 +238,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const entries = new Set([...accounts, ...upserts.filter((row) => row.entity === "financial_entries" && accounts.has(row.data?.sourceAccountId)).map((row) => row.record_id)]);
     const ledgerSources = new Set<string>(canWriteEntity(user, "financial_entries") ? upserts.filter(row => row.entity === "financial_entries").map(row => row.record_id) : []);
     const receiptSources = new Set<string>(canWriteEntity(user, "professional_receipts") ? upserts.filter(row => row.entity === "professional_receipts").map(row => row.record_id) : []);
+    const acknowledgedRows = new Set<(typeof upserts)[number]>();
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
       if (row.entity === "service_packages" && !validServicePackage(row.data)) return Response.json({ error: "Dados do pacote inválidos." }, { status: 400, headers });
@@ -293,6 +294,21 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
       const ledgerDerivative = ["revenues", "fixed_costs"].includes(row.entity) && ledgerSources.has(row.data.sourceFinancialEntryId) && row.record_id === `${row.entity === "revenues" ? "receita-entry" : "taxa-maquininha"}-${row.data.sourceFinancialEntryId}`;
       const receiptDerivative = row.entity === "fixed_costs" && receiptSources.has(row.data.professionalReceiptId) && upserts.some(item => item.entity === "professional_receipts" && item.record_id === row.data.professionalReceiptId && Number(item.data.total) === Number(row.data.value) && item.data.date === row.data.dueDate);
       const derived = accountDerivative || ledgerDerivative || receiptDerivative;
+      // A lost HTTP acknowledgement can leave only financial derivatives pending
+      // after the shared agenda confirms the appointment. A standard user may
+      // acknowledge an identical stored checkout row, but never rewrite it or
+      // change an unrelated financial record. Skip these rows in every write
+      // path so another user's later edits cannot be overwritten by the retry.
+      if (!derived && canAccessTab(user, "Agenda") && ["financial_entries", "revenues", "fixed_costs"].includes(row.entity)) {
+        const source = row.entity === "financial_entries" ? row.data.sourceAccountId : row.data.sourceFinancialEntryId;
+        const prefix = row.entity === "financial_entries" ? "procedure-account" : row.entity === "revenues" ? "receita-entry" : "taxa-maquininha";
+        if (typeof source === "string" && source && row.record_id === `${prefix}-${source}`) {
+          const { data: existing, error } = await db.from("avvi_records").select("data").eq("entity", row.entity).eq("record_id", row.record_id).maybeSingle();
+          if (error) throw error;
+          const stable = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+          if (existing && stable(existing.data) === stable(row.data)) { acknowledgedRows.add(row); continue; }
+        }
+      }
       if (!derived) return Response.json({ error: "Alteração financeira restrita ao administrador." }, { status: 403, headers });
     }
     for (const item of removed) {
@@ -313,6 +329,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
         if (!permitted) return Response.json({ error: "Exclusão financeira restrita ao administrador." }, { status: 403, headers });
       }
     }
+    const pendingUpserts = upserts.filter(row => !acknowledgedRows.has(row));
     if (packageSensitive) {
       if (!process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) return Response.json({ error: "Configure SUPABASE_SERVICE_ROLE_KEY no servidor para salvar sessões de pacotes." }, { status: 503, headers });
       // Re-run validation after taking the shared lease, using current cloud rows.
@@ -321,7 +338,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
       const consumesCurrentSale = appointmentUpdates.some(item => item.closedAccount?.packageSessionUses?.some(use => use.sourceAppointmentId === item.id));
       // Older installed functions do not support consuming the sale being closed.
       if (!consumesCurrentSale) {
-        const { error } = await db.rpc("avvi_save_package_checkout", { p_upserts: upserts, p_removed: removed });
+        const { error } = await db.rpc("avvi_save_package_checkout", { p_upserts: pendingUpserts, p_removed: removed });
         if (!error) return Response.json({ saved: true }, { headers });
         if (error.code !== "PGRST202" && error.code !== "42883") {
           if (error.code === "P0001") return Response.json({ error: error.message }, { status: 409, headers });
@@ -351,7 +368,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
       }
     }
     // Write the account/stock state last: retries retain the stored account links until all reversals finish.
-    if (upserts.length) { await checkPackageLease(); const { error } = await db.from("avvi_records").upsert(upserts, { onConflict: "entity,record_id" }); if (error) throw error; }
+    if (pendingUpserts.length) { await checkPackageLease(); const { error } = await db.from("avvi_records").upsert(pendingUpserts, { onConflict: "entity,record_id" }); if (error) throw error; }
     return Response.json({ saved: true }, { headers });
   } catch { return Response.json({ error: "Não foi possível salvar. Suas alterações continuam pendentes." }, { status: 503, headers }); }
 }

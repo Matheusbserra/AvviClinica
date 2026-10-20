@@ -86,6 +86,10 @@ A lixeira ao lado de **Fechar conta**, nos detalhes e na janela de cobrança, ex
 
 Contas antigas permanecem legíveis e mantêm seus valores. A separação ocorre somente ao confirmar novamente o fechamento: a cobrança anterior passa para o agendamento e o registro de procedimentos passa a conter exclusivamente os produtos. Nenhum cadastro ou lançamento manual é removido nessa conversão.
 
+**Confirmação do salvamento:** depois de fechar a conta, a Agenda informa se está salvando, se o fechamento foi confirmado na nuvem ou se ainda é necessário tentar novamente. Fechar a janela de cobrança não comprova gravação na nuvem. Se a resposta HTTP se perder após a gravação, um usuário padrão pode reconhecer novamente os mesmos registros derivados já salvos, sem regravá-los, duplicar estoque ou ganhar permissão para alterar valores financeiros avulsos. Registros alterados por outro usuário continuam protegidos.
+
+Regressões: `node tests/checkout-save-retry.mjs` valida repetição sem escrita e bloqueios financeiros; `node tests/agenda-cloud-saving-ui.mjs` reproduz perda da confirmação, atualização compartilhada, repetição, recarga e consulta pelo administrador. Com `AVVI_TEST_FULL_STANDARD=true`, usa as permissões do perfil padrão operacional completo; o padrão do teste preserva o cenário com acesso somente à Agenda. O teste usa nuvem simulada e uma sessão administrativa de teste (`AVVI_TEST_ADMIN_SESSION`) ou `AVVI_TEST_ADMIN_PASSWORD`, nunca registros reais.
+
 
 ## Menu do agendamento e consulta do fechamento
 

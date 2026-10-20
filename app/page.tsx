@@ -444,6 +444,7 @@ export default function Home() {
   const [followUpContacts, setFollowUpContacts] = useState<FollowUpContact[]>([]);
   const [followUpLogs, setFollowUpLogs] = useState<FollowUpLog[]>([]);
   const [checkoutDraft, setCheckoutDraft] = useState<CheckoutDraft | null>(null);
+  const [checkoutConfirmation, setCheckoutConfirmation] = useState<{ appointmentId: string; accountId: string } | null>(null);
   const [accountSummary, setAccountSummary] = useState<{ draft: CheckoutDraft; closedAt?: string; change: number } | null>(null);
   const [appointmentError, setAppointmentError] = useState("");
   const [appointments, setAppointments] = useState<Appointment[]>(seedAppointments);
@@ -897,7 +898,7 @@ export default function Home() {
     setIsDataReady(false); setHasPendingChanges(false); setStorageError(""); setLastSavedAt("");
     setRefreshError("");
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
-    setCheckoutDraft(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
+    setCheckoutDraft(null); setCheckoutConfirmation(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
     setAnamneses([]); setHistoryPatientId(null); setEditingPatientId(null);
     setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
     setPatients(startupSnapshot.current.patients); setProfessionals(startupSnapshot.current.professionals);
@@ -1225,11 +1226,13 @@ export default function Home() {
     setAppointments((current) => current.map((appointment) => appointment.id === currentAppointment.id
       ? { ...appointment, status: "Finalizado", financialEntryId: procedureEntry?.id, closedAccount: account,
         accountClosed: true, stockConsumption: stockUpdate.consumption, giftConsumption: giftUpdate.consumption } : appointment));
+    setCheckoutConfirmation({ appointmentId: currentAppointment.id, accountId: account.id });
     setCheckoutDraft(null);
     setActiveTab("Agenda");
   }
 
   function deleteClosedAccount(appointmentId: string) {
+    setCheckoutConfirmation(current => current?.appointmentId === appointmentId ? null : current);
     const appointment = appointments.find((item) => item.id === appointmentId);
     if (!appointment) return false;
     const account = appointment.closedAccount ?? entries.find((entry) => entry.accountClosed && (entry.id === appointment.financialEntryId || entry.appointmentId === appointment.id));
@@ -1691,7 +1694,7 @@ export default function Home() {
           {!availableTabs.length && <Panel><p className="text-sm text-slate-600">Nenhuma aba foi autorizada para esta conta. Solicite o acesso ao administrador.</p></Panel>}
           {canAccessTab(currentUser, "Follow Up") && activeTab === "Follow Up" && <FollowUpNavigation tab={followUpTab} change={setFollowUpTab} />}
           {syncError && !((activeTab === "Simulação" || activeTab === "Follow Up" && (followUpTab === "Testes WhatsApp" || isMetaReviewer(currentUser))) && !isSupabaseConfigured && syncError.startsWith("Supabase não configurado.")) && (
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-avvi-red">
+            <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-avvi-red">
               <span>{syncError}</span>
               {isSupabaseConfigured && <button onClick={retrySaving} disabled={isSyncing} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-bold text-avvi-red disabled:cursor-not-allowed disabled:opacity-60">Tentar novamente</button>}
             </div>
@@ -1701,6 +1704,12 @@ export default function Home() {
           <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
             {!isDataReady ? "Carregando dados…" : activeTab === "Simulação" ? "Simulação temporária · nada é salvo." : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : hasPendingChanges || syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
           </div>
+          {checkoutConfirmation && isSupabaseConfigured && appointments.some(appointment => appointment.id === checkoutConfirmation.appointmentId && appointment.accountClosed && appointment.closedAccount?.id === checkoutConfirmation.accountId) && <div role="status" aria-label="Confirmação do fechamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-2 text-sm font-semibold text-avvi-ink">
+            {lastSyncedSnapshot.current?.appointments.some(appointment => appointment.id === checkoutConfirmation.appointmentId && appointment.accountClosed && appointment.closedAccount?.id === checkoutConfirmation.accountId && JSON.stringify(appointment.closedAccount) === JSON.stringify(appointments.find(item => item.id === checkoutConfirmation.appointmentId)?.closedAccount))
+              ? "Fechamento confirmado na nuvem."
+              : syncError ? "Fechamento ainda não confirmado na nuvem. Mantenha esta página aberta e use Tentar novamente."
+                : "Salvando fechamento na nuvem. Aguarde a confirmação antes de sair."}
+          </div>}
           {activeTab === "Agenda" ? <select aria-label="Navegar pelo sistema" value={activeTab} onChange={(event) => changeTab(event.target.value as Tab)} className="mb-2 shrink-0 rounded border border-avvi-line bg-white p-1.5 text-xs lg:hidden">{availableTabs.map((tab) => <option key={tab.id} value={tab.id}>{tabLabel(tab.id)}</option>)}</select> : <MobileTabs activeTab={activeTab} setActiveTab={changeTab} allowedTabs={availableTabs} />}
 
           {canAccessTab(currentUser, "Agenda") && activeTab === "Agenda" && (

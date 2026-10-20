@@ -6,11 +6,11 @@ import {spawn,spawnSync} from 'node:child_process';
 import {scryptSync} from 'node:crypto';
 import {navigationButton} from './navigation-helper.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE??'playwright');
-if(!process.env.AVVI_TEST_ADMIN_PASSWORD)throw new Error('Configure AVVI_TEST_ADMIN_PASSWORD.');
+if(!process.env.AVVI_TEST_ADMIN_PASSWORD&&!process.env.AVVI_TEST_ADMIN_SESSION)throw new Error('Configure AVVI_TEST_ADMIN_PASSWORD ou AVVI_TEST_ADMIN_SESSION para o servidor isolado.');
 const origin='http://localhost:3119',cloud='http://127.0.0.1:3997',records=new Map(),writes=[];
 const date=new Intl.DateTimeFormat('sv-SE',{timeZone:'America/Sao_Paulo'}).format(new Date());
 const password='isolated-operator-password',salt='isolated-operator-salt';
-const operator={id:'agenda-operator',login:'agenda-operator',name:'Operadora QA',role:'standard',tabs:['Agenda'],salt,password_hash:scryptSync(password,salt,64).toString('hex'),password_ciphertext:null,version:1};
+const operator={id:'agenda-operator',login:'agenda-operator',name:'Operadora QA',role:'standard',tabs:process.env.AVVI_TEST_FULL_STANDARD==='true'?['Agenda','Estoque','Follow Up','Custos','Cadastro de Serviços','Cadastro de Pacientes','Ultraformer MPT','Cadastro de Profissionais','Anamnese','Nota Fiscal','Estoque: movimentação','Contas']:['Agenda'],salt,password_hash:scryptSync(password,salt,64).toString('hex'),password_ciphertext:null,version:1};
 function put(entity,data){records.set(entity+':'+(data.id??data.month),{entity,record_id:data.id??data.month,data:structuredClone(data),updated_at:new Date().toISOString()});}
 for(const id of ['ana','bia','third','fourth'])put('professionals',{id,name:'Profissional '+id,commissionPercent:70,active:true,showInAgenda:true,closedShifts:[]});
 put('patients',{id:'patient',name:'Paciente QA',phone:'',email:'qa@example.test',notes:'',futureCredit:0});
@@ -62,8 +62,10 @@ try{
  const errors=[];
  async function session(login,secret){
   const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage();page.on('pageerror',e=>{errors.push(e.message);console.error('Browser error:',e.message);});
+  const signedAdmin=login==='admin'&&process.env.AVVI_TEST_ADMIN_SESSION;
+  if(signedAdmin)await context.addCookies([{name:'avvi_access',value:process.env.AVVI_TEST_ADMIN_SESSION,url:origin,httpOnly:true,sameSite:'Strict'}]);
   await Promise.all([page.waitForResponse(response=>response.url()===origin+'/api/access'&&response.request().method()==='GET',{timeout:60000}),page.goto(origin)]);
-  await page.getByLabel('Login',{exact:true}).fill(login);await page.getByLabel('Senha',{exact:true}).fill(secret);await page.getByRole('button',{name:'Entrar',exact:true}).click();
+  if(!signedAdmin){await page.getByLabel('Login',{exact:true}).fill(login);await page.getByLabel('Senha',{exact:true}).fill(secret);await page.getByRole('button',{name:'Entrar',exact:true}).click();}
   try{await navigationButton(page,'Agenda').waitFor();}catch(error){console.error('LOGIN ALERT:',await page.getByRole('alert').allTextContents());console.error(logs);throw error;}
   return {page,context,status:()=>page.getByRole('status',{name:'Status do salvamento',exact:true})};
  }
@@ -95,6 +97,7 @@ try{
  const checkout=standard.page.getByRole('dialog',{name:/Fechamento de conta/i});
  await checkout.getByRole('button',{name:'Produtos',exact:true}).click();await checkout.getByRole('combobox',{name:'Adicionar produto ao consumo'}).fill('Produto QA');await checkout.getByRole('option').first().click();await checkout.getByRole('button',{name:'Adicionar produto',exact:true}).click();await checkout.getByLabel('Receber por Pix',{exact:true}).check();
  failWrites=true;await checkout.getByRole('button',{name:'Fechar Conta',exact:true}).click();await checkout.waitFor({state:'hidden'});await standard.status().filter({hasText:'pendente'}).waitFor();
+ await standard.page.getByRole('status',{name:'Confirmação do fechamento',exact:true}).filter({hasText:'ainda não confirmado'}).waitFor();
  assert.equal(records.get('appointments:'+visit.id).data.accountClosed,undefined);
  await standard.page.reload();await standard.status().filter({hasText:'pendente'}).waitFor();failWrites=false;
  await standard.page.getByRole('button',{name:'Tentar novamente',exact:true}).click();await saved(standard);
@@ -105,6 +108,20 @@ try{
  await standard.page.getByTestId('appointment-'+visit.id).click();await standard.page.getByRole('menuitem',{name:'Ver fechamento',exact:true}).click();await standard.page.getByTestId('closed-account-received').filter({hasText:'300,00'}).waitFor();await standard.page.getByRole('button',{name:'Fechar detalhes do fechamento',exact:true}).click();
  assert.equal((await standard.context.request.post(origin+'/api/access/data',{data:{upserts:[{entity:'revenues',record_id:'forged',data:{id:'forged',total:999}}]}})).status(),403);
  console.log('PASS: Agenda-only standard creates patient/booking, closes paid account with automatic stock/ledger/revenue, keeps failed closure across reload and retries without duplicate stock use; unrelated finance writes stay denied.');
+ // A server can save the whole closure and lose only its HTTP acknowledgement.
+ // Refreshing the restricted financial projection before retry must not leave
+ // a forbidden standalone financial rewrite blocking every later closure.
+ await book(standard,'fourth',11,'Paciente confirmação perdida QA');await saved(standard);
+ const ackVisit=appointmentFor('Paciente confirmação perdida QA');await standard.page.getByTestId('appointment-'+ackVisit.id).click();await standard.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();
+ await checkout.getByRole('button',{name:'Produtos',exact:true}).click();await checkout.getByRole('combobox',{name:'Adicionar produto ao consumo'}).fill('Produto QA');await checkout.getByRole('option').first().click();await checkout.getByRole('button',{name:'Adicionar produto',exact:true}).click();await checkout.getByLabel('Receber por Pix',{exact:true}).check();
+ dropAcknowledgement=true;await checkout.getByRole('button',{name:'Fechar Conta',exact:true}).click();await checkout.waitFor({state:'hidden'});await standard.status().filter({hasText:'pendente'}).waitFor();
+ assert.equal(records.get('appointments:'+ackVisit.id).data.accountClosed,true,'Only the acknowledgement was lost');
+ await standard.page.bringToFront();const ackRefresh=standard.page.waitForResponse(response=>response.url().includes('/api/access/data?sync=1')&&response.status()===200);await standard.page.evaluate(()=>window.dispatchEvent(new Event('focus')));await ackRefresh;
+ await standard.page.getByRole('button',{name:'Tentar novamente',exact:true}).click();await saved(standard);
+ await standard.page.getByRole('status',{name:'Confirmação do fechamento',exact:true}).filter({hasText:'confirmado na nuvem'}).waitFor();
+ const ackClosed=records.get('appointments:'+ackVisit.id).data;await standard.page.reload();await saved(standard);assert.equal(records.get('appointments:'+ackVisit.id).data.closedAccount.id,ackClosed.closedAccount.id);assert.equal(records.get('inventory:stock').data.quantity,8,'Acknowledgement retries must not consume twice');
+ await standard.page.getByTestId('appointment-'+ackVisit.id).click();await standard.page.getByRole('menuitem',{name:'Ver fechamento',exact:true}).click();await standard.page.getByRole('dialog').getByRole('button',{name:'Excluir fechamento',exact:true}).click();await saved(standard);assert.equal(records.get('inventory:stock').data.quantity,9);
+ console.log('PASS: closure saved before a lost acknowledgement survives restricted cloud refresh/retry/reload without a forbidden financial rewrite or duplicate stock.');
  // A standard operator can edit a saved closure, split payment, store excess credit,
  // consume a gift and generate a card fee without broad access to financial tabs.
  await standard.page.getByTestId('appointment-'+visit.id).click();await standard.page.getByRole('menuitem',{name:'Ver fechamento',exact:true}).click();
