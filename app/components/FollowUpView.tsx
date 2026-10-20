@@ -5,12 +5,13 @@ import type { Dispatch, ReactElement, ReactNode, SetStateAction } from "react";
 import { CalendarClock, FlaskConical, MessageCircle, Pause, Pencil, Play, Plus, Settings, Trash2, Users, X } from "lucide-react";
 import { LeadFunnel } from "./LeadFunnel";
 import { ConversationBuilder } from "./ConversationBuilder";
+import { WhatsAppLab } from "./WhatsAppLab";
 import { supabase } from "@/lib/supabase";
 import { followUpCandidates, followUpDate, followUpLabels, followUpModels, localToInstant, newFollowUpRule, normalizedPhone, saoPauloInput } from "@/lib/followUp";
 import type { FollowUpCandidate } from "@/lib/followUp";
 import type { Appointment, Patient, Service, Professional, FollowUpRule, FollowUpContact, FollowUpLog } from "@/lib/types";
 
-type Props = { tab: string; changeTab: (tab: string) => void; patients: Patient[]; appointments: Appointment[]; services: Service[]; professionals: Professional[];
+type Props = { restrictedLab?: boolean; tab: string; changeTab: (tab: string) => void; patients: Patient[]; appointments: Appointment[]; services: Service[]; professionals: Professional[];
   rules: FollowUpRule[]; setRules: Dispatch<SetStateAction<FollowUpRule[]>>; contacts: FollowUpContact[]; setContacts: Dispatch<SetStateAction<FollowUpContact[]>>;
   logs: FollowUpLog[]; setLogs: Dispatch<SetStateAction<FollowUpLog[]>> };
 type Connection = { configured: boolean; ready: boolean; enabled: boolean; message: string };
@@ -39,7 +40,11 @@ function Modal({ title, close, children }: { title: string; close: () => void; c
   }, [close]);
   return <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-900/40 p-3"><section ref={panel} role="dialog" aria-modal="true" aria-label={title} className="max-h-[94dvh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-4 shadow-panel sm:p-6"><header className="mb-5 flex items-center justify-between gap-3"><h3 className="text-lg font-bold">{title}</h3><button type="button" onClick={close} aria-label={`Fechar ${title}`} className="rounded p-1 text-slate-500"><X size={20} /></button></header>{children}</section></div>;
 }
-export function FollowUpNavigation({ tab, change }: { tab: string; change: (tab: string) => void }) { return <div className="sticky top-2 z-40 mb-4 flex flex-wrap gap-2 rounded-xl bg-[#f7f4ef]/95 py-2 backdrop-blur" role="tablist" aria-label="Seções do Follow Up">{["Conversas", "Automações", "Próximos contatos", "Histórico", "Contatos", "Conexão"].map((name) => <button key={name} role="tab" aria-selected={tab === name} onClick={() => change(name)} className={`rounded-lg px-3 py-2 text-xs font-semibold ${tab === name ? "bg-avvi-blue text-white" : "border border-avvi-line bg-white text-slate-600"}`}>{name}</button>)}</div>; }
+export function FollowUpNavigation({ tab, change }: { tab: string; change: (tab: string) => void }) {
+  const [lab, setLab] = useState(false);
+  useEffect(() => { let active = true; fetch("/api/follow-up/lab").then(async response => { if (response.ok && active) setLab((await response.json()).enabled === true); }).catch(() => {}); return () => { active = false; }; }, []);
+  return <div className="sticky top-2 z-40 mb-4 flex flex-wrap gap-2 rounded-xl bg-[#f7f4ef]/95 py-2 backdrop-blur" role="tablist" aria-label="Seções do Follow Up">{["Conversas", "Automações", "Próximos contatos", "Histórico", "Contatos", "Conexão", ...(lab ? ["Testes WhatsApp"] : [])].map((name) => <button key={name} role="tab" aria-selected={tab === name} onClick={() => change(name)} className={`rounded-lg px-3 py-2 text-xs font-semibold ${tab === name ? "bg-avvi-blue text-white" : "border border-avvi-line bg-white text-slate-600"}`}>{name}</button>)}</div>;
+}
 export function FollowUpView(props: Props) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 60000); return () => clearInterval(timer); }, []);
@@ -97,6 +102,7 @@ export function FollowUpView(props: Props) {
     try { const session = await supabase?.auth.getSession(); const response = await fetch("/api/follow-up/history", { headers: { ...(session?.data.session ? { Authorization: `Bearer ${session.data.session.access_token}` } : {}) } }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setRemoteLogs(data.logs); }
     catch (failure) { setNotice((failure as Error).message); }
   }
+  if (tab === "Testes WhatsApp") return <WhatsAppLab review={props.restrictedLab}/>;
   return <div className="min-w-0 space-y-4">
     {tab !== "Conversas" && <Box><div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><span className="rounded-xl bg-green-50 p-3 text-green-700"><MessageCircle size={25} /></span><div><h3 className="text-lg font-bold">Conversas que continuam</h3><p className="mt-1 text-xs text-slate-500">Organize os próximos contatos da AvviClínica pelo WhatsApp.</p></div></div><div className="flex flex-wrap gap-2"><button onClick={() => openSimulation("all")} className="flex items-center gap-2 rounded-lg border border-avvi-line px-3 py-2 text-xs font-semibold"><FlaskConical size={15} />Simular atendimento</button><button onClick={() => edit(newFollowUpRule())} className="flex items-center gap-2 rounded-lg bg-avvi-blue px-3 py-2 text-xs font-bold text-white"><Plus size={15} />Nova automação</button></div></div>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-900"><span>{connection.ready ? "Conexão oficial configurada" : "Modo de teste · envio real não conectado"}</span><button onClick={() => setTab("Conexão")} className="font-semibold underline">{connection.ready ? "Gerenciar conexão" : "Conectar WhatsApp"}</button></div>

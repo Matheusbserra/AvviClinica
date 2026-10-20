@@ -1,0 +1,30 @@
+import fs from 'node:fs';
+import ts from 'typescript';
+import assert from 'node:assert/strict';
+const modules={};
+async function load(name){let source=fs.readFileSync('lib/'+name+'.ts','utf8');for(const dependency of ['calculations','paymentFees'])if(source.includes('"./'+dependency+'"'))source=source.replaceAll('"./'+dependency+'"',JSON.stringify(await uri(dependency)));const code=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;return 'data:text/javascript;base64,'+Buffer.from(code).toString('base64');}
+async function uri(name){return modules[name]??=await load(name);}
+const {newSimulation,simulationTotals,rebalanceSimulation}=await import(await uri('simulation'));
+const fees=await import(await uri('paymentFees')),access=await import(await uri('access'));
+const user={login:'simulation-qa',role:'standard',tabs:['Simulação']};
+assert.equal(access.canAccessTab(user,'Simulação'),true);assert.equal(access.canAccessTab({login:'qa',role:'standard',tabs:[]},'Simulação'),false);assert.equal(access.canAccessTab('standard','Simulação'),false);assert.equal(access.canAccessTab({login:'meta-qa',role:'standard',tabs:['Simulação',access.metaReviewPermission]},'Simulação'),false);
+for(const entity of ['services','procedures'])assert.equal(access.canReadEntity(user,entity),true);
+for(const entity of ['patients','professionals','appointments','financial_entries','revenues','fixed_costs','inventory','monthly_goals'])assert.equal(access.canReadEntity(user,entity),false,entity);
+for(const entity of access.standardEntities)assert.equal(access.canWriteEntity(user,entity),false,entity);
+const draft=newSimulation();draft.services[0].unitPrice=1000;draft.services[0].quantity=2;draft.products[0].quantity=2;draft.products[0].unitCost=100;draft.professionalPercent=30;
+let balanced=rebalanceSimulation(draft),total=simulationTotals(balanced);assert.equal(total.gross,2000);assert.equal(total.productCost,200);assert.equal(total.received,2000);assert.equal(total.net,1800);
+balanced.payments[0]={...balanced.payments[0],method:'Crédito',installments:12,cardBrand:'Elo'};total=simulationTotals(balanced);assert.equal(total.fees,218.4);assert.equal(total.net,1581.6);assert.equal(total.professionalValue,474.48);assert.equal(total.companyValue,1107.12);
+balanced.services[0].unitPrice=500;balanced=rebalanceSimulation(balanced);total=simulationTotals(balanced);assert.equal(total.received,1000);assert.equal(total.fees,109.2,'Fees must track automatic payment amount changes');
+balanced.discount=100;balanced=rebalanceSimulation(balanced);total=simulationTotals(balanced);assert.equal(total.due,900);assert.equal(total.fees,98.28);assert.equal(total.net,601.72,'Discount already reflected in payments, not subtracted twice');
+balanced.payments=[{id:'pix',method:'Pix',amount:400,installments:1},{id:'credit',method:'Crédito',amount:500,installments:2,cardBrand:'Visa'}];total=simulationTotals(balanced);assert.equal(total.fees,20.7);assert.equal(total.received,900);assert.equal(total.net,679.3);
+balanced.payments[1].rateOverride=5;assert.equal(simulationTotals(balanced).fees,25);balanced.payments[1].amount=0;assert.equal(simulationTotals(balanced).remaining,500);
+balanced.payments.forEach(item=>item.amount=0);total=simulationTotals(balanced);assert.equal(total.received,0);assert.equal(total.fees,0);assert.equal(total.net,-200,'Zero payment cannot become the full attendance price');
+balanced.products[0].quantity=0.5;assert.equal(simulationTotals(balanced).productCost,50);balanced.products.push({id:'other',procedureId:'other',quantity:3,unitCost:12.35});assert.equal(simulationTotals(balanced).productCost,87.05);
+balanced.payments=[{id:'debit',method:'Débito',amount:1000,installments:1}];total=simulationTotals(balanced);assert.equal(total.fees,7.6);assert.equal(total.excess,100);
+balanced.services=[];balanced.payments=[];assert.equal(simulationTotals(balanced).due,0);assert.equal(simulationTotals(balanced).received,0);
+const immutable=newSimulation(),copy=structuredClone(immutable);simulationTotals(immutable);rebalanceSimulation(immutable);assert.deepEqual(immutable,copy);const fresh=newSimulation();fresh.products[0].unitCost=999;assert.equal(newSimulation().products[0].unitCost,0);
+assert.equal(fees.calculateCardFee(1000,'Mastercard',1),31.3);assert.equal(fees.calculateCardFee(1000,'Visa',12),104.2);assert.equal(fees.calculateCardFee(1000,'Elo',12),109.2);assert.equal(fees.calculateDebitFee(1000),7.6);
+const fractional=newSimulation();fractional.products=[{id:'a',procedureId:'a',quantity:0.5,unitCost:0.03},{id:'b',procedureId:'b',quantity:0.5,unitCost:0.03}];fractional.services[0].unitPrice=100;fractional.professionalPercent=0;fractional.payments[0].amount=100;let fractionalTotal=simulationTotals(fractional);assert.equal(fractionalTotal.productCost,0.04);assert.equal(fractionalTotal.companyValue,fractionalTotal.net,'Split must use the same rounded cost shown in the summary');
+fractional.payments=[{id:'a',method:'Pix',amount:0,installments:1},{id:'b',method:'Pix',amount:33.333,installments:1},{id:'c',method:'Pix',amount:33.333,installments:1}];fractionalTotal=simulationTotals(rebalanceSimulation(fractional));assert.equal(fractionalTotal.received,100);assert.equal(fractionalTotal.remaining,0);
+const component=fs.readFileSync('app/components/SimulationView.tsx','utf8');assert.doesNotMatch(component,/localStorage|sessionStorage|indexedDB|fetch\(|supabase|setEntries|saveEntry|applyCheckoutInventory/);
+console.log('PASS: user-selected read-only simulation permission, catalog-only reads, no financial/clinical access or writes, product quantities/fractions, split payments, card brands/installments/overrides, fee refresh, discounts counted once, zero payments, estimates, no mutation or persistence; existing card rates preserved. Fictional fixtures.');

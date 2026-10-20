@@ -4,9 +4,9 @@ import { createClient } from "@supabase/supabase-js";
 import { createHash } from "node:crypto";
 import type { AppUser } from "@/lib/access";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
-import { canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
+import { canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, isMetaReviewer, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { checkoutStockUpdates } from "@/lib/stockAccess";
-import { stockHistoryEntry } from "@/lib/accessSnapshot";
+import { stockHistoryEntry, followUpEntityRows } from "@/lib/accessSnapshot";
 import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAvailability";
 import { applyCheckoutUltraformer, isUltraformerTip, usageOnlyTipUpdate, validCheckoutShots } from "@/lib/ultraformer";
 import { validStrategy } from "@/lib/strategyDefinitions";
@@ -35,6 +35,7 @@ async function permittedRecords(user: AppUser, entity: string) {
     const records = await rows(entity);
     const permitted = entity === "strategies" ? records.filter(row => canAccessProfessional(user, String(row.data.professionalId))) : entity === "professionals" && registrationOnly(user) ? records.filter(row => canAccessProfessional(user, row.record_id)) : records;
     const data = permitted.map((row) => {
+      if (isMetaReviewer(user)) return followUpEntityRows(entity, [row.data])[0];
       if (user.role === "admin") return row.data;
       if (entity === "professionals") {
         const copy = { ...row.data };
@@ -122,6 +123,8 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const retryRequest = request.clone();
     const { upserts = [], removed = [] } = await request.json();
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
+    if (isMetaReviewer(user) && [...upserts, ...removed].some(row => !canWriteEntity(user, row.entity))) return Response.json({ error: "Acesso restrito ao Follow Up." }, { status: 403, headers });
+    if (canAccessTab(user, "Simulação") && !entityNames.some(entity => canWriteEntity(user, entity))) return Response.json({ error: "Esta conta tem acesso somente à simulação, sem gravação de dados." }, { status: 403, headers });
     const db = database();
     const selectedStockProducts = upserts.filter(row => row.entity === "inventory" && row.data?.visibleInStock === true);
     if (selectedStockProducts.length) {

@@ -1,9 +1,11 @@
 export type AppRole = "admin" | "standard";
-export const appTabs = ["Agenda", "Estoque", "Follow Up", "Estratégias", "Anamnese", "Ultraformer MPT", "Relatórios", "Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] as const;
+export const appTabs = ["Agenda", "Simulação", "Estoque", "Follow Up", "Estratégias", "Anamnese", "Ultraformer MPT", "Relatórios", "Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] as const;
 export type AppTab = typeof appTabs[number];
 // Stored in the existing account permissions array; it is not a navigation tab.
 export const stockMovementPermission = "Estoque: movimentação";
-export const accountPermissions: readonly string[] = [...appTabs, stockMovementPermission];
+export const metaReviewPermission = "Follow Up: análise Meta";
+export const accountPermissions: readonly string[] = [...appTabs, stockMovementPermission, metaReviewPermission];
+export function isMetaReviewer(user: AppRole | AppUser) { return typeof user !== "string" && user.role === "standard" && !!user.tabs?.includes(metaReviewPermission); }
 export function canMoveStock(access: AppRole | AppUser) {
   return (typeof access === "string" ? access : access.role) === "admin" ||
     (typeof access !== "string" && canAccessTab(access, "Estoque") && !!access.tabs?.includes(stockMovementPermission));
@@ -26,6 +28,7 @@ export function canAccessProfessional(user: AppUser, professionalId: string) {
 export const standardTabs: string[] = ["Agenda", "Estoque", "Follow Up", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes"];
 type Access = AppRole | AppUser;
 export function canAccessTab(access: Access, tab: string) {
+  if (isMetaReviewer(access)) return tab === "Follow Up";
   const role = typeof access === "string" ? access : access.role;
   if (!appTabs.includes(tab as AppTab)) return false;
   return role === "admin" || (typeof access === "string" ? standardTabs : access.tabs ?? standardTabs).includes(tab);
@@ -39,8 +42,8 @@ const readTabs: Record<string, string[]> = {
   ultraformer_tips: ["Ultraformer MPT", "Agenda"],
   patients: ["Receitas", "Anamnese", "Dashboard", "Metas", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Cadastro de Pacientes", "Recibos de Pagamento", "Relatório Profissional", "Nota Fiscal"],
   professionals: ["Receitas", "Estratégias", "Anamnese", "Ultraformer MPT", "Agenda", "Estoque", "Follow Up", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Cadastro de Profissionais", "Cadastro de Pacientes", "Dashboard", "Metas", "Recibos de Pagamento", "Nota Fiscal"],
-  procedures: ["Agenda", "Estoque", "Relatórios", "Relatório Profissional", "Lançamento de Procedimentos", "Cadastro de Procedimentos"],
-  services: ["Receitas", "Dashboard", "Metas", "Agenda", "Follow Up", "Relatórios", "Cadastro de Serviços", "Relatório Profissional", "Nota Fiscal", "Recibos de Pagamento"],
+  procedures: ["Simulação", "Agenda", "Estoque", "Relatórios", "Relatório Profissional", "Lançamento de Procedimentos", "Cadastro de Procedimentos"],
+  services: ["Simulação", "Receitas", "Dashboard", "Metas", "Agenda", "Follow Up", "Relatórios", "Cadastro de Serviços", "Relatório Profissional", "Nota Fiscal", "Recibos de Pagamento"],
   inventory: ["Agenda", "Estoque"], gifts: ["Agenda", "Estoque"], appointments: ["Receitas", "Dashboard", "Metas", "Agenda", "Estoque", "Follow Up", "Relatórios", "Cadastro de Pacientes", "Relatório Profissional", "Nota Fiscal"],
   fixed_costs: ["Custos", "Dashboard", "Metas"], revenues: ["Receitas", "Dashboard", "Metas"],
   receipts: ["Recibos de Pagamento"], professional_receipts: ["Pagamento Profissional"], monthly_goals: ["Metas", "Dashboard", "Relatório Profissional"],
@@ -60,6 +63,7 @@ const writeTabs: Record<string, string[]> = {
 export const standardEntities = Object.keys(writeTabs).filter(entity => writeTabs[entity].some(tab => standardTabs.includes(tab)));
 export function canReadEntity(access: Access, entity: string) { return (readTabs[entity] ?? []).some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
 export function canWriteEntity(access: Access, entity: string) {
+  if (isMetaReviewer(access)) return ["followup_rules", "followup_contacts", "followup_logs"].includes(entity);
   if (["inventory", "gifts"].includes(entity)) return canMoveStock(access) || canAccessTab(access, "Agenda");
   return (writeTabs[entity] ?? []).some(tab => canAccessTab(access, tab));
 }

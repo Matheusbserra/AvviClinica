@@ -1,7 +1,12 @@
-import { canAccessProfessional, canAccessTab, canReadEntity, hasFinancialAccess, registrationOnly } from "./access";
+import { canAccessProfessional, canAccessTab, canReadEntity, hasFinancialAccess, registrationOnly, isMetaReviewer } from "./access";
 import type { AppUser } from "./access";
 import type { DataSnapshot } from "./persistence";
 import type { FinancialEntry, Professional, ProfessionalStrategy } from "./types";
+export function followUpEntityRows<T>(entity: string, rows: T[]): T[] {
+  const fields: Record<string, string[]> = { patients: ["id", "name", "phone"], professionals: ["id", "name", "active", "color"], services: ["id", "name", "description", "durationMinutes", "category", "price", "priceType", "active"], appointments: ["id", "patientId", "professionalId", "serviceId", "startsAt", "endsAt", "status", "eventType"] };
+  const allowed = fields[entity];
+  return allowed ? rows.map(row => Object.fromEntries(Object.entries(row as Record<string, unknown>).filter(([key]) => allowed.includes(key))) as T) : rows;
+}
 export function stockHistoryEntry(entry: FinancialEntry): FinancialEntry {
   return { id: entry.id, patientId: entry.patientId, professionalId: entry.professionalId, appointmentId: entry.appointmentId, sourceAccountId: entry.sourceAccountId, date: entry.date, procedureId: entry.procedureId, manualProcedure: entry.manualProcedure,
     quantity: entry.quantity, products: entry.products?.map(({ id, procedureId, quantity }) => ({ id, procedureId, quantity, unitCost: 0 })),
@@ -11,6 +16,7 @@ export function stockHistoryEntry(entry: FinancialEntry): FinancialEntry {
 // Keep the current user's pending checkout derivatives, even when their finance tabs are hidden.
 // Every user/revision has a separate cache; data from another profile is never imported.
 export function permittedSnapshot(snapshot: DataSnapshot, user: AppUser): DataSnapshot {
+  if (isMetaReviewer(user)) return Object.fromEntries(Object.entries(snapshot).map(([entity, rows]) => [entity, canReadEntity(user, entity) ? followUpEntityRows<unknown>(entity, rows) : []])) as DataSnapshot;
   const accounts = new Set(snapshot.appointments.flatMap(item => item.closedAccount?.id ? [item.closedAccount.id] : []));
   const derived = (entity: string, row: { id?: string; month?: string; sourceAccountId?: string; sourceFinancialEntryId?: string }) => canAccessTab(user, "Agenda") && (entity === "financial_entries" ? accounts.has(row.sourceAccountId ?? "") && row.id === `procedure-account-${row.sourceAccountId}` : accounts.has(row.sourceFinancialEntryId ?? "") && row.id === `${entity === "revenues" ? "receita-entry" : "taxa-maquininha"}-${row.sourceFinancialEntryId}`);
   return Object.fromEntries(Object.entries(snapshot).map(([entity, rows]) => {

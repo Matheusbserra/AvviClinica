@@ -1,5 +1,6 @@
 import { createHmac, scryptSync, timingSafeEqual } from "node:crypto";
 import type { AppUser } from "./access";
+import { isMetaReviewer } from "./access";
 const accounts: (AppUser & { salt: string; hash: string })[] = [
   { login: "admin", role: "admin", salt: "cb9a97815a4abc49b1046d312c25e9c6", hash: "e6f0e8fec46fb91a268ed33d2689986a53854ef4a98f46b4b8d77f8ea25e9a96bddda488c9318d53b0cd66220bd939f9c8c7fc9c9be0d9b3adc639f6fc75a179" },
   { login: "avviclinica", role: "standard", salt: "2369f96c6c800fdd8e02f53ff8f7bc2c", hash: "edfac34d4846d8162a30b154725ffc99b88ec6842d40fbaa1f09f5b346fab398e6c8458d9d0067b06c1d987fce57e00621ce8926820d0724908487c104676fa5" }
@@ -58,6 +59,8 @@ export async function resolveAccess(request: Request, now = Date.now()): Promise
   try {
     const { findAccount, accountUser } = await import("./accountsServer"); const account = await findAccount(signed.id ?? signed.login);
     if (!account || account.login !== signed.login || account.role !== signed.role || account.version !== (signed.revision ?? 0)) return null;
-    return accountUser(account);
+    const user = accountUser(account);
+    if (isMetaReviewer(user) && (process.env.VERCEL || process.env.AVVI_WHATSAPP_LOCAL_TEST !== "true")) return null;
+    return user;
   } catch { return null; }
 }

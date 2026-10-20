@@ -23,6 +23,7 @@ import {
   BarChart3,
   Building2,
   CalendarDays,
+  Calculator,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -99,10 +100,12 @@ import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 import { hasSnapshotChanges, snapshotChanges, recoverPendingChanges, snapshotEntities } from "@/lib/persistence";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
 import { readBrowserSnapshot, writeBrowserSnapshot } from "@/lib/browserPersistence";
-import { tabLabel, canManageProfessional, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey } from "@/lib/access";
+import { tabLabel, canManageProfessional, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey, isMetaReviewer } from "@/lib/access";
 import { permittedSnapshot } from "@/lib/accessSnapshot";
 import { AccountsView } from "@/app/components/AccountsView";
 import { MyAccountView } from "@/app/components/MyAccountView";
+import { SimulationView } from "@/app/components/SimulationView";
+import { calculateCardFee, calculateDebitFee } from "@/lib/paymentFees";
 import { StrategiesView } from "@/app/components/StrategiesView";
 import { MovementsView } from "@/app/components/MovementsView";
 import { ReportsView } from "@/app/components/ReportsView";
@@ -111,10 +114,10 @@ import { ProfessionalReportView } from "@/app/components/ProfessionalReportView"
 import { createPatientReceiptPdf, receiptServiceNames, receiptPayments, receiptPaymentTotal } from "@/lib/patientReceiptPdf";
 import type { AppRole, AppUser } from "@/lib/access";
 
-type Tab = "Estratégias" | "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
+type Tab = "Simulação" | "Estratégias" | "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
 const sidebarGroups: { label: string; icon: ElementType; tabs: Tab[] }[] = [
-  { label: "Operação", icon: CalendarDays, tabs: ["Agenda", "Follow Up", "Anamnese"] },
+  { label: "Operação", icon: CalendarDays, tabs: ["Agenda", "Follow Up", "Anamnese", "Simulação"] },
   { label: "Meu estabelecimento", icon: Building2, tabs: ["Estoque", "Ultraformer MPT"] },
   { label: "Profissional", icon: Users, tabs: ["Relatórios", "Relatório Profissional", "Estratégias"] },
   { label: "Financeiro", icon: CircleDollarSign, tabs: ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos"] },
@@ -124,6 +127,7 @@ const savedLoginKey = "avvi.saved.login.v1";
 
 const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
+  { id: "Simulação", icon: Calculator },
   { id: "Estoque", icon: WalletCards },
   { id: "Follow Up", icon: MessageCircle },
   { id: "Estratégias", icon: Goal },
@@ -152,11 +156,6 @@ const discountSplits: DiscountSplit[] = ["Empresa assume", "Profissional assume"
 const eventOptions = ["Novo Agendamento", "Registrar Ausência", "Registrar Liberação de Horário", "Venda de Produto", "Pré-venda de Produto", "Venda e Consumo de Pacote", "Registro de Crédito de Cliente"];
 const cardBrands: NonNullable<PaymentItem["cardBrand"]>[] = ["Mastercard", "Visa", "Elo"];
 const paymentTerms = Array.from({ length: 12 }, (_, index) => index + 1);
-const cardFeeRates: Record<NonNullable<PaymentItem["cardBrand"]>, number[]> = {
-  Mastercard: [3.13, 4.14, 4.74, 5.34, 5.94, 6.54, 7.42, 8.02, 8.62, 9.22, 9.82, 10.42],
-  Visa: [3.13, 4.14, 4.74, 5.34, 5.94, 6.54, 7.42, 8.02, 8.62, 9.22, 9.82, 10.42],
-  Elo: [3.63, 4.64, 5.24, 5.84, 6.44, 7.04, 7.92, 8.52, 9.12, 9.72, 10.32, 10.92]
-};
 
 const blankPayment: PaymentItem = { id: "pay-new", method: "Pix", amount: 0, fee: 0, discount: 0, installments: 1 };
 const procedurePaymentMethods: PaymentMethod[] = [...paymentMethods, "Crédito Futuro" as PaymentMethod];
@@ -278,17 +277,6 @@ function professionalReceiptProcedureRows(entry: FinancialEntry, procedureNameFo
       professionalValue
     };
   });
-}
-
-function calculateCardFee(amount: number, cardBrand?: PaymentItem["cardBrand"], installments?: number) {
-  const brand = cardBrand ?? "Mastercard";
-  const term = Math.min(12, Math.max(1, Number(installments) || 1));
-  const rate = cardFeeRates[brand]?.[term - 1] ?? 0;
-  return Number(((Number(amount) || 0) * rate / 100).toFixed(2));
-}
-
-function calculateDebitFee(amount: number) {
-  return Number(((Number(amount) || 0) * 0.76 / 100).toFixed(2));
 }
 
 function makeRevenueFromFinancialEntry(entry: FinancialEntry, patientName: string): RevenueEntry {
@@ -544,7 +532,7 @@ export default function Home() {
       const local = await readLocalSnapshot(currentUser);
       if (cancelled) return;
       let snapshot = local?.data ? permittedSnapshot(local.data, currentUser) : undefined;
-      if (!isSupabaseConfigured && currentUser.role === "admin" && new URLSearchParams(window.location.search).get("previa") === "historico-agendamentos") {
+      if (!isSupabaseConfigured && (isMetaReviewer(currentUser) || currentUser.role === "admin" && new URLSearchParams(window.location.search).get("previa") === "historico-agendamentos")) {
         try {
           const response = await fetch("/api/local-preview/data", { cache: "no-store" });
           if (response.ok) {
@@ -1702,7 +1690,7 @@ export default function Home() {
           <Header activeTab={activeTab} compact={["Agenda", "Ultraformer MPT"].includes(activeTab)} />
           {!availableTabs.length && <Panel><p className="text-sm text-slate-600">Nenhuma aba foi autorizada para esta conta. Solicite o acesso ao administrador.</p></Panel>}
           {canAccessTab(currentUser, "Follow Up") && activeTab === "Follow Up" && <FollowUpNavigation tab={followUpTab} change={setFollowUpTab} />}
-          {syncError && (
+          {syncError && !((activeTab === "Simulação" || activeTab === "Follow Up" && (followUpTab === "Testes WhatsApp" || isMetaReviewer(currentUser))) && !isSupabaseConfigured && syncError.startsWith("Supabase não configurado.")) && (
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-avvi-red">
               <span>{syncError}</span>
               {isSupabaseConfigured && <button onClick={retrySaving} disabled={isSyncing} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-bold text-avvi-red disabled:cursor-not-allowed disabled:opacity-60">Tentar novamente</button>}
@@ -1711,7 +1699,7 @@ export default function Home() {
           {storageError && <div role="alert" className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-avvi-red">{storageError}</div>}
           {refreshError && <div role="status" aria-label="Atualização da agenda" className="mb-2 shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{refreshError}</div>}
           <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
-            {!isDataReady ? "Carregando dados…" : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : hasPendingChanges || syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
+            {!isDataReady ? "Carregando dados…" : activeTab === "Simulação" ? "Simulação temporária · nada é salvo." : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : hasPendingChanges || syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
           </div>
           {activeTab === "Agenda" ? <select aria-label="Navegar pelo sistema" value={activeTab} onChange={(event) => changeTab(event.target.value as Tab)} className="mb-2 shrink-0 rounded border border-avvi-line bg-white p-1.5 text-xs lg:hidden">{availableTabs.map((tab) => <option key={tab.id} value={tab.id}>{tabLabel(tab.id)}</option>)}</select> : <MobileTabs activeTab={activeTab} setActiveTab={changeTab} allowedTabs={availableTabs} />}
 
@@ -1738,7 +1726,7 @@ export default function Home() {
             />
           )}
 
-          {activeTab === "Follow Up" && <FollowUpView tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={accounting.appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
+          {activeTab === "Follow Up" && <FollowUpView restrictedLab={isMetaReviewer(currentUser)} tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={accounting.appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
 
           {canAccessTab(currentUser, "Contas") && activeTab === "Contas" && (userRole === "admin" ? <AccountsView professionals={professionals} /> : <MyAccountView professionals={professionals} onPasswordChanged={handleOwnPasswordChanged} />)}
           {canAccessTab(currentUser, "Relatórios") && activeTab === "Relatórios" && <ReportsView appointments={accounting.appointments} entries={accounting.entries} professionals={professionals} procedures={procedures} services={services} revenues={accountingRevenues} />}
@@ -1747,6 +1735,8 @@ export default function Home() {
           {canAccessTab(currentUser, "Anamnese") && activeTab === "Anamnese" && <AnamneseView user={currentUser} patients={patients} professionals={professionals} records={anamneses} setRecords={setAnamneses} onPatientChange={patient => setPatients(current => current.map(item => item.id === patient.id ? {...item, photos: patient.photos} : item))} />}
           {canAccessTab(currentUser, "Ultraformer MPT") && activeTab === "Ultraformer MPT" && <UltraformerView user={currentUser} tips={ultraformerTips} setTips={setUltraformerTips} patients={patients} professionals={professionals} />}
           {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection canMove={canMoveStock(currentUser)} gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={accounting.appointments} entries={accounting.entries} patients={patients} professionals={professionals} />}
+
+          {canAccessTab(currentUser, "Simulação") && activeTab === "Simulação" && <SimulationView procedures={procedures} services={services} />}
 
           {canAccessTab(currentUser, "Lançamento de Procedimentos") && activeTab === "Lançamento de Procedimentos" && (
             <FinancialView

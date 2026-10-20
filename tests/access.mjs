@@ -1,5 +1,6 @@
 import fs from "node:fs";import assert from "node:assert/strict";import ts from "typescript";
-async function load(file){const code=ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;return import("data:text/javascript;base64,"+Buffer.from(code).toString("base64"));}
+function uri(file){let code=ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;if(file==='lib/accessServer.ts')code=code.replaceAll('"./access"',JSON.stringify(uri('lib/access.ts')));return "data:text/javascript;base64,"+Buffer.from(code).toString("base64");}
+async function load(file){return import(uri(file));}
 const {canAccessTab,standardTabs,canReadEntity,canWriteEntity,tabLabel}=await load("lib/access.ts");
 assert.equal(tabLabel('Cadastro de Procedimentos'),'Cadastro de Produtos');
 const existingProductUser={login:'catalog-qa',role:'standard',tabs:['Cadastro de Procedimentos']};

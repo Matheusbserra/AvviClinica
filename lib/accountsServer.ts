@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
-import { appTabs, accountPermissions, standardTabs, professionalAccessTabs, professionalScope, canAccessTab } from "./access";
+import { appTabs, accountPermissions, standardTabs, professionalAccessTabs, professionalScope, canAccessTab, metaReviewPermission, isMetaReviewer } from "./access";
 import type { AppRole, AppUser } from "./access";
 import { legacyStandard } from "./accessServer";
 export type StoredAccount = { id: string; login: string; name: string; role: AppRole; tabs: string[]; salt: string; password_hash: string; password_ciphertext: string | null; version: number; professional_report?: { professionalIds: string[] } | null; professional_registration?: { professionalIds: string[] } | null };
@@ -58,6 +58,7 @@ async function storedAccounts(allowUnprepared = false): Promise<StoredAccount[]>
 export async function findAccount(idOrLogin: string) { const stored = await storedAccounts(true), all = stored.some(item => item.id === builtin.id) ? stored : [...stored, builtin]; return all.find(item => item.id === idOrLogin || item.login === idOrLogin); }
 export async function authenticateManaged(login: string, password: string): Promise<AppUser | null> {
   const account = await findAccount(login.trim().toLowerCase()); if (!account || password.length > 256) return null;
+  if (isMetaReviewer(accountUser(account)) && (process.env.VERCEL || process.env.AVVI_WHATSAPP_LOCAL_TEST !== "true")) return null;
   const hash = scryptSync(password, account.salt, 64); return timingSafeEqual(hash, Buffer.from(account.password_hash, "hex")) ? accountUser(account) : null;
 }
 export async function listAccounts(): Promise<{ accounts: ManagedAccount[]; mode: string; editable: boolean; message?: string }> {
@@ -83,6 +84,8 @@ export async function saveAccount(input: { id?: string; login?: string; name?: s
     const password = input.password ?? "";
     if ((!current && password.length < 8) || (password && (password.length < 8 || password.length > 256))) throw new AccountError("A senha deve ter de 8 a 256 caracteres.");
     if (!Array.isArray(input.tabs) || input.tabs.some(tab => typeof tab !== "string" || !accountPermissions.includes(tab))) throw new AccountError("Permissões inválidas.");
+    if (input.tabs.includes(metaReviewPermission) && accountStorageMode() !== "local") throw new AccountError("O acesso de análise da Meta está disponível na prévia local.", 403);
+    if (input.tabs.includes(metaReviewPermission) && (input.role !== "standard" || input.tabs.some(tab => tab !== "Follow Up" && tab !== metaReviewPermission))) throw new AccountError("O acesso de análise da Meta deve ser padrão e exclusivo ao Follow Up de demonstração.");
     const tabs = input.role === "admin" ? [...appTabs] : [...new Set(input.tabs as string[])];
     const validateScope = (value: unknown) => {
       if (value === null) return null;

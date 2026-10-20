@@ -1,0 +1,12 @@
+import http from 'node:http';import assert from 'node:assert/strict';
+import {createWebhookProxy} from '../scripts/whatsapp-lab-tunnel.mjs';
+const captured=[];const backend=http.createServer(async(request,response)=>{const chunks=[];for await(const chunk of request)chunks.push(chunk);captured.push({url:request.url,headers:request.headers,body:Buffer.concat(chunks).toString()});response.writeHead(200,{'content-type':'application/json','set-cookie':'never-forward=secret'});response.end(JSON.stringify({received:true}));});
+await new Promise(resolve=>backend.listen(0,'127.0.0.1',resolve));const proxy=createWebhookProxy(backend.address().port);await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));const url=`http://127.0.0.1:${proxy.address().port}`;
+try{
+ for(const suffix of ['/','/api/access','/api/follow-up/lab','/api/follow-up/lab/webhook/extra','/api/follow-up/lab/webhook/../../lab'])assert.equal((await fetch(url+suffix)).status,404);
+ assert.equal(captured.length,0);assert.equal((await fetch(url+'/api/follow-up/lab/webhook',{method:'DELETE'})).status,404);
+ let response=await fetch(url+'/api/follow-up/lab/webhook?hub.mode=subscribe&hub.challenge=123',{headers:{cookie:'never-forward=secret',authorization:'Bearer not-forwarded'}});assert.equal(response.status,200);assert.equal(response.headers.get('set-cookie'),null);assert.equal(captured[0].url,'/api/follow-up/lab/webhook?hub.mode=subscribe&hub.challenge=123');assert.equal(captured[0].headers.cookie,undefined);assert.equal(captured[0].headers.authorization,undefined);
+ const body=JSON.stringify({test:'raw HMAC body'});response=await fetch(url+'/api/follow-up/lab/webhook',{method:'POST',headers:{'x-hub-signature-256':'sha256=isolated',cookie:'private'},body});assert.equal(response.status,200);assert.equal(captured[1].body,body);assert.equal(captured[1].headers['x-hub-signature-256'],'sha256=isolated');assert.equal(captured[1].headers.cookie,undefined);
+ response=await fetch(url+'/api/follow-up/lab/webhook',{method:'POST',body:'x'.repeat(1000001)});assert.equal(response.status,413);assert.equal(captured.length,2);
+ console.log('PASS: HTTPS tunnel proxy exposes only the exact webhook path and GET/POST, preserves signature/raw body/challenge, strips credentials/cookies and response cookies, rejects oversized requests and all app/settings routes. Local HTTP servers only.');
+}finally{proxy.closeAllConnections();backend.closeAllConnections();await Promise.all([new Promise(resolve=>proxy.close(resolve)),new Promise(resolve=>backend.close(resolve))]);}
