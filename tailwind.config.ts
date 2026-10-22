@@ -6,14 +6,14 @@ const config: Config = {
     extend: {
       colors: {
         avvi: {
-          ink: "#111827",
+          ink: "rgb(var(--avvi-ink) / <alpha-value>)",
           blue: "#b8862b",
           gold: "#b8862b",
-          soft: "#f8f2e8",
+          soft: "rgb(var(--avvi-soft) / <alpha-value>)",
           green: "#087f5b",
           red: "#c2410c",
           violet: "#6d5df6",
-          line: "#e5e7eb"
+          line: "rgb(var(--avvi-line) / <alpha-value>)"
         }
       },
       boxShadow: {

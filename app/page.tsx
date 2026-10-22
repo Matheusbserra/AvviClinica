@@ -81,6 +81,7 @@ import { checkoutAllowsNoProducts, distributeCheckoutDiscount, restoreCheckoutIt
 import { originalAppointmentNotes } from "@/lib/appointmentNotes";
 import { checkoutCommission } from "@/lib/checkout";
 import { InvoiceView } from "@/app/components/InvoiceView";
+import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { procedureEntryFromAccount } from "@/lib/accountProcedures";
 import { changeProcedureLineCostTotal, changeProcedureLineQuantity, overrideProcedureLineTotal, procedureLineCostTotal, procedureLineTotal } from "@/lib/procedureEntryPricing";
 import { applyCheckoutInventory } from "@/lib/inventory";
@@ -1697,6 +1698,7 @@ export default function Home() {
               })}
             </nav>
             <div className="avvi-sidebar-footer shrink-0">
+              <ThemeToggle compact={!openSidebarGroup} />
               <div aria-label="Perfil do usuário" title={`${currentUser.name || currentUser.login} · ${userRole === "admin" ? "Administrador" : "Usuário padrão"}`} className={`rounded border border-[#eadcc4] bg-avvi-soft text-slate-600 ${openSidebarGroup ? "truncate px-2 text-[10px] font-semibold leading-[20px]" : "grid h-8 place-items-center"}`}>
                 {openSidebarGroup ? currentUser.login === "admin" ? "Perfil Administrador" : `Perfil ${userRole === "admin" ? "Administrador" : "Usuário padrão"} · ${currentUser.login}` : <UserRound size={16}/>}
               </div>
@@ -1991,10 +1993,10 @@ function Header({ activeTab, compact = false }: { activeTab: Tab; compact?: bool
           {!compact && <p className="text-xs font-semibold uppercase tracking-[0.16em] text-avvi-blue">AVVI Clínica</p>}
           <h2 className={`${compact ? "text-lg" : "text-2xl"} font-bold text-avvi-ink`}>{tabLabel(activeTab)}</h2>
         </div>
-        <div className={`flex items-center gap-2 rounded-xl bg-avvi-soft font-semibold text-avvi-blue ${compact ? "px-2 py-1 text-[10px]" : "px-3 py-2 text-sm"}`}>
+        <div className="flex items-center gap-2"><div className="w-9 lg:hidden"><ThemeToggle compact /></div><div className={`flex items-center gap-2 rounded-xl bg-avvi-soft font-semibold text-avvi-blue ${compact ? "px-2 py-1 text-[10px]" : "px-3 py-2 text-sm"}`}>
           <CheckCircle2 size={16} />
           Sistema v1 funcional
-        </div>
+        </div></div>
       </div>
     </header>
   );

@@ -5,6 +5,9 @@
 @tailwind utilities;
 
 :root {
+  --avvi-ink: 17 24 39;
+  --avvi-soft: 248 242 232;
+  --avvi-line: 229 231 235;
   color-scheme: light;
   background: #f5f6f8;
   --font-title: Poppins, "Segoe UI", Arial, Helvetica, sans-serif;
@@ -24,9 +27,73 @@ body {
   background:
     radial-gradient(circle at top left, rgba(184, 134, 43, 0.10), transparent 34rem),
     linear-gradient(135deg, #f7f8fb 0%, #f3f0ea 100%);
-  color: #111827;
+  color: rgb(var(--avvi-ink));
   font-family: var(--font-body);
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Theme the existing shared surfaces without changing photographs, clinical
+   drawings, appointment colors or the white lettering on filled buttons. */
+@media screen {
+  html[data-theme="dark"] {
+    color-scheme: dark;
+    background: #11151c;
+    --avvi-ink: 226 232 240;
+    --avvi-soft: 52 43 27;
+    --avvi-line: 57 65 80;
+    --dark-surface: #1b2029;
+    --dark-raised: #242c38;
+    --dark-muted: #151a23;
+  }
+  html[data-theme="dark"] body { background: linear-gradient(135deg, #11151c, #191e27); }
+  :where(html[data-theme="dark"]) *, :where(html[data-theme="dark"]) ::before, :where(html[data-theme="dark"]) ::after { border-color: rgb(var(--avvi-line)); }
+  html[data-theme="dark"] :is([class~="bg-white"], [class~="bg-white/60"], [class~="bg-white/70"], [class~="bg-white/80"], [class~="bg-white/85"], [class~="bg-white/90"]):not(canvas) { background-color: var(--dark-surface); }
+  html[data-theme="dark"] :is(.bg-slate-50, [class~="bg-[#f5f6f8]"], [class~="bg-[#f4f6f9]"], [class~="bg-[#f7f8fa]"], [class~="bg-[#f7f4ef]"]) { background-color: var(--dark-muted); }
+  html[data-theme="dark"] :is(.bg-slate-100, .bg-slate-200, [class~="bg-[#f0f2f5]"]) { background-color: var(--dark-raised); }
+  html[data-theme="dark"] :is(.bg-slate-300, .bg-slate-400) { background-color: #3c4758; }
+  html[data-theme="dark"] :is(.text-slate-800, .text-slate-900, .text-slate-950) { color: #e2e8f0; }
+  html[data-theme="dark"] :is(.text-slate-600, .text-slate-700) { color: #c3cddd; }
+  html[data-theme="dark"] .text-slate-500 { color: #a5b2c6; }
+  html[data-theme="dark"] :is(.text-slate-300, .text-slate-400) { color: #94a3b8; }
+  html[data-theme="dark"] .text-avvi-blue { color: #e3b968; }
+  html[data-theme="dark"] .text-avvi-red { color: #fda084; }
+  html[data-theme="dark"] :is(.border-slate-100, .border-slate-200, .border-slate-300, [class~="border-white/70"], [class~="border-[#eadcc4]"]) { border-color: rgb(var(--avvi-line)); }
+  html[data-theme="dark"] :is(.divide-slate-100, .divide-slate-200) > :not([hidden]) ~ :not([hidden]) { border-color: rgb(var(--avvi-line)); }
+  html[data-theme="dark"] :is(.bg-green-50, .bg-emerald-50, .bg-teal-50) { background-color: #123326; }
+  html[data-theme="dark"] .bg-green-100 { background-color: #17432f; }
+  html[data-theme="dark"] .bg-green-200 { background-color: #20553c; }
+  html[data-theme="dark"] :is(.text-green-600, .text-green-700, .text-green-800, .text-green-900, .text-green-950, .text-emerald-700, .text-teal-700) { color: #86efac; }
+  html[data-theme="dark"] :is(.bg-red-50, .bg-red-100, .bg-red-200) { background-color: #432329; }
+  html[data-theme="dark"] :is(.text-red-600, .text-red-700, .text-red-800, .text-red-900, .text-red-950) { color: #fca5a5; }
+  html[data-theme="dark"] :is(.border-red-100, .border-red-200) { border-color: #784049; }
+  html[data-theme="dark"] :is(.bg-orange-50, .bg-orange-100, .bg-orange-200) { background-color: #4a2e1c; }
+  html[data-theme="dark"] :is(.text-orange-600, .text-orange-700, .text-orange-800, .text-orange-900, .text-orange-950) { color: #fdba74; }
+  html[data-theme="dark"] :is(.bg-amber-50, .bg-amber-100) { background-color: #3b301b; }
+  html[data-theme="dark"] :is(.text-amber-600, .text-amber-700, .text-amber-800, .text-amber-900, .text-amber-950) { color: #fcd586; }
+  html[data-theme="dark"] :is(.border-amber-100, .border-amber-200, .border-amber-300) { border-color: #786139; }
+  html[data-theme="dark"] :is(.bg-blue-50, .bg-blue-100, .bg-blue-200, .bg-blue-300, [class~="bg-[#f0f7ff]"]) { background-color: #1b354e; }
+  html[data-theme="dark"] :is(.text-blue-600, .text-blue-700, .text-blue-800, .text-blue-900, .text-blue-950) { color: #93c5fd; }
+  html[data-theme="dark"] :is(.bg-violet-50, .bg-violet-100, .bg-purple-50, .bg-purple-100) { background-color: #342b4c; }
+  html[data-theme="dark"] :is(.text-violet-700, .text-purple-700) { color: #c4b5fd; }
+  html[data-theme="dark"] .bg-lime-50 { background-color: #2c391c; }
+  html[data-theme="dark"] :is([class~="bg-[#e9efea]"], [class~="bg-[#f0f2ed]"], [class~="bg-[#efeae2]"]) { background-color: #131f24; background-image: none; }
+  html[data-theme="dark"] [class~="bg-[#d9fdd3]"] { background-color: #17432f; }
+  html[data-theme="dark"] :is([class~="hover:bg-slate-50"], [class~="hover:bg-slate-100"], [class~="hover:bg-white"]):hover,
+  html[data-theme="dark"] [class~="focus:bg-slate-100"]:focus { background-color: #303b4c; }
+  html[data-theme="dark"] :is([class~="hover:bg-green-50"], [class~="focus:bg-green-50"]):is(:hover, :focus) { background-color: #20553c; }
+  html[data-theme="dark"] [class~="hover:bg-red-50"]:hover { background-color: #592d35; }
+  html[data-theme="dark"] .input { background-color: var(--dark-muted); color: #e2e8f0; border-color: rgb(var(--avvi-line)); }
+  html[data-theme="dark"] .input:focus { background-color: #202938; border-color: #b8862b; --tw-ring-color: rgb(184 134 43 / .25); }
+  html[data-theme="dark"] .input::placeholder { color: #94a3b8; }
+  html[data-theme="dark"] .text-avvi-green { color: #6ee7b7; }
+  html[data-theme="dark"] .text-avvi-violet { color: #c4b5fd; }
+  html[data-theme="dark"] canvas { background-color: white; color-scheme: light; }
+  html[data-theme="dark"] .thin-scrollbar { scrollbar-color: #59677c transparent; }
+  html[data-theme="dark"] .thin-scrollbar::-webkit-scrollbar-thumb { background: #59677c; }
+  html[data-theme="dark"] :is(.recharts-cartesian-axis-tick-value, .recharts-legend-item-text) { fill: #a5b2c6; color: #a5b2c6 !important; }
+  html[data-theme="dark"] .recharts-cartesian-grid line { stroke: #394150; }
+  html[data-theme="dark"] .recharts-area-area { fill-opacity: .18; }
+  html[data-theme="dark"] .recharts-default-tooltip { background-color: var(--dark-raised) !important; border-color: #59677c !important; color: #e2e8f0 !important; }
 }
 
 button,
