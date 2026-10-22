@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {navigationButton} from './navigation-helper.mjs';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE??'file:///C:/Users/mathe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs');
+const origin=process.env.AVVI_TEST_URL??'http://127.0.0.1:3107';
+assert.ok(['127.0.0.1','localhost'].includes(new URL(origin).hostname),'Use an isolated local preview only');
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH??'C:/Program Files/Google/Chrome/Application/chrome.exe'}),page=await browser.newPage({viewport:{width:1440,height:1000}}),key='avvi.data.snapshot.v1',errors=[];
+page.on('pageerror',error=>errors.push(error.message));
+const background=card=>card.evaluate(element=>getComputedStyle(element).backgroundColor);
+try{
+ await page.route('**/api/access',route=>route.fulfill({json:{user:{login:'admin',role:'admin'}}}));
+ await page.goto(origin);await page.getByRole('status',{name:'Status do salvamento',exact:true}).filter({hasText:'Prévia local'}).waitFor();
+ await page.evaluate(key=>{const snapshot=JSON.parse(localStorage.getItem(key)),data=snapshot.data;for(const entity of Object.keys(data))data[entity]=[];
+  data.professionals=[{id:'professional',name:'Profissional QA',active:true}];data.patients=[{id:'pending',name:'Paciente pendente QA',cpf:'',phone:'',notes:''},{id:'issued',name:'Paciente com nota QA',cpf:'',phone:'',notes:''}];
+  data.appointments=data.patients.map(patient=>({id:patient.id,patientId:patient.id,professionalId:'professional',startsAt:'2026-10-12T09:00:00',endsAt:'2026-10-12T10:00:00',eventType:'Novo Agendamento',status:'Finalizado',accountClosed:true,notes:'',invoice:{issued:patient.id==='issued'},closedAccount:{id:'account-'+patient.id,patientId:patient.id,professionalId:'professional',appointmentId:patient.id,date:'2026-10-12',procedureLines:[{id:'line',manualProcedure:'Serviço QA',quantity:1,servicePrice:300}],products:[],payments:[{method:'Pix',amount:300}]}}));localStorage.setItem(key,JSON.stringify(snapshot));
+ },key);
+ await page.reload();await navigationButton(page,'Nota Fiscal').click();
+ const pending=page.getByTestId('invoice-pending'),issued=page.getByTestId('invoice-issued');await pending.waitFor();await issued.waitFor();
+ assert.equal(await background(issued),'rgb(220, 252, 231)','The entire issued invoice card must have a light green background');
+ assert.equal(await background(pending),'rgb(255, 255, 255)','Pending invoices remain visually distinct');
+ const checkbox=pending.getByLabel('Nota adicionada de Paciente pendente QA',{exact:true});await checkbox.check();assert.equal(await background(pending),'rgb(220, 252, 231)');
+ await page.reload();await navigationButton(page,'Nota Fiscal').click();await pending.waitFor();assert.equal(await checkbox.isChecked(),true);assert.equal(await background(pending),'rgb(220, 252, 231)','Manual marking and its color survive reload');
+ await checkbox.uncheck();assert.equal(await background(pending),'rgb(255, 255, 255)');
+ const upload=pending.getByLabel('PDF da nota fiscal de Paciente pendente QA',{exact:true});
+ await upload.setInputFiles({name:'invalid.pdf',mimeType:'application/pdf',buffer:Buffer.from('Invalid PDF')});await page.getByRole('alert').filter({hasText:'arquivo PDF válido'}).waitFor();assert.equal(await checkbox.isChecked(),false);assert.equal(await background(pending),'rgb(255, 255, 255)','A failed upload must not mark the note as issued');
+ await upload.setInputFiles({name:'nota-qa.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n%%EOF\n')});await pending.getByRole('button',{name:'Ver PDF · nota-qa.pdf',exact:true}).waitFor();assert.equal(await checkbox.isChecked(),true);assert.equal(await background(pending),'rgb(220, 252, 231)','A successful PDF attachment automatically turns the whole card green');
+ await page.reload();await navigationButton(page,'Nota Fiscal').click();await pending.waitFor();assert.equal(await background(pending),'rgb(220, 252, 231)');await pending.getByRole('button',{name:'Ver PDF · nota-qa.pdf',exact:true}).waitFor();
+ await issued.getByLabel('Nota adicionada de Paciente com nota QA',{exact:true}).uncheck();assert.equal(await background(issued),'rgb(255, 255, 255)');assert.equal(await background(pending),'rgb(220, 252, 231)','Changing one card must not recolor other invoices');
+ await page.screenshot({path:'.avvi-local/invoice-status-qa.png'});assert.deepEqual(errors,[]);
+ console.log('PASS: whole invoice card is green when issued, white when pending, follows checkbox independently, persists on reload, turns green after successful PDF attachment and stays pending after invalid PDF. Fictional local data only.');
+}finally{await browser.close();}
