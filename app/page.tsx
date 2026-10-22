@@ -97,7 +97,11 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { appDataTableMissing, selectEntityState, selectCloudState, syncEntityDiffs, setDatabaseAccess } from "@/lib/database";
 import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, AnamneseRecord, ProfessionalStrategy, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
-import { hasSnapshotChanges, snapshotChanges, recoverPendingChanges, snapshotEntities } from "@/lib/persistence";
+import { hasSnapshotChanges, snapshotChanges, snapshotEntities } from "@/lib/persistence";
+import { recoverSharedSnapshot } from "@/lib/sharedSnapshot";
+import { notifySharedSave, watchSharedUpdates } from "@/lib/sharedUpdates";
+import { saveableAgendaSnapshot, omitPendingAppointments } from "@/lib/agendaSync";
+import type { AgendaSyncConflict } from "@/lib/agendaSync";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
 import { readBrowserSnapshot, writeBrowserSnapshot } from "@/lib/browserPersistence";
 import { tabLabel, canManageProfessional, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess, userSnapshotKey, isMetaReviewer } from "@/lib/access";
@@ -497,6 +501,7 @@ export default function Home() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncRetry, setSyncRetry] = useState(0);
   const [refreshError, setRefreshError] = useState("");
+  const [agendaSyncConflicts, setAgendaSyncConflicts] = useState<AgendaSyncConflict[]>([]);
 
   const accounting = useMemo(() => excludeZeroAccounts(appointments, entries, services), [appointments, entries, services]);
   const accountingRevenues = revenues.filter(item => !accounting.entryIds.has(item.sourceFinancialEntryId));
@@ -697,7 +702,7 @@ export default function Home() {
           }
         } : null;
         const recoveredSnapshot = localSnapshot?.syncedData
-          ? recoverPendingChanges(remoteSnapshot, localSnapshot.syncedData, localSnapshot.data)
+          ? recoverSharedSnapshot(remoteSnapshot, localSnapshot.syncedData, localSnapshot.data, currentUser)
           : isEmptyDatabase && localSnapshot ? localSnapshot.data : remoteSnapshot;
         const hydratedSnapshot: DataSnapshot = {
           ...recoveredSnapshot,
@@ -792,7 +797,10 @@ export default function Home() {
     const previous = lastSyncedSnapshot.current;
     const pending = !previous || hasSnapshotChanges(previous, next);
     setHasPendingChanges(pending);
-    if (!cloudLoaded.current || !previous || !pending) return;
+    if (!cloudLoaded.current || !previous) return;
+    const projection = saveableAgendaSnapshot(previous, next);
+    setAgendaSyncConflicts(projection.conflicts);
+    if (!pending || !hasSnapshotChanges(previous, projection.data)) { setSyncError(""); return; }
 
     pendingSyncs.current += 1;
     setIsSyncing(true);
@@ -800,12 +808,16 @@ export default function Home() {
       .catch(() => undefined)
       .then(async () => {
         const baseline = lastSyncedSnapshot.current;
-        const draft = latestDraft.current;
+        const localDraft = latestDraft.current;
+        const projection = baseline && localDraft ? saveableAgendaSnapshot(baseline, localDraft) : null;
+        const draft = projection?.data;
+        if (projection) setAgendaSyncConflicts(projection.conflicts);
         if (!baseline || !draft) return;
         if (hasSnapshotChanges(baseline, draft)) {
           await syncEntityDiffs(snapshotChanges(baseline, draft));
           lastSyncedSnapshot.current = draft;
           setLastSavedAt(new Date().toISOString());
+          notifySharedSave();
         }
         const latest = latestDraft.current ?? draft;
         persistLocalDraft(latest);
@@ -826,7 +838,7 @@ export default function Home() {
     if (!isAuthenticated || !isDataReady || !isSupabaseConfigured) return;
     let cancelled = false, queued = false, revision = "";
     const refresh = () => {
-      if (cancelled || queued || document.visibilityState === "hidden" || !cloudLoaded.current) return;
+      if (cancelled || queued || !cloudLoaded.current) return;
       queued = true;
       // Reads and writes use the same queue. A response started before a save
       // must never restore an older cloud version after that save succeeds.
@@ -840,7 +852,7 @@ export default function Home() {
           const baseline = lastSyncedSnapshot.current, draft = latestDraft.current;
           if (!baseline || !draft) return;
           const remote = { ...baseline, ...update.data };
-          const merged = recoverPendingChanges(remote, baseline, draft);
+          const merged = recoverSharedSnapshot(remote, baseline, draft, currentUser);
           revision = update.revision;
           lastSyncedSnapshot.current = remote;
           latestDraft.current = merged;
@@ -853,16 +865,10 @@ export default function Home() {
       }).finally(() => { queued = false; });
     };
     refresh();
-    const timer = window.setInterval(refresh, 10000);
-    window.addEventListener("focus", refresh);
-    window.addEventListener("online", refresh);
-    document.addEventListener("visibilitychange", refresh);
+    const stopWatching = watchSharedUpdates(refresh);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
-      window.removeEventListener("focus", refresh);
-      window.removeEventListener("online", refresh);
-      document.removeEventListener("visibilitychange", refresh);
+      stopWatching();
     };
   }, [isAuthenticated, isDataReady, currentUser, applyDataSnapshot, persistLocalDraft]);
 
@@ -870,8 +876,20 @@ export default function Home() {
     if (cloudLoaded.current) setSyncRetry((current) => current + 1);
     else setConnectionRetry((current) => current + 1);
   }
+  function discardAgendaAttempt(appointmentId: string) {
+    const baseline = lastSyncedSnapshot.current, draft = latestDraft.current;
+    if (!baseline || !draft || !window.confirm("Descartar somente esta tentativa local de agendamento e os efeitos do seu fechamento pendente? A versão já salva na nuvem será mantida.")) return;
+    const restored = omitPendingAppointments(baseline, draft, new Set([appointmentId]));
+    latestDraft.current = restored;
+    applyDataSnapshot(restored);
+    void persistLocalDraft(restored);
+    setCheckoutConfirmation(current => current?.appointmentId === appointmentId ? null : current);
+    setSyncError("");
+    setSyncRetry(current => current + 1);
+  }
   useEffect(() => {
     if (!isSupabaseConfigured || isSyncing || (!syncError && !hasPendingChanges)) return;
+    if (!syncError && agendaSyncConflicts.length && lastSyncedSnapshot.current && latestDraft.current && !hasSnapshotChanges(lastSyncedSnapshot.current, saveableAgendaSnapshot(lastSyncedSnapshot.current, latestDraft.current).data)) return;
     const retry = () => {
       if (cloudLoaded.current) setSyncRetry((current) => current + 1);
       else setConnectionRetry((current) => current + 1);
@@ -879,7 +897,7 @@ export default function Home() {
     const timer = window.setTimeout(retry, 15000);
     window.addEventListener("online", retry);
     return () => { window.clearTimeout(timer); window.removeEventListener("online", retry); };
-  }, [syncError, hasPendingChanges, isSyncing, syncRetry, connectionRetry]);
+  }, [syncError, hasPendingChanges, isSyncing, syncRetry, connectionRetry, agendaSyncConflicts.length]);
 
   useEffect(() => {
     if (!isSyncing && !hasPendingChanges && !storageError && !isSavingLocal) return;
@@ -897,6 +915,7 @@ export default function Home() {
     localWriteSequence.current++; setIsSavingLocal(false);
     setIsDataReady(false); setHasPendingChanges(false); setStorageError(""); setLastSavedAt("");
     setRefreshError("");
+    setAgendaSyncConflicts([]);
     lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
     setCheckoutDraft(null); setCheckoutConfirmation(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
     setAnamneses([]); setHistoryPatientId(null); setEditingPatientId(null);
@@ -1700,9 +1719,20 @@ export default function Home() {
             </div>
           )}
           {storageError && <div role="alert" className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-avvi-red">{storageError}</div>}
+          {agendaSyncConflicts.length > 0 && <div role="alert" aria-label="Agendamentos pendentes de revisão" className="mb-2 shrink-0 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+            <p className="font-bold">{agendaSyncConflicts.length} agendamento(s) precisam de revisão. Os demais registros continuam sendo salvos.</p>
+            <p>Estas tentativas estão guardadas neste navegador e ainda não foram confirmadas na nuvem.</p>
+            <div className="mt-2 max-h-32 space-y-2 overflow-auto">{agendaSyncConflicts.map(conflict => {
+              const appointment = appointments.find(item => item.id === conflict.appointmentId);
+              return <div key={conflict.appointmentId} className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-200 pt-2">
+                <span>{patients.find(item => item.id === appointment?.patientId)?.name ?? "Agendamento"} · {appointment?.startsAt ? format(parseISO(appointment.startsAt), "dd/MM/yyyy HH:mm") : ""} · {professionals.find(item => item.id === appointment?.professionalId)?.name}<br />{conflict.message}</span>
+                <div className="flex gap-2"><button type="button" className="rounded border border-amber-300 bg-white px-2 py-1 font-semibold" onClick={() => { setActiveTab("Agenda"); openAppointment(conflict.appointmentId); }}>Revisar horário</button><button type="button" className="rounded border border-amber-300 bg-white px-2 py-1" onClick={() => discardAgendaAttempt(conflict.appointmentId)}>Descartar esta tentativa</button></div>
+              </div>;
+            })}</div>
+          </div>}
           {refreshError && <div role="status" aria-label="Atualização da agenda" className="mb-2 shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{refreshError}</div>}
           <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
-            {!isDataReady ? "Carregando dados…" : activeTab === "Simulação" ? "Simulação temporária · nada é salvo." : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : hasPendingChanges || syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
+            {!isDataReady ? "Carregando dados…" : activeTab === "Simulação" ? "Simulação temporária · nada é salvo." : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : agendaSyncConflicts.length ? "Há agendamentos aguardando revisão. As outras alterações são salvas automaticamente." : hasPendingChanges ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
           </div>
           {checkoutConfirmation && isSupabaseConfigured && appointments.some(appointment => appointment.id === checkoutConfirmation.appointmentId && appointment.accountClosed && appointment.closedAccount?.id === checkoutConfirmation.accountId) && <div role="status" aria-label="Confirmação do fechamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-2 text-sm font-semibold text-avvi-ink">
             {lastSyncedSnapshot.current?.appointments.some(appointment => appointment.id === checkoutConfirmation.appointmentId && appointment.accountClosed && appointment.closedAccount?.id === checkoutConfirmation.accountId && JSON.stringify(appointment.closedAccount) === JSON.stringify(appointments.find(item => item.id === checkoutConfirmation.appointmentId)?.closedAccount))

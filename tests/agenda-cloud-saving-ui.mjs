@@ -172,7 +172,7 @@ try{
  await standard.page.getByTestId('appointment-remote-visit').filter({hasText:'Paciente remoto QA'}).waitFor({timeout:20000});
  await standard.page.getByText('Paciente pendente compartilhado',{exact:true}).first().waitFor();
  assert.equal(appointmentFor('Paciente pendente compartilhado'),undefined,'Pending draft was not falsely acknowledged');
- failWrites=false;await standard.page.getByRole('button',{name:'Tentar novamente',exact:true}).click();await saved(standard);
+ failWrites=false;await standard.page.getByRole('button',{name:'Tentar novamente',exact:true}).click({timeout:1000}).catch(async error=>{if(!await standard.status().filter({hasText:'Dados salvos na nuvem'}).count())throw error;});await saved(standard);
  assert.ok(appointmentFor('Paciente pendente compartilhado'));assert.ok(records.has('appointments:remote-visit'));
  records.delete('appointments:remote-visit');
  await standard.page.getByTestId('appointment-remote-visit').waitFor({state:'hidden',timeout:20000});
@@ -234,6 +234,61 @@ try{
  assert.equal(appointmentFor('Paciente conflito histórico QA'),undefined);
  assert.equal([...records.values()].some(row=>row.entity==='patients'&&row.data.name==='Paciente conflito histórico QA'),false);
  await pastForm.getByRole('button',{name:'Fechar',exact:true}).click();
+ // An old standard browser must recover automatic stock use from the current
+ // shared balance, rather than retrying the same forbidden absolute quantity.
+ await book(standard,'fourth',18,'Paciente estoque concorrente QA');await saved(standard);
+ const concurrentVisit=appointmentFor('Paciente estoque concorrente QA');
+ await standard.page.getByTestId('appointment-'+concurrentVisit.id).click();await standard.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();
+ await checkout.waitFor();await checkout.getByRole('button',{name:'Produtos',exact:true}).click();await checkout.getByRole('combobox',{name:'Adicionar produto ao consumo',exact:true}).fill('Produto QA');await checkout.getByRole('option',{name:'Produto QA',exact:true}).click();await checkout.getByRole('button',{name:'Adicionar produto',exact:true}).click();
+ await checkout.getByRole('button',{name:'Brindes',exact:true}).click();await checkout.getByLabel('Adicionar brinde ao fechamento',{exact:true}).selectOption('gift');await checkout.getByRole('button',{name:'Adicionar brinde',exact:true}).click();await checkout.getByLabel('Receber por Pix',{exact:true}).check();
+ const beforeStock=records.get('inventory:stock').data.quantity,beforeGift=records.get('gifts:gift').data.quantity;
+ failWrites=true;await checkout.getByRole('button',{name:'Fechar Conta',exact:true}).click();await checkout.waitFor({state:'hidden'});await standard.status().filter({hasText:'pendente'}).waitFor();
+ put('inventory',{...records.get('inventory:stock').data,quantity:beforeStock+5});put('gifts',{...records.get('gifts:gift').data,quantity:beforeGift+3});
+ // Reload reproduces the persistent warning on the clinic computer. The local
+ // checkout must be retained and repaired, not discarded to clear the warning.
+ await standard.page.reload();await standard.status().filter({hasText:'pendente'}).waitFor();failWrites=false;
+ await standard.page.getByRole('button',{name:'Tentar novamente',exact:true}).click();await saved(standard);
+ assert.equal(records.get('appointments:'+concurrentVisit.id).data.accountClosed,true);
+ assert.equal(records.get('inventory:stock').data.quantity,beforeStock+4);assert.equal(records.get('gifts:gift').data.quantity,beforeGift+2);
+ const navigationRequests=[];admin.page.on('request',request=>{if(request.isNavigationRequest())navigationRequests.push(request.url());});
+ await admin.page.getByTestId('appointment-'+concurrentVisit.id).filter({hasText:'Finalizado'}).waitFor({timeout:12000});
+ await standard.page.reload();await saved(standard);await pastDate(standard);assert.equal(records.get('inventory:stock').data.quantity,beforeStock+4);
+ // Keep a form open in the other account while a normal booking is saved.
+ await admin.page.locator('[data-agenda-slot][data-professional-id="third"][data-hour="17"]').getByRole('button').click();await admin.page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
+ const untouchedForm=admin.page.getByTestId('appointment-details-window');await untouchedForm.getByLabel('Nome do paciente',{exact:true}).fill('Rascunho que deve permanecer');
+ const navigationBefore=navigationRequests.length;
+ await book(standard,'fourth',19,'Paciente após recuperação QA');await saved(standard);
+ const subsequent=appointmentFor('Paciente após recuperação QA');await admin.page.getByTestId('appointment-'+subsequent.id).waitFor({timeout:12000});
+ assert.equal(await untouchedForm.getByLabel('Nome do paciente',{exact:true}).inputValue(),'Rascunho que deve permanecer');assert.equal(navigationRequests.length,navigationBefore,'Shared updates must never reload the page');await untouchedForm.getByRole('button',{name:'Fechar',exact:true}).click();
+ console.log('PASS: a stuck standard checkout survives reload, rebases product/gift consumption over another user’s stock changes, reaches the administrator and stops blocking subsequent bookings; automatic updates preserve open forms without page reload.');
+ // Reproduce the clinic screenshot: a previously persisted pending closure now
+ // overlaps a cloud booking. It must remain recoverable without poisoning saves.
+ const blockedId='local-conflict',blockedAccount='local-conflict-account';
+ const sourceVisit=records.get('appointments:'+concurrentVisit.id).data;
+ const conflictVisit=JSON.parse(JSON.stringify(sourceVisit).replaceAll(sourceVisit.closedAccount.id,blockedAccount).replaceAll(sourceVisit.id,blockedId));
+ conflictVisit.patientId='local-conflict-patient';conflictVisit.closedAccount.patientId='local-conflict-patient';
+ const conflictEntry=JSON.parse(JSON.stringify(records.get('financial_entries:'+sourceVisit.closedAccount.generatedEntryId).data).replaceAll(sourceVisit.closedAccount.id,blockedAccount).replaceAll(sourceVisit.id,blockedId));conflictEntry.patientId='local-conflict-patient';
+ const conflictRevenue=JSON.parse(JSON.stringify(records.get('revenues:receita-entry-'+sourceVisit.closedAccount.id).data).replaceAll(sourceVisit.closedAccount.id,blockedAccount));
+ const stockBeforeConflict=records.get('inventory:stock').data.quantity,giftBeforeConflict=records.get('gifts:gift').data.quantity;
+ await standard.page.evaluate(({visit,entry,revenue})=>{const key='avvi.data.snapshot.user.agenda-operator.1.v1',snapshot=JSON.parse(localStorage.getItem(key)),data=snapshot.data;data.appointments.push(visit);data.patients.push({id:'local-conflict-patient',name:'Paciente pendência antiga QA',phone:'',notes:'',futureCredit:0});data.financial_entries.push(entry);data.revenues.push(revenue);data.inventory.find(row=>row.id==='stock').quantity--;data.gifts.find(row=>row.id==='gift').quantity--;localStorage.setItem(key,JSON.stringify(snapshot));},{visit:conflictVisit,entry:conflictEntry,revenue:conflictRevenue});
+ await standard.page.reload();const conflictPanel=standard.page.getByRole('alert',{name:'Agendamentos pendentes de revisão',exact:true});await conflictPanel.getByText(/Paciente pendência antiga QA/).waitFor();
+ assert.equal(records.has('appointments:'+blockedId),false);assert.equal(records.has('patients:local-conflict-patient'),false);assert.equal(records.has('revenues:receita-entry-'+blockedAccount),false);assert.equal(records.get('inventory:stock').data.quantity,stockBeforeConflict);assert.equal(records.get('gifts:gift').data.quantity,giftBeforeConflict);
+ await pastDate(standard);await book(standard,'fourth',17,'Paciente salvo apesar da pendência QA');
+ await wait(async()=>!!appointmentFor('Paciente salvo apesar da pendência QA'),'A conflicting old draft blocked an unrelated new booking');
+ const independentVisit=appointmentFor('Paciente salvo apesar da pendência QA');await admin.page.getByTestId('appointment-'+independentVisit.id).waitFor({timeout:12000});
+ await standard.page.getByTestId('appointment-'+independentVisit.id).click();await standard.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();await checkout.waitFor();
+ await checkout.getByRole('button',{name:'Produtos',exact:true}).click();await checkout.getByRole('combobox',{name:'Adicionar produto ao consumo',exact:true}).fill('Produto QA');await checkout.getByRole('option',{name:'Produto QA',exact:true}).click();await checkout.getByRole('button',{name:'Adicionar produto',exact:true}).click();await checkout.getByLabel('Receber por Pix',{exact:true}).check();await checkout.getByRole('button',{name:'Fechar Conta',exact:true}).click();await checkout.waitFor({state:'hidden'});
+ await wait(async()=>records.get('appointments:'+independentVisit.id)?.data.accountClosed,'A conflicting old draft blocked an unrelated account closure');
+ await admin.page.getByTestId('appointment-'+independentVisit.id).filter({hasText:'Finalizado'}).waitFor({timeout:12000});
+ assert.equal(records.get('inventory:stock').data.quantity,stockBeforeConflict-1);assert.equal(records.has('revenues:receita-entry-'+blockedAccount),false);
+ await standard.page.reload();await conflictPanel.waitFor();await conflictPanel.getByRole('button',{name:'Revisar horário',exact:true}).click();
+ const conflictForm=standard.page.getByTestId('appointment-details-window');await conflictForm.waitFor();assert.equal(await conflictForm.getByLabel('Nome do paciente',{exact:true}).inputValue(),'Paciente pendência antiga QA');
+ await conflictForm.getByRole('button',{name:'Fechar',exact:true}).click();
+ standard.page.once('dialog',dialog=>dialog.dismiss());await conflictPanel.getByRole('button',{name:'Descartar esta tentativa',exact:true}).click();await conflictPanel.waitFor();
+ standard.page.once('dialog',dialog=>dialog.accept());await conflictPanel.getByRole('button',{name:'Descartar esta tentativa',exact:true}).click();await conflictPanel.waitFor({state:'hidden'});await saved(standard);
+ assert.equal(records.has('appointments:'+concurrentVisit.id),true);assert.equal(records.get('appointments:'+concurrentVisit.id).data.accountClosed,true);assert.equal(records.has('appointments:'+blockedId),false);assert.equal(records.get('inventory:stock').data.quantity,stockBeforeConflict-1);assert.equal(records.get('gifts:gift').data.quantity,giftBeforeConflict);
+ await standard.page.reload();await saved(standard);assert.equal(await conflictPanel.count(),0);
+ console.log('PASS: an old occupied-slot closure stays in an explicit review panel across reload, without orphan patient/stock/revenue; unrelated bookings reach the administrator, review opens the original patient, canceling discard preserves it and explicit discard retains cloud bookings and clears the persistent warning.');
  assert.deepEqual(errors,[]);
  console.log('PASS: admin/standard save past appointments through real gateway, reuse cancelled time, share both ways without reload and persist after reload; cancellation history and reactivation conflicts preserved; remote conflict while menu is open produces an explicit error and no orphan patient.');
  console.log('PASS: administrator saving and reload, three professionals at one time, fourth rejected in browser and server for both roles, lost acknowledgement retries without duplicate patients/bookings. Isolated mock cloud only.');
