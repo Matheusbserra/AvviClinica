@@ -100,7 +100,7 @@ export async function selectEntity<T extends EntityName>(entity: T): Promise<Ent
   return result.records;
 }
 
-// Conditional polling works with the custom clinic session and protected RLS,
+// Conditional refresh works with the custom clinic session and protected RLS,
 // unlike a browser Realtime subscription authenticated with only the anon key.
 export async function selectCloudState(revision = ""): Promise<{ revision: string; data: Partial<DataSnapshot> } | null> {
   const response = await fetch("/api/access/data?sync=1", {

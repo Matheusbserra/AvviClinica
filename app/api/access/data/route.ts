@@ -11,7 +11,7 @@ import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAva
 import { applyCheckoutUltraformer, isUltraformerTip, usageOnlyTipUpdate, validCheckoutShots } from "@/lib/ultraformer";
 import { validStrategy } from "@/lib/strategyDefinitions";
 import { validAnamnese } from "@/lib/anamnese";
-import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice } from "@/lib/invoices";
+import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice, preserveCloudInvoice } from "@/lib/invoices";
 import { entityNames } from "@/lib/database";
 import type { EntityName } from "@/lib/database";
 import type { Appointment, FinancialEntry } from "@/lib/types";
@@ -177,6 +177,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const stockRestricted = user.role === "standard" && !canMoveStock(user);
     const deletedAppointments = removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids);
     const stored = appointmentUpdates.length || deletedAppointments.length || stockRestricted && stockUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
+    for (const appointment of appointmentUpdates) Object.assign(appointment, preserveCloudInvoice(stored.find(item => item.id === appointment.id), appointment));
     const packageSensitive = [...appointmentUpdates, ...stored.filter(item => deletedAppointments.includes(item.id) || appointmentUpdates.some(next => next.id === item.id))].some(hasPackageSessionData);
     if (packageSensitive) {
       const effective = [...stored.filter(item => !deletedAppointments.includes(item.id) && !appointmentUpdates.some(next => next.id === item.id)), ...appointmentUpdates];

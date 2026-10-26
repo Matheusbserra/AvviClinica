@@ -4,6 +4,7 @@ import {FileText,Upload,ExternalLink,Search,Trash2,Plus,Copy,Check} from "lucide
 import {invoiceRows,invoiceVisible,invoiceMaxBytes} from "@/lib/invoices";
 import {currency} from "@/lib/calculations";
 import {isSupabaseConfigured} from "@/lib/supabase";
+import {notifySharedSave} from "@/lib/sharedUpdates";
 import type {Appointment,FinancialEntry,InvoiceAttachment,Patient,Professional,Service} from "@/lib/types";
 export function InvoiceView({appointments,patients,professionals,services,entries,onChange,onCpfChange}:{appointments:Appointment[];patients:Patient[];professionals:Professional[];services:Service[];entries:FinancialEntry[];onChange:(id:string,invoice:InvoiceAttachment)=>void;onCpfChange:(patientId:string,cpf:string)=>void}) {
  const [cpfEditor,setCpfEditor]=useState<{patientId:string;appointmentId:string;value:string}|null>(null);
@@ -23,9 +24,10 @@ export function InvoiceView({appointments,patients,professionals,services,entrie
    if(file.size>invoiceMaxBytes)throw new Error("Envie um PDF de até 3 MB.");
    const bytes=await file.arrayBuffer();if(new TextDecoder().decode(bytes.slice(0,5))!=="%PDF-")throw new Error("Selecione um arquivo PDF válido.");
    let attachment:Partial<InvoiceAttachment>;
-   if(isSupabaseConfigured){const form=new FormData();form.set("appointmentId",appointment.id);form.set("file",file);const response=await fetch("/api/invoices",{method:"POST",body:form});const result=await response.json();if(!response.ok)throw new Error(result.error);attachment={pdfPath:result.path,filename:file.name};}
+   if(isSupabaseConfigured){const form=new FormData();form.set("appointmentId",appointment.id);form.set("file",file);const response=await fetch("/api/invoices",{method:"POST",body:form});const result=await response.json();if(!response.ok)throw new Error(result.error);attachment=result.invoice??{pdfPath:result.path,filename:file.name};}
    else {const localPdf=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error("Não foi possível ler o PDF."));reader.readAsDataURL(file);});attachment={localPdf,filename:file.name};}
    onChange(appointment.id,{...appointment.invoice,issued:true,updatedAt:new Date().toISOString(),...attachment});
+   if(isSupabaseConfigured)notifySharedSave();
   }catch(error){setError(error instanceof Error?error.message:"Não foi possível anexar o PDF. Tente novamente.");}finally{setBusy(null);}
  }
  async function open(appointment:Appointment) {

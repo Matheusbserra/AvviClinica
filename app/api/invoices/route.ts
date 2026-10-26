@@ -3,15 +3,28 @@ import {resolveAccess,sameOrigin} from "@/lib/accessServer";
 import {canAccessTab} from "@/lib/access";
 import {zeroClosedAppointment} from "@/lib/calculations";
 import {invoiceBucket,invoiceMaxBytes,excludedInvoiceProfessional} from "@/lib/invoices";
-import type {Appointment,Professional} from "@/lib/types";
+import type {Appointment,Professional,InvoiceAttachment} from "@/lib/types";
 export const runtime="nodejs";
 const headers={"Cache-Control":"no-store"};
 function database(){const url=process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();const key=process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();if(!url||!key)throw new Error("Conexão privada com o Supabase não configurada.");return createClient(url,key,{auth:{persistSession:false}});}
 function prefix(id:string){return Buffer.from(id).toString("hex")+"/";}
+async function attach(db:ReturnType<typeof database>,id:string,path:string,filename:string) {
+ for(let attempt=0;attempt<3;attempt++) {
+  const current=await account(db,id);
+  const invoice:InvoiceAttachment={...current.invoice,issued:true,pdfPath:path,filename:filename.slice(0,200),updatedAt:new Date().toISOString()};
+  const saved=await db.from("avvi_records").update({data:{...current,invoice},updated_at:new Date().toISOString()}).eq("entity","appointments").eq("record_id",id).eq("data",JSON.stringify(current)).select("record_id");
+  if(saved.error)throw saved.error;
+  if(saved.data?.length)return invoice;
+ }
+ throw new Error("O atendimento foi alterado durante o envio. Atualize os dados e tente anexar novamente.");
+}
 async function account(db:ReturnType<typeof database>,id:string){const {data,error}=await db.from("avvi_records").select("data").eq("entity","appointments").eq("record_id",id).maybeSingle();if(error)throw error;const appointment=data?.data as Appointment|undefined;if(!appointment?.accountClosed)throw new Error("Feche a conta antes de anexar a nota.");const professional=await db.from("avvi_records").select("data").eq("entity","professionals").eq("record_id",appointment.professionalId).maybeSingle();if(professional.error)throw professional.error;if(zeroClosedAppointment(appointment)||excludedInvoiceProfessional(professional.data?.data as Professional))throw new Error("Este fechamento não faz parte das notas fiscais.");return appointment;}
 export async function POST(request:Request){const user=await resolveAccess(request);if(!user||!canAccessTab(user,"Nota Fiscal"))return Response.json({error:"Acesso às notas fiscais não autorizado."},{status:403,headers});if(!sameOrigin(request))return Response.json({error:"Origem não autorizada."},{status:403,headers});
  try{const form=await request.formData();const file=form.get("file");const id=String(form.get("appointmentId")??"");if(!(file instanceof File)||!id||file.size>invoiceMaxBytes)return Response.json({error:"Envie um PDF de até 3 MB."},{status:400,headers});const bytes=Buffer.from(await file.arrayBuffer());if(bytes.subarray(0,5).toString()!=="%PDF-")return Response.json({error:"Selecione um PDF válido."},{status:400,headers});const db=database();await account(db,id);
  const bucket=await db.storage.getBucket(invoiceBucket);if(bucket.error){const created=await db.storage.createBucket(invoiceBucket,{public:false,fileSizeLimit:invoiceMaxBytes,allowedMimeTypes:["application/pdf"]});if(created.error&&!/already exists/i.test(created.error.message))throw created.error;}else if(bucket.data.public)throw new Error("O armazenamento de notas precisa ser privado.");
- const path=prefix(id)+crypto.randomUUID()+".pdf";const uploaded=await db.storage.from(invoiceBucket).upload(path,bytes,{contentType:"application/pdf",upsert:false});if(uploaded.error)throw uploaded.error;return Response.json({path},{headers});
+ const path=prefix(id)+crypto.randomUUID()+".pdf";const uploaded=await db.storage.from(invoiceBucket).upload(path,bytes,{contentType:"application/pdf",upsert:false});if(uploaded.error)throw uploaded.error;
+ // A completed upload is not enough: the private cloud record must point to it
+ // before the browser is told it succeeded. A lost response never deletes a PDF.
+ const invoice=await attach(db,id,path,file.name);return Response.json({path,invoice},{headers});
  }catch(error){return Response.json({error:error instanceof Error?error.message:"Não foi possível anexar a nota. Confira a conexão privada com o Supabase."},{status:503,headers});}}
 export async function GET(request:Request){const user=await resolveAccess(request);if(!user||!canAccessTab(user,"Nota Fiscal"))return Response.json({error:"Acesso às notas fiscais não autorizado."},{status:403,headers});try{const id=new URL(request.url).searchParams.get("appointmentId")??"";const db=database();const appointment=await account(db,id);const path=appointment.invoice?.pdfPath;if(!path||!path.startsWith(prefix(id)))return Response.json({error:"Nenhum PDF anexado."},{status:404,headers});const result=await db.storage.from(invoiceBucket).createSignedUrl(path,60);if(result.error)throw result.error;return Response.json({url:result.data.signedUrl},{headers});}catch{return Response.json({error:"Não foi possível abrir o PDF. Confira o salvamento na nuvem."},{status:503,headers});}}

@@ -34,5 +34,16 @@ try {
  assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...next,invoice:{issued:true,visibility:'hidden'}}}]))).status,200);
  assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...next,invoice:{issued:true,visibility:'visible'}}}]))).status,200);
  assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...next,notes:'forged',invoice:{issued:true,visibility:'hidden'}}}]))).status,403);
- console.log('PASS: stock permission survives account projection, read-only/manual/checkout/reopen server enforcement, category and manual inclusion preservation, fixed invoice cutoff and reversible metadata, invoice-only cloud edits without appointment access. Isolated fixtures.');
+ const attachment={issued:true,pdfPath:'61/12345678-1234-1234-1234-123456789abc.pdf',filename:'nota-qa.pdf',updatedAt:'2026-10-26T12:00:00.000Z'};
+ for(const profile of [{...readOnly,tabs:['Agenda']},{login:'admin',role:'admin'}]) {
+  serverUser=profile;records.set('appointments:appt',{entity:'appointments',record_id:'appt',data:{...next,invoice:attachment}});
+  assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...next,notes:'Edição em aba antiga'}}]))).status,200);
+  assert.deepEqual(records.get('appointments:appt').data.invoice,attachment,'A stale admin/standard booking cannot drop an uploaded PDF');
+  assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...next,invoice:{issued:false,updatedAt:'2026-10-20T10:00:00.000Z'}}}]))).status,200);
+  assert.deepEqual(records.get('appointments:appt').data.invoice,attachment,'Older offline invoice metadata cannot erase a newer upload');
+ }
+ serverUser={...readOnly,tabs:['Nota Fiscal']};const current=records.get('appointments:appt').data;
+ assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...current,invoice:{issued:false,updatedAt:'2026-10-27T10:00:00.000Z'}}}]))).status,200);
+ assert.equal(records.get('appointments:appt').data.invoice.issued,false,'A deliberate current status edit remains allowed');assert.equal(records.get('appointments:appt').data.invoice.pdfPath,attachment.pdfPath);
+ console.log('PASS: stock permission and invoice-only guards, fixed invoice cutoff; stale admin/standard tabs and older offline metadata preserve PDFs while deliberate current status edits remain allowed. Isolated fixtures.');
 } finally {assert.equal(path.dirname(path.resolve(dir)),path.resolve(os.tmpdir()));assert.ok(path.basename(dir).startsWith('avvi-invoice-stock-'));fs.rmSync(dir,{recursive:true,force:true});}

@@ -70,6 +70,7 @@ try{
   return {page,context,status:()=>page.getByRole('status',{name:'Status do salvamento',exact:true})};
  }
  const saved=async s=>{try{await s.status().filter({hasText:'Dados salvos na nuvem'}).waitFor({timeout:30000});}catch(error){console.error('Saving alerts:',await s.page.getByRole('alert').allTextContents());throw error;}};
+ const refresh=async s=>{await s.page.bringToFront();await s.page.evaluate(()=>window.dispatchEvent(new Event('focus')));};
  async function book(s,professional,hour,name,service='service'){
   const {page}=s,slot=page.locator(`[data-agenda-slot][data-professional-id="${professional}"][data-hour="${hour}"]`);
   await slot.getByRole('button').click();await page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
@@ -87,11 +88,14 @@ try{
  console.log('PASS: Agenda-only operator recovers a booking after initial cloud failure with no browser cache.');
  // Separate browser contexts represent two users already looking at the same agenda.
  const observer=await session('admin',process.env.AVVI_TEST_ADMIN_PASSWORD);await saved(observer);
+ let idleRequests=0;const countIdle=request=>{if(request.url().includes('/api/access/data'))idleRequests++;};observer.page.on('request',countIdle);
+ await observer.page.waitForTimeout(1200);const settled=idleRequests;await observer.page.waitForTimeout(7000);assert.equal(idleRequests,settled,'An idle agenda must not keep querying the cloud every three seconds');observer.page.off('request',countIdle);
+ const manualRefresh=observer.page.waitForResponse(response=>response.url().includes('/api/access/data?sync=1'));await observer.page.getByRole('button',{name:'Atualizar dados',exact:true}).click();await manualRefresh;
  // Normal restricted create + patient + paid closure, failed writes/reload/retry, then cloud readback.
  await standard.page.reload();await saved(standard);
  await book(standard,'ana',10,'Paciente pago QA');await saved(standard);
  const visit=appointmentFor('Paciente pago QA');assert.ok(visit);
- await observer.page.getByTestId('appointment-'+visit.id).waitFor({timeout:20000});
+ await refresh(observer);await observer.page.getByTestId('appointment-'+visit.id).waitFor({timeout:20000});
  assert.equal(await observer.page.getByTestId('appointment-'+visit.id).count(),1,'One shared booking, without reloading the other user');
  const card=standard.page.getByTestId('appointment-'+visit.id);await card.click();await standard.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();
  const checkout=standard.page.getByRole('dialog',{name:/Fechamento de conta/i});
@@ -102,7 +106,7 @@ try{
  await standard.page.reload();await standard.status().filter({hasText:'pendente'}).waitFor();failWrites=false;
  await standard.page.getByRole('button',{name:'Tentar novamente',exact:true}).click();await saved(standard);
  const closed=records.get('appointments:'+visit.id).data;assert.equal(closed.accountClosed,true);assert.equal(closed.closedAccount.payments[0].amount,300);assert.equal(records.get('inventory:stock').data.quantity,9);
- await observer.page.getByTestId('appointment-'+visit.id).filter({hasText:'Finalizado'}).waitFor({timeout:20000});
+ await refresh(observer);await observer.page.getByTestId('appointment-'+visit.id).filter({hasText:'Finalizado'}).waitFor({timeout:20000});
  assert.ok(records.has('financial_entries:'+closed.closedAccount.generatedEntryId));assert.ok(records.has('revenues:receita-entry-'+closed.closedAccount.id));
  await standard.page.reload();await saved(standard);assert.equal(records.get('inventory:stock').data.quantity,9);
  await standard.page.getByTestId('appointment-'+visit.id).click();await standard.page.getByRole('menuitem',{name:'Ver fechamento',exact:true}).click();await standard.page.getByTestId('closed-account-received').filter({hasText:'300,00'}).waitFor();await standard.page.getByRole('button',{name:'Fechar detalhes do fechamento',exact:true}).click();
@@ -132,7 +136,7 @@ try{
  const edited=records.get('appointments:'+visit.id).data;assert.equal(edited.closedAccount.id,closed.closedAccount.id);assert.equal(edited.closedAccount.creditAdded,50);assert.equal(records.get('patients:'+edited.patientId).data.futureCredit,50);assert.equal(records.get('inventory:stock').data.quantity,9);assert.equal(records.get('gifts:gift').data.quantity,3);assert.ok(records.get('fixed_costs:taxa-maquininha-'+edited.closedAccount.id).data.value>0);
  await standard.page.reload();await saved(standard);await standard.page.getByTestId('appointment-'+visit.id).click();await standard.page.getByRole('menuitem',{name:'Ver fechamento',exact:true}).click();await standard.page.getByRole('dialog').getByRole('button',{name:'Excluir fechamento',exact:true}).click();await saved(standard);
  assert.equal(records.get('appointments:'+visit.id).data.accountClosed,false);assert.equal(records.get('inventory:stock').data.quantity,10);assert.equal(records.get('gifts:gift').data.quantity,4);assert.equal(records.get('patients:'+edited.patientId).data.futureCredit,0);
- await observer.page.getByTestId('appointment-'+visit.id).filter({hasText:'Agendado'}).waitFor({timeout:20000});
+ await refresh(observer);await observer.page.getByTestId('appointment-'+visit.id).filter({hasText:'Agendado'}).waitFor({timeout:20000});
  for(const [entity,id]of [['revenues','receita-entry-'],['fixed_costs','taxa-maquininha-'],['financial_entries','procedure-account-']])assert.equal(records.has(entity+':'+id+edited.closedAccount.id),false);
  console.log('PASS: standard edits saved closure, saves split Pix/card payment, card fee, gift and future credit; reversal restores stock/gift/credit and removes linked financial records.');
  // Editing the booking must preserve saved invoice metadata/attachments.
@@ -145,14 +149,14 @@ try{
  const admin=await session('admin',process.env.AVVI_TEST_ADMIN_PASSWORD);await saved(admin);
  for(const pro of ['ana','bia','third']){await book(admin,pro,14,'Paciente paralelo '+pro);await saved(admin);}
  const sharedVisit=appointmentFor('Paciente paralelo bia');
- await standard.page.getByTestId('appointment-'+sharedVisit.id).waitFor({timeout:20000});
+ await refresh(standard);await standard.page.getByTestId('appointment-'+sharedVisit.id).waitFor({timeout:20000});
  // Creating another booking in the old browser must retain the other user's rows.
  await book(standard,'fourth',18,'Paciente compartilhado padrão');await saved(standard);
  const standardVisit=appointmentFor('Paciente compartilhado padrão');
- await admin.page.getByTestId('appointment-'+standardVisit.id).waitFor({timeout:20000});
+ await refresh(admin);await admin.page.getByTestId('appointment-'+standardVisit.id).waitFor({timeout:20000});
  assert.ok(records.has('appointments:'+sharedVisit.id));
  assert.ok(records.has('appointments:'+standardVisit.id));
- console.log('PASS: two open users share new bookings and closures/reversals in both directions without reload; later saves preserve the other user’s bookings.');
+ console.log('PASS: two users share new bookings and closures/reversals on return/manual refresh without reload or continuous polling; later saves preserve the other user’s bookings.');
  await admin.page.reload();await saved(admin);
  const fourthSlot=admin.page.locator('[data-agenda-slot][data-professional-id="fourth"][data-hour="14"]');await fourthSlot.getByRole('button').click();await admin.page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
  const details=admin.page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente excedente');await selectSearchOption(details,'Serviço','Serviço QA');await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.getByRole('alert').filter({hasText:/3.*simult/}).waitFor();assert.equal(appointmentFor('Paciente excedente'),undefined);await details.getByRole('button',{name:'Fechar',exact:true}).click();
@@ -169,14 +173,14 @@ try{
  failWrites=true;await book(standard,'fourth',19,'Paciente pendente compartilhado');await standard.status().filter({hasText:'pendente'}).waitFor();
  put('patients',{id:'remote-patient',name:'Paciente remoto QA',phone:'',notes:''});
  put('appointments',{id:'remote-visit',patientId:'remote-patient',professionalId:'bia',startsAt:date+'T12:00:00',endsAt:date+'T12:30:00',eventType:'Novo Agendamento',status:'Agendado',notes:''});
- await standard.page.getByTestId('appointment-remote-visit').filter({hasText:'Paciente remoto QA'}).waitFor({timeout:20000});
+ await refresh(standard);await standard.page.getByTestId('appointment-remote-visit').filter({hasText:'Paciente remoto QA'}).waitFor({timeout:20000});
  await standard.page.getByText('Paciente pendente compartilhado',{exact:true}).first().waitFor();
  assert.equal(appointmentFor('Paciente pendente compartilhado'),undefined,'Pending draft was not falsely acknowledged');
  failWrites=false;await standard.page.getByRole('button',{name:'Tentar novamente',exact:true}).click({timeout:1000}).catch(async error=>{if(!await standard.status().filter({hasText:'Dados salvos na nuvem'}).count())throw error;});await saved(standard);
  assert.ok(appointmentFor('Paciente pendente compartilhado'));assert.ok(records.has('appointments:remote-visit'));
  records.delete('appointments:remote-visit');
- await standard.page.getByTestId('appointment-remote-visit').waitFor({state:'hidden',timeout:20000});
- await observer.page.getByTestId('appointment-remote-visit').waitFor({state:'hidden',timeout:20000});
+ await refresh(standard);await standard.page.getByTestId('appointment-remote-visit').waitFor({state:'hidden',timeout:20000});
+ await refresh(observer);await observer.page.getByTestId('appointment-remote-visit').waitFor({state:'hidden',timeout:20000});
  await book(standard,'bia',12,'Paciente após exclusão remota');await saved(standard);
  assert.equal(records.has('appointments:remote-visit'),false,'A later save must not resurrect a remote deletion');
  console.log('PASS: remote inserts/patient names update while a local save is pending; retry retains both records; remote deletions disappear and are not resurrected.');
@@ -192,10 +196,10 @@ try{
  assert.equal(await standard.page.getByTestId('appointment-past-cancelled').count(),0);
  await book(standard,'ana',9,'Paciente passado padrão');await saved(standard);
  const pastStandard=appointmentFor('Paciente passado padrão');assert.equal(pastStandard.startsAt,past+'T09:00:00');
- await admin.page.getByTestId('appointment-'+pastStandard.id).waitFor({timeout:20000});
+ await refresh(admin);await admin.page.getByTestId('appointment-'+pastStandard.id).waitFor({timeout:20000});
  await book(admin,'bia',10,'Paciente passado administrador');await saved(admin);
  const pastAdmin=appointmentFor('Paciente passado administrador');assert.equal(pastAdmin.startsAt,past+'T10:00:00');
- await standard.page.getByTestId('appointment-'+pastAdmin.id).waitFor({timeout:20000});
+ await refresh(standard);await standard.page.getByTestId('appointment-'+pastAdmin.id).waitFor({timeout:20000});
  for(const s of [standard,admin]){
   await s.page.reload();await saved(s);await pastDate(s);
   await s.page.getByTestId('appointment-'+pastStandard.id).waitFor();await s.page.getByTestId('appointment-'+pastAdmin.id).waitFor();
@@ -212,7 +216,7 @@ try{
  const debtAccount=records.get('appointments:'+pastStandard.id).data.closedAccount;
  assert.equal(debtAccount.balanceDue,200);assert.equal(debtAccount.payments[0].amount,100);
  assert.equal(records.get('revenues:receita-entry-'+debtAccount.id).data.total,100);
- await admin.page.getByTestId('appointment-'+pastStandard.id).filter({hasText:'Finalizado'}).waitFor({timeout:20000});
+ await refresh(admin);await admin.page.getByTestId('appointment-'+pastStandard.id).filter({hasText:'Finalizado'}).waitFor({timeout:20000});
  await admin.page.getByTestId('appointment-'+pastStandard.id).click();await admin.page.getByRole('menuitem',{name:'Ver fechamento',exact:true}).click();
  await admin.page.getByRole('dialog',{name:'Detalhes do fechamento',exact:true}).getByText('Saldo em aberto:',{exact:true}).locator('..').filter({hasText:'200,00'}).waitFor();
  await admin.page.getByRole('button',{name:'Fechar detalhes do fechamento',exact:true}).click();
@@ -224,7 +228,7 @@ try{
  // the conflict on save, rather than turning Novo agendamento into a silent no-op.
  await standard.page.locator('[data-agenda-slot][data-professional-id="ana"][data-hour="11"]').getByRole('button').click();
  put('appointments',{id:'past-remote',patientId:'patient',professionalId:'ana',startsAt:past+'T11:00:00',endsAt:past+'T12:00:00',eventType:'Novo Agendamento',status:'Agendado',notes:''});
- await standard.page.getByTestId('appointment-past-remote').waitFor({timeout:20000});
+ await standard.page.evaluate(()=>window.dispatchEvent(new Event('focus')));await standard.page.getByTestId('appointment-past-remote').waitFor({timeout:20000});
  await standard.page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
  const pastForm=standard.page.getByTestId('appointment-details-window');await pastForm.waitFor();
  await pastForm.getByLabel('Nome do paciente',{exact:true}).fill('Paciente conflito histórico QA');
@@ -251,14 +255,14 @@ try{
  assert.equal(records.get('appointments:'+concurrentVisit.id).data.accountClosed,true);
  assert.equal(records.get('inventory:stock').data.quantity,beforeStock+4);assert.equal(records.get('gifts:gift').data.quantity,beforeGift+2);
  const navigationRequests=[];admin.page.on('request',request=>{if(request.isNavigationRequest())navigationRequests.push(request.url());});
- await admin.page.getByTestId('appointment-'+concurrentVisit.id).filter({hasText:'Finalizado'}).waitFor({timeout:12000});
+ await refresh(admin);await admin.page.getByTestId('appointment-'+concurrentVisit.id).filter({hasText:'Finalizado'}).waitFor({timeout:12000});
  await standard.page.reload();await saved(standard);await pastDate(standard);assert.equal(records.get('inventory:stock').data.quantity,beforeStock+4);
  // Keep a form open in the other account while a normal booking is saved.
  await admin.page.locator('[data-agenda-slot][data-professional-id="third"][data-hour="17"]').getByRole('button').click();await admin.page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
  const untouchedForm=admin.page.getByTestId('appointment-details-window');await untouchedForm.getByLabel('Nome do paciente',{exact:true}).fill('Rascunho que deve permanecer');
  const navigationBefore=navigationRequests.length;
  await book(standard,'fourth',19,'Paciente após recuperação QA');await saved(standard);
- const subsequent=appointmentFor('Paciente após recuperação QA');await admin.page.getByTestId('appointment-'+subsequent.id).waitFor({timeout:12000});
+ const subsequent=appointmentFor('Paciente após recuperação QA');await refresh(admin);await admin.page.getByTestId('appointment-'+subsequent.id).waitFor({timeout:12000});
  assert.equal(await untouchedForm.getByLabel('Nome do paciente',{exact:true}).inputValue(),'Rascunho que deve permanecer');assert.equal(navigationRequests.length,navigationBefore,'Shared updates must never reload the page');await untouchedForm.getByRole('button',{name:'Fechar',exact:true}).click();
  console.log('PASS: a stuck standard checkout survives reload, rebases product/gift consumption over another user’s stock changes, reaches the administrator and stops blocking subsequent bookings; automatic updates preserve open forms without page reload.');
  // Reproduce the clinic screenshot: a previously persisted pending closure now
@@ -275,11 +279,11 @@ try{
  assert.equal(records.has('appointments:'+blockedId),false);assert.equal(records.has('patients:local-conflict-patient'),false);assert.equal(records.has('revenues:receita-entry-'+blockedAccount),false);assert.equal(records.get('inventory:stock').data.quantity,stockBeforeConflict);assert.equal(records.get('gifts:gift').data.quantity,giftBeforeConflict);
  await pastDate(standard);await book(standard,'fourth',17,'Paciente salvo apesar da pendência QA');
  await wait(async()=>!!appointmentFor('Paciente salvo apesar da pendência QA'),'A conflicting old draft blocked an unrelated new booking');
- const independentVisit=appointmentFor('Paciente salvo apesar da pendência QA');await admin.page.getByTestId('appointment-'+independentVisit.id).waitFor({timeout:12000});
+ const independentVisit=appointmentFor('Paciente salvo apesar da pendência QA');await refresh(admin);await admin.page.getByTestId('appointment-'+independentVisit.id).waitFor({timeout:12000});
  await standard.page.getByTestId('appointment-'+independentVisit.id).click();await standard.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();await checkout.waitFor();
  await checkout.getByRole('button',{name:'Produtos',exact:true}).click();await checkout.getByRole('combobox',{name:'Adicionar produto ao consumo',exact:true}).fill('Produto QA');await checkout.getByRole('option',{name:'Produto QA',exact:true}).click();await checkout.getByRole('button',{name:'Adicionar produto',exact:true}).click();await checkout.getByLabel('Receber por Pix',{exact:true}).check();await checkout.getByRole('button',{name:'Fechar Conta',exact:true}).click();await checkout.waitFor({state:'hidden'});
  await wait(async()=>records.get('appointments:'+independentVisit.id)?.data.accountClosed,'A conflicting old draft blocked an unrelated account closure');
- await admin.page.getByTestId('appointment-'+independentVisit.id).filter({hasText:'Finalizado'}).waitFor({timeout:12000});
+ await refresh(admin);await admin.page.getByTestId('appointment-'+independentVisit.id).filter({hasText:'Finalizado'}).waitFor({timeout:12000});
  assert.equal(records.get('inventory:stock').data.quantity,stockBeforeConflict-1);assert.equal(records.has('revenues:receita-entry-'+blockedAccount),false);
  await standard.page.reload();await conflictPanel.waitFor();await conflictPanel.getByRole('button',{name:'Revisar horário',exact:true}).click();
  const conflictForm=standard.page.getByTestId('appointment-details-window');await conflictForm.waitFor();assert.equal(await conflictForm.getByLabel('Nome do paciente',{exact:true}).inputValue(),'Paciente pendência antiga QA');

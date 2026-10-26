@@ -4,6 +4,16 @@ import {zeroClosedAppointment} from "./calculations";
 import {moneyRound} from "./checkout";
 export const invoiceBucket="avvi-invoices";
 export const invoiceMaxBytes=3*1024*1024;
+// A booking edited from an older tab must not erase a PDF saved independently.
+// Reversing the account still removes the invoice along with its closure.
+export function preserveCloudInvoice(previous: Appointment | undefined, next: Appointment): Appointment {
+ const saved=previous?.invoice;
+ if(!saved||!next.accountClosed)return next;
+ const incoming=next.invoice;
+ if(!incoming || saved.updatedAt && (!incoming.updatedAt || incoming.updatedAt < saved.updatedAt))return {...next,invoice:saved};
+ if(saved.pdfPath && !incoming.pdfPath)return {...next,invoice:{...incoming,pdfPath:saved.pdfPath,filename:saved.filename}};
+ return next;
+}
 // The requested historical cutoff is fixed, rather than advancing every month.
 export const invoiceStartDate = "2026-10-01";
 export function invoiceVisible(appointment: Appointment) {

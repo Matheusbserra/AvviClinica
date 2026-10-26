@@ -100,7 +100,7 @@ import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, Fix
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 import { hasSnapshotChanges, snapshotChanges, snapshotEntities } from "@/lib/persistence";
 import { recoverSharedSnapshot } from "@/lib/sharedSnapshot";
-import { notifySharedSave, watchSharedUpdates } from "@/lib/sharedUpdates";
+import { notifySharedSave, requestSharedRefresh, watchSharedUpdates } from "@/lib/sharedUpdates";
 import { saveableAgendaSnapshot, omitPendingAppointments } from "@/lib/agendaSync";
 import type { AgendaSyncConflict } from "@/lib/agendaSync";
 import type { DataSnapshot, LocalSnapshot } from "@/lib/persistence";
@@ -1993,7 +1993,7 @@ function Header({ activeTab, compact = false }: { activeTab: Tab; compact?: bool
           {!compact && <p className="text-xs font-semibold uppercase tracking-[0.16em] text-avvi-blue">AVVI Clínica</p>}
           <h2 className={`${compact ? "text-lg" : "text-2xl"} font-bold text-avvi-ink`}>{tabLabel(activeTab)}</h2>
         </div>
-        <div className="flex items-center gap-2"><div className="w-9 lg:hidden"><ThemeToggle compact /></div><div className={`flex items-center gap-2 rounded-xl bg-avvi-soft font-semibold text-avvi-blue ${compact ? "px-2 py-1 text-[10px]" : "px-3 py-2 text-sm"}`}>
+        <div className="flex items-center gap-2"><button type="button" onClick={requestSharedRefresh} title="Buscar alterações salvas por outros usuários, sem recarregar a página" className="rounded-lg border border-avvi-line px-2 py-1 text-xs font-semibold text-avvi-blue">Atualizar dados</button><div className="w-9 lg:hidden"><ThemeToggle compact /></div><div className={`flex items-center gap-2 rounded-xl bg-avvi-soft font-semibold text-avvi-blue ${compact ? "px-2 py-1 text-[10px]" : "px-3 py-2 text-sm"}`}>
           <CheckCircle2 size={16} />
           Sistema v1 funcional
         </div></div>
