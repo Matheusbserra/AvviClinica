@@ -45,5 +45,11 @@ try {
  serverUser={...readOnly,tabs:['Nota Fiscal']};const current=records.get('appointments:appt').data;
  assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...current,invoice:{issued:false,updatedAt:'2026-10-27T10:00:00.000Z'}}}]))).status,200);
  assert.equal(records.get('appointments:appt').data.invoice.issued,false,'A deliberate current status edit remains allowed');assert.equal(records.get('appointments:appt').data.invoice.pdfPath,attachment.pdfPath);
- console.log('PASS: stock permission and invoice-only guards, fixed invoice cutoff; stale admin/standard tabs and older offline metadata preserve PDFs while deliberate current status edits remain allowed. Isolated fixtures.');
+ const savedInvoice=records.get('appointments:appt').data;
+ assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...savedInvoice,invoice:{...savedInvoice.invoice,invalidCpf:true,updatedAt:'2026-10-28T10:00:00.000Z'}}}]))).status,200);
+ assert.equal(records.get('appointments:appt').data.invoice.invalidCpf,true,'Invoice-only standard users can persist a manual CPF warning');assert.equal(records.get('appointments:appt').data.invoice.pdfPath,attachment.pdfPath);
+ const flagged=records.get('appointments:appt').data;
+ assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...flagged,invoice:{...flagged.invoice,invalidCpf:'yes'}}}]))).status,400);
+ assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...flagged,invoice:{...flagged.invoice,invalidCpf:false,updatedAt:'2026-10-29T10:00:00.000Z'}}}]))).status,200);assert.equal(records.get('appointments:appt').data.invoice.invalidCpf,false);
+ console.log('PASS: stock permission and invoice-only guards, fixed cutoff; stale tabs preserve PDFs; deliberate status edits and CPF warning on/off persist for invoice-only users, malformed flags denied. Isolated fixtures.');
 } finally {assert.equal(path.dirname(path.resolve(dir)),path.resolve(os.tmpdir()));assert.ok(path.basename(dir).startsWith('avvi-invoice-stock-'));fs.rmSync(dir,{recursive:true,force:true});}

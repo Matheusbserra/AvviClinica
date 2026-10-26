@@ -34,10 +34,24 @@ export function invoiceRows(appointments: Appointment[],patients:Patient[],profe
    return [{appointment,professional,patient:patients.find(item=>item.id===appointment.patientId),date:appointment.startsAt.slice(0,10),lines,total:moneyRound(lines.reduce((sum,line)=>sum+line.value,0))}];
  }).sort((a,b)=>b.date.localeCompare(a.date));
 }
+type InvoiceRow = ReturnType<typeof invoiceRows>[number];
+export function invoicePdfSummary(rows: readonly Pick<InvoiceRow,"appointment"|"total">[]) {
+ const attached=rows.filter(row=>Boolean(row.appointment.invoice?.pdfPath?.trim()||row.appointment.invoice?.localPdf?.trim()));
+ return {count:attached.length,total:attached.reduce((cents,row)=>cents+Math.round(row.total*100),0)/100};
+}
+export function invoiceMonthLabel(month:string) {
+ if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return "Sem mês";
+ return new Intl.DateTimeFormat("pt-BR",{month:"long",year:"numeric",timeZone:"UTC"}).format(new Date(`${month}-01T12:00:00Z`));
+}
+export function invoiceMonthlyGroups(rows: readonly InvoiceRow[]) {
+ const groups=new Map<string,InvoiceRow[]>();
+ for(const row of rows){const month=row.date.slice(0,7),group=groups.get(month);if(group)group.push(row);else groups.set(month,[row]);}
+ return [...groups].sort(([a],[b])=>b.localeCompare(a)).map(([month,records])=>({month,label:invoiceMonthLabel(month),rows:records,...invoicePdfSummary(records)}));
+}
 export function validInvoice(value: unknown): value is InvoiceAttachment {
  if(!value||typeof value!=="object")return false;
  const v=value as Record<string,unknown>;
- return Object.keys(v).every(key=>["issued","visibility","updatedAt","filename","pdfPath","localPdf"].includes(key))&&typeof v.issued==="boolean"&&(v.visibility===undefined||v.visibility==="hidden"||v.visibility==="visible")&&(v.pdfPath===undefined||(typeof v.pdfPath==="string"&&/^[a-f0-9]+\/[a-f0-9-]{36}\.pdf$/.test(v.pdfPath)))&&["updatedAt","filename","pdfPath","localPdf"].every(key=>v[key]===undefined||typeof v[key]==="string");
+ return Object.keys(v).every(key=>["issued","invalidCpf","visibility","updatedAt","filename","pdfPath","localPdf"].includes(key))&&typeof v.issued==="boolean"&&(v.invalidCpf===undefined||typeof v.invalidCpf==="boolean")&&(v.visibility===undefined||v.visibility==="hidden"||v.visibility==="visible")&&(v.pdfPath===undefined||(typeof v.pdfPath==="string"&&/^[a-f0-9]+\/[a-f0-9-]{36}\.pdf$/.test(v.pdfPath)))&&["updatedAt","filename","pdfPath","localPdf"].every(key=>v[key]===undefined||typeof v[key]==="string");
 }
 export function invoiceOnlyUpdate(previous:Appointment|undefined,next:Appointment) {
  if(!previous||!validInvoice(next.invoice))return false;
