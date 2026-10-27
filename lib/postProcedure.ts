@@ -26,8 +26,10 @@ export function validPostProcedurePlan(value: unknown): value is PostProcedurePl
   return !!plan && typeof plan.enabled === "boolean" && day(plan.firstContactDays) && day(plan.satisfactionDays) && plan.firstContactDays <= plan.satisfactionDays && day(plan.reactivationDays)
     && Array.isArray(plan.followUpDays) && plan.followUpDays.length <= 12 && plan.followUpDays.every(day)
     && new Set(plan.followUpDays).size === plan.followUpDays.length
+    && (plan.reactivationDaysList === undefined || Array.isArray(plan.reactivationDaysList) && plan.reactivationDaysList.length <= 12 && plan.reactivationDaysList.every(day) && plan.reactivationDaysList.every((n, index) => !index || n > plan.reactivationDaysList![index - 1]))
     && plan.followUpDays.every((n, index) => n >= plan.firstContactDays && n <= plan.satisfactionDays && (!index || n > plan.followUpDays[index - 1]));
 }
+export function postProcedureReactivationDays(plan: PostProcedurePlan) { return plan.reactivationDaysList ?? [plan.reactivationDays]; }
 export function validPostProcedureDate(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value + "T12:00:00Z")) && new Date(value + "T12:00:00Z").toISOString().slice(0, 10) === value;
 }
@@ -45,14 +47,15 @@ export const postProcedureId = (appointmentId: string, serviceId: string, stage:
 export function validPostProcedureContact(value: unknown): value is PostProcedureContact {
   const item = value as PostProcedureContact | undefined;
   return !!item && [item.id, item.appointmentId, item.patientId, item.serviceId, item.stage].every(s => typeof s === "string" && s.length > 0 && s.length <= 1500)
-    && /^(first|followup-\d{1,2}|satisfaction|reactivation)$/.test(item.stage) && item.id === postProcedureId(item.appointmentId, item.serviceId, item.stage)
+    && /^(first|followup-\d{1,2}|satisfaction|reactivation(?:-\d{1,2})?)$/.test(item.stage) && item.id === postProcedureId(item.appointmentId, item.serviceId, item.stage)
     && postProcedureStatuses.includes(item.status) && typeof item.response === "string" && item.response.length <= 5000
+    && (item.rescheduled === undefined || typeof item.rescheduled === "boolean")
     && (item.dueDate === undefined || validPostProcedureDate(item.dueDate)) && typeof item.updatedAt === "string" && Number.isFinite(Date.parse(item.updatedAt))
     && Array.isArray(item.history) && item.history.length <= 100 && item.history.every(h => h && typeof h.at === "string" && Number.isFinite(Date.parse(h.at)) && typeof h.by === "string" && h.by.length <= 200 && postProcedureStatuses.includes(h.status) && typeof h.response === "string" && h.response.length <= 5000 && (h.dueDate === undefined || validPostProcedureDate(h.dueDate)));
 }
 export type PostProcedureTask = {
   id: string; appointmentId: string; patientId: string; serviceId: string; stage: string; label: string;
-  performedOn: string; dueDate: string; patientName: string; phone: string; professionalId: string; professionalName: string;
+  performedOn: string; scheduledDate: string; dueDate: string; patientName: string; phone: string; professionalId: string; professionalName: string;
   serviceName: string; status: PostProcedureStatus; contact?: PostProcedureContact;
 };
 export function postProcedureInPeriod(task: Pick<PostProcedureTask, "dueDate" | "status">, period: string, reference: string) {
@@ -83,12 +86,14 @@ export function postProcedureTasks(appointments: Appointment[], services: Servic
       if (!service) continue;
       const plan = servicePostProcedurePlan(service);
       if (!validPostProcedurePlan(plan) || !plan.enabled) continue;
-      const stages = [{ stage: "first", label: "Primeiro contato", days: plan.firstContactDays }, ...plan.followUpDays.map((days, index) => ({ stage: `followup-${index}`, label: `Acompanhamento ${index + 1}`, days })), { stage: "satisfaction", label: "Resultado e satisfação", days: plan.satisfactionDays }, { stage: "reactivation", label: "Reativação", days: plan.reactivationDays }];
+      const reactivations = postProcedureReactivationDays(plan);
+      const stages = [{ stage: "first", label: "Primeiro contato", days: plan.firstContactDays }, ...plan.followUpDays.map((days, index) => ({ stage: `followup-${index}`, label: `Acompanhamento ${index + 1}`, days })), { stage: "satisfaction", label: "Resultado e satisfação", days: plan.satisfactionDays }, ...reactivations.map((days, index) => ({ stage: index ? `reactivation-${index}` : "reactivation", label: reactivations.length > 1 ? `Reativação ${index + 1}` : "Reativação", days }))];
       for (const stage of stages) {
         const id = postProcedureId(appointment.id, service.id, stage.stage), contact = saved.get(id);
+        const scheduledDate = addPostProcedureDays(performedOn, stage.days);
         const patient = people.get(appointment.patientId);
         tasks.set(id, { id, appointmentId: appointment.id, patientId: appointment.patientId, serviceId: service.id, stage: stage.stage, label: stage.label, performedOn,
-          dueDate: contact?.dueDate ?? addPostProcedureDays(performedOn, stage.days), patientName: patient?.name ?? "Paciente não encontrado", phone: patient?.phone ?? "",
+          scheduledDate, dueDate: contact?.status === "Concluído" || contact?.rescheduled ? contact.dueDate ?? scheduledDate : scheduledDate, patientName: patient?.name ?? "Paciente não encontrado", phone: patient?.phone ?? "",
           professionalId: appointment.professionalId, professionalName: team.get(appointment.professionalId)?.name ?? "Profissional", serviceName: service.name, status: contact?.status ?? "Aguardando contato", contact });
       }
     }
@@ -97,7 +102,7 @@ export function postProcedureTasks(appointments: Appointment[], services: Servic
 }
 export function postProcedureMessage(task: PostProcedureTask) {
   const start = `Olá, ${task.patientName}! Aqui é da AVVI Clínica. Estamos acompanhando seu procedimento de ${task.serviceName}.`;
-  return task.stage === "reactivation" ? `Olá, ${task.patientName}! Aqui é da AVVI Clínica. Como você está? Gostaria de agendar uma nova avaliação para conversar sobre seus objetivos e os cuidados indicados para você?`
+  return task.stage.startsWith("reactivation") ? `Olá, ${task.patientName}! Aqui é da AVVI Clínica. Como você está? Gostaria de agendar uma nova avaliação para conversar sobre seus objetivos e os cuidados indicados para você?`
     : task.stage === "satisfaction" ? `${start} Como você percebe a evolução e o resultado até agora? Ficou com alguma dúvida ou algo que gostaria de conversar com a profissional?`
     : `${start} Como você está se sentindo? Teve algum desconforto, alguma alteração ou dúvida sobre as orientações recebidas?`;
 }

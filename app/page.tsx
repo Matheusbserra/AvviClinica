@@ -2696,7 +2696,7 @@ function ServicesView({ services, setServices, packages, setPackages }: { servic
       setError("Informe o nome, uma duração válida e um preço igual ou maior que zero.");
       return;
     }
-    if (!validPostProcedurePlan(servicePostProcedurePlan(serviceForm))) { setError("Confira os dias do pós-procedimento: use números inteiros de 1 a 730 e acompanhamentos em ordem, entre o primeiro contato e a satisfação."); return; }
+    if (!validPostProcedurePlan(servicePostProcedurePlan(serviceForm))) { setError("Confira os dias do pós-procedimento: use números inteiros de 1 a 730, acompanhamentos e reativações em ordem. Os acompanhamentos devem ficar entre o primeiro contato e a satisfação."); return; }
     if (services.some((service) => service.id !== serviceForm.id && serviceKey(service.name) === serviceKey(serviceForm.name))) {
       setError("Já existe um serviço com este nome. Edite o cadastro existente.");
       return;

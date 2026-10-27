@@ -1,4 +1,8 @@
 export async function selectCalendarDate(page,date,label='Calendário do pós-procedimento') {
+ if(label==='Calendário do pós-procedimento'){
+  const field=page.getByLabel('Data de referência dos contatos',{exact:true});
+  if(await field.count()){await field.fill(date);return;}
+ }
  const calendar=page.getByRole('region',{name:label,exact:true});await calendar.waitFor();
  for(let count=0;count<240;count++){
   const current=await calendar.getAttribute('data-selected-date');

@@ -26,5 +26,12 @@ try {
  user={...user,tabs:['Pós-procedimento']};failWrite=true;assert.equal((await save('post_procedure_contacts',{...contact,response:'Changed'})).status,503);failWrite=false;
  user={login:'admin',role:'admin'};assert.equal((await save('services',{...service,postProcedure:{...service.postProcedure,reactivationDays:-1}})).status,400);
  assert.equal((await save('services',{...service,postProcedure:{...service.postProcedure,reactivationDays:75}})).status,200);
- console.log('PASS: shared contact save/read/retry, cloud failure reporting, invalid dates/plans and altered/cancelled visits denied; post-only users cannot edit bookings/catalog/finances; cloud and local projections hide CPF, clinical notes and financials while retaining all follow-up steps. Mocked cloud only.');
+ assert.equal((await save('services',{...service,postProcedure:{...service.postProcedure,reactivationDaysList:[60,60]}})).status,400);
+ assert.equal((await save('services',{...service,postProcedure:{...service.postProcedure,reactivationDaysList:[60,90,120]}})).status,200);
+ user={id:'post-user',login:'post-user',name:'Equipe QA',role:'standard',tabs:['Pós-procedimento'],revision:1};
+ const reactivation={...contact,id:post.postProcedureId('visit','service','reactivation-1'),stage:'reactivation-1',status:'Mensagem enviada',dueDate:'2026-12-30',rescheduled:false};
+ assert.equal((await save('post_procedure_contacts',reactivation)).status,200);assert.equal((await save('post_procedure_contacts',reactivation)).status,200);
+ assert.equal([...records.values()].filter(row=>row.entity==='post_procedure_contacts').length,2);assert.equal(records.get('post_procedure_contacts:'+contact.id).data.status,'Concluído');
+ assert.equal((await save('post_procedure_contacts',{...reactivation,rescheduled:'yes'})).status,400);
+ console.log('PASS: shared contact save/read/retry, cloud failure reporting, invalid dates/plans and altered/cancelled visits denied; post-only users cannot edit bookings/catalog/finances; cloud and local projections hide CPF, clinical notes and financials; multiple reactivation plans and additional stage persist alongside legacy records without duplication. Mocked cloud only.');
 }finally{assert.equal(path.dirname(path.resolve(dir)),path.resolve(os.tmpdir()));assert.ok(path.basename(dir).startsWith('avvi-post-procedure-'));fs.rmSync(dir,{recursive:true,force:true});}

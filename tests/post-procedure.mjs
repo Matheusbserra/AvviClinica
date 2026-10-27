@@ -39,6 +39,15 @@ const first=tasks[0],contact={id:first.id,appointmentId:'visit',patientId:'patie
 assert.equal(post.validPostProcedureContact(contact),true);for(const patch of [{id:'forged'},{status:'unknown'},{dueDate:'2026-02-30'},{response:'x'.repeat(5001)},{stage:'bad'}])assert.equal(post.validPostProcedureContact({...contact,...patch}),false);
 tasks=queue([base],services,[contact]);assert.equal(tasks[0].status,'Concluído');assert.equal(tasks[0].dueDate,'2026-10-03');
 assert.equal(queue([base],[{...services[0],postProcedure:{...post.servicePostProcedurePlan(services[0]),firstContactDays:2}}],[contact])[0].dueDate,'2026-10-03');
+const multiple={...services[0],postProcedure:{...post.servicePostProcedurePlan(services[0]),reactivationDaysList:[60,90,120]}};
+assert.equal(post.validPostProcedurePlan(multiple.postProcedure),true);assert.deepEqual(post.postProcedureReactivationDays(post.servicePostProcedurePlan(services[0])),[60]);
+for(const list of [[60,60],[90,60],[0],[1.5],Array.from({length:13},(_,i)=>i+1)])assert.equal(post.validPostProcedurePlan({...multiple.postProcedure,reactivationDaysList:list}),false);
+const retro=queue([base],[multiple],[contact]).filter(task=>task.stage.startsWith('reactivation'));assert.deepEqual(retro.map(t=>[t.stage,t.dueDate]),[['reactivation','2026-11-30'],['reactivation-1','2026-12-30'],['reactivation-2','2027-01-29']]);assert.equal(new Set(retro.map(t=>t.id)).size,3);
+const extraContact={...contact,id:post.postProcedureId('visit','toxin','reactivation-1'),stage:'reactivation-1',dueDate:'2026-12-30'};assert.equal(post.validPostProcedureContact(extraContact),true);assert.match(post.postProcedureMessage(retro[1]),/nova avaliação/);
+const changed={...services[0],postProcedure:{...post.servicePostProcedurePlan(services[0]),firstContactDays:5}};
+for(const rescheduled of [undefined,false])assert.equal(queue([base],[changed],[{...contact,status:'Mensagem enviada',rescheduled}]).find(t=>t.stage==='first').dueDate,'2026-10-06','Changing service timing recalculates pending contacts of old patients from the actual procedure date');
+assert.equal(queue([base],[changed],[{...contact,status:'Sem resposta',rescheduled:true}]).find(t=>t.stage==='first').dueDate,'2026-10-03','Explicit manual next-attempt dates stay independent');
+assert.equal(queue([base],[{...multiple,postProcedure:{...multiple.postProcedure,reactivationDaysList:[]}}]).some(t=>t.stage.startsWith('reactivation')),false);
 assert.equal(JSON.stringify([base,services]),before,'Deriving contacts never mutates bookings, costs or services');
 assert.match(post.postProcedureWhatsApp(patients[0].phone,post.postProcedureMessage(first)),/^https:\/\/wa.me\/5598999990000\?text=/);assert.equal(post.postProcedureWhatsApp('123','test'),'');
 assert.match(post.postProcedureMessage({...first,stage:'reactivation'}),/nova avaliação/);
