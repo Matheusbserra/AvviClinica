@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {navigationButton} from './navigation-helper.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE??'file:///C:/Users/mathe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs');
-if(!process.env.AVVI_TEST_ADMIN_PASSWORD)throw Error('Configure AVVI_TEST_ADMIN_PASSWORD.');
+if(!process.env.AVVI_TEST_ADMIN_PASSWORD&&!process.env.AVVI_TEST_ADMIN_SESSION)throw Error('Configure AVVI_TEST_ADMIN_PASSWORD ou AVVI_TEST_ADMIN_SESSION.');
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH??'C:/Program Files/Google/Chrome/Application/chrome.exe'});
 const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],key='avvi.data.snapshot.v1';
 page.on('pageerror',error=>errors.push(error.message));
@@ -14,9 +14,11 @@ async function allProfessionals(){
  assert.match(await page.getByTestId('professional-page').innerText(),/de 3$/);
 }
 try{
- await page.goto(process.env.AVVI_TEST_URL??'http://127.0.0.1:3107');
- await page.getByLabel('Login',{exact:true}).fill('admin');await page.getByLabel('Senha',{exact:true}).fill(process.env.AVVI_TEST_ADMIN_PASSWORD);
- await tab('Entrar').click();await page.getByRole('status',{name:'Status do salvamento',exact:true}).filter({hasText:'Prévia local'}).waitFor();
+ const origin=process.env.AVVI_TEST_URL??'http://127.0.0.1:3107';
+ if(process.env.AVVI_TEST_ADMIN_SESSION)await page.context().addCookies([{name:'avvi_access',value:process.env.AVVI_TEST_ADMIN_SESSION,url:origin,httpOnly:true,sameSite:'Strict'}]);
+ await page.goto(origin);
+ if(!process.env.AVVI_TEST_ADMIN_SESSION){await page.getByLabel('Login',{exact:true}).fill('admin');await page.getByLabel('Senha',{exact:true}).fill(process.env.AVVI_TEST_ADMIN_PASSWORD);await tab('Entrar').click();}
+ await page.getByRole('status',{name:'Status do salvamento',exact:true}).filter({hasText:'Prévia local'}).waitFor();
  await page.evaluate(key=>{
   const snapshot=JSON.parse(localStorage.getItem(key)),d=snapshot.data;
   d.professionals=['a','b','c','hidden'].map(id=>({id,name:'Profissional QA '+id,active:true,showInAgenda:id!=='hidden',commissionPercent:70,color:'#335577',closedShifts:[]}));

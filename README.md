@@ -64,6 +64,10 @@ Serviços usam a entidade `services` na tabela `avvi_records`; não é necessár
 
 ## Pós-procedimento
 
+A data é escolhida pelo mesmo calendário mensal usado na Agenda, com navegação por mês e seleção do dia. Os quatro indicadores superiores foram removidos. **Hoje** corresponde ao dia selecionado; **Atrasados** inclui somente os 7 dias anteriores, sem incluir o dia selecionado; **Próximos** inclui do dia seguinte até 7 dias depois. **Todos pendentes** e **Concluídos** mantêm seu alcance completo. O teste `node tests/post-procedure-calendar-ui.mjs` cobre as fronteiras de ±7 dias, exclusão de ±8 dias, troca da data de referência, calendário compartilhado com Agenda, fim de mês, ano bissexto e uso no celular.
+
+O bloco introdutório de descrição fica ao final da página, depois dos cartões dos pacientes, para priorizar o calendário, os filtros e os contatos no início da tela.
+
 Em **Operação > Pós-procedimento**, a agenda reúne **Hoje, Atrasados, Próximos, Todos pendentes e Concluídos**. É possível buscar paciente/serviço, filtrar profissional e etapa, abrir uma mensagem sugerida no WhatsApp e registrar situação, resposta, próxima tentativa e histórico. Abrir o WhatsApp não confirma envio: a equipe registra o resultado do contato. Os dias são corridos, calculados pela data de realização do atendimento, com referência diária no fuso de São Paulo.
 
 Os contatos são separados em quatro colunas sempre abertas, com contador e cores diferentes: **Primeiro contato** (azul), **Acompanhamento** (verde), **Resultado e satisfação** (violeta) e **Reativação** (âmbar). Todos os contatos do filtro aparecem na mesma página, sem limite de 30 nem paginação. Em telas menores as colunas se reorganizam, mantendo todas abertas. Cada cartão mostra quantos dias se passaram desde a realização até a data de referência, com singular/plural e indicação explícita quando o procedimento ainda não havia acontecido nessa referência. O teste `node tests/post-procedure-board-ui.mjs` verifica 160 contatos, colunas simultâneas, cores, contagem de 1/7/10 dias, filtros e adaptação ao celular/modo escuro.

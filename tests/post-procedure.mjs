@@ -16,6 +16,12 @@ assert.equal(post.addPostProcedureDays('2026-12-31',1),'2027-01-01');assert.equa
 assert.equal(post.postProcedureDay(new Date('2026-10-28T01:00:00Z')),'2026-10-27');
 for(const [date,days] of [['2026-10-21',1],['2026-10-27',7],['2026-10-30',10],['2026-10-20',0],['2026-10-19',-1]])assert.equal(post.postProcedureElapsedDays('2026-10-20',date),days);
 assert.equal(post.postProcedureElapsedDays('2026-12-31','2027-01-01'),1);assert.equal(post.postProcedureElapsedDays('2028-02-28','2028-03-01'),2);assert.equal(post.postProcedureElapsedDays('invalid','2026-10-27'),null);
+for(const [offset,late,next,today] of [[-8,false,false,false],[-7,true,false,false],[-1,true,false,false],[0,false,false,true],[1,false,true,false],[7,false,true,false],[8,false,false,false]]){
+ const task={dueDate:post.addPostProcedureDays('2026-10-27',offset),status:'Aguardando contato'};
+ assert.equal(post.postProcedureInPeriod(task,'late','2026-10-27'),late);assert.equal(post.postProcedureInPeriod(task,'next','2026-10-27'),next);assert.equal(post.postProcedureInPeriod(task,'today','2026-10-27'),today);assert.equal(post.postProcedureInPeriod(task,'all','2026-10-27'),true);
+ assert.equal(post.postProcedureInPeriod({...task,status:'Concluído'},'late','2026-10-27'),false);assert.equal(post.postProcedureInPeriod({...task,status:'Concluído'},'completed','2026-10-27'),true);
+}
+assert.equal(post.postProcedureInPeriod({dueDate:'2026-12-31',status:'Sem resposta'},'late','2027-01-01'),true);assert.equal(post.postProcedureInPeriod({dueDate:'2028-03-01',status:'Mensagem enviada'},'next','2028-02-29'),true);
 const base={id:'visit',patientId:'patient',professionalId:'pro',startsAt:'2026-10-01T10:00:00',endsAt:'2026-10-01T11:00:00',status:'Finalizado',accountClosed:true,closedAccount:{procedureLines:[{serviceId:'toxin',quantity:1},{serviceId:'toxin',quantity:2}],packageSessionUses:[]}},patients=[{id:'patient',name:'Paciente QA',phone:'(98) 99999-0000'}],pros=[{id:'pro',name:'Profissional QA'}];
 const queue=(visits=[base],catalog=services,contacts=[])=>post.postProcedureTasks(visits,catalog,patients,pros,contacts,'2026-10-27');
 const before=JSON.stringify([base,services]);let tasks=queue();assert.equal(tasks.length,4,'Duplicate service lines generate one contact per stage');

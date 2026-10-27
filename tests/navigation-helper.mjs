@@ -8,9 +8,13 @@ export function navigationButton(page, name) {
       const names = ['Agenda','Pós-procedimento','Simulação','Estoque','Follow Up','Anamnese','Ultraformer MPT','Rankings','Relatório Profissional','Estratégias','Dashboard','Movimentações','Lançamento de Procedimentos','Pagamento Profissional','Recibos de Pagamento','Nota Fiscal','Custos','Cadastro de Produtos','Cadastro de Serviços','Cadastro de Profissionais','Cadastro de Pacientes','Metas','Contas'];
       const mobileMenu = page.getByRole('combobox',{name:'Navegar pelo sistema',exact:true});
       if (names.includes(visibleName) && (page.viewportSize()?.width ?? 1440) < 1024) {
-        await mobileMenu.waitFor({state:'visible'});
-        if (property === 'click') return mobileMenu.selectOption({label:visibleName});
-        return mobileMenu.waitFor(...args);
+        // Agenda uses a compact select; the other screens use mobile tab buttons.
+        await mobileMenu.or(locator).first().waitFor({state:'visible'});
+        if (await mobileMenu.isVisible()) {
+          if (property === 'click') return mobileMenu.selectOption({label:visibleName});
+          return mobileMenu.waitFor(...args);
+        }
+        return target[property](...args);
       }
       if (names.includes(visibleName) && (page.viewportSize()?.width ?? 1440) >= 1024) await page.getByRole('navigation',{name:'Menu principal'}).waitFor();
       const item = page.getByRole('navigation',{name:'Menu principal'}).getByRole('button',{name:visibleName,exact:true,includeHidden:true}).first();

@@ -3,7 +3,8 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { createPortal } from "react-dom";
-import { addDays, addMonths, eachDayOfInterval, endOfMonth, format, getDate, isSameDay, parseISO, startOfMonth } from "date-fns";
+import { addDays, format, parseISO } from "date-fns";
+import { MonthCalendar } from "./MonthCalendar";
 import { ptBR } from "date-fns/locale";
 import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Plus, X, Eye, CircleDollarSign, Ban, Phone, User, Syringe, Info } from "lucide-react";
 import { agendaHours, agendaSlots, slotTime, bookingDuration, isAbsence, overlappingAppointments, rectangleSlots, shiftClosed, slotAvailable, resizedAgendaEnd, appointmentAvailabilityError } from "@/lib/agendaAvailability";
@@ -200,7 +201,6 @@ export function AgendaView(props: Props) {
     return () => observer.disconnect();
   }, []);
   const selected = parseISO(`${props.selectedDate}T00:00:00`);
-  const days = eachDayOfInterval({ start: startOfMonth(selected), end: endOfMonth(selected) });
   const agendaProfessionals = props.professionals.filter(professional => professional.showInAgenda !== false);
   const visibleProfessionals = agendaProfessionals.some(professional => professional.id === professionalFilter)
     ? agendaProfessionals.filter(professional => professional.id === professionalFilter) : agendaProfessionals;
@@ -234,14 +234,7 @@ export function AgendaView(props: Props) {
   const listPage = Math.min(slotList?.page ?? 0, listPages - 1);
   function changeDate(date: string) { dragCleanup.current?.(); setResizing(null); setResizeError(""); props.setSelectedDate(date); setSlotList(null); setMenu(null); setSlotMenu(null); setSelectedSlots([]); }
   const controls = <>
-    <section className="rounded-lg border border-avvi-line bg-white p-2.5 shadow-sm">
-      <div className="mb-2 flex items-center justify-between gap-1 text-[11px]"><button type="button" className="rounded p-1 hover:bg-avvi-soft" onClick={() => changeDate(format(addMonths(selected, -1), "yyyy-MM-dd"))} title="Mês anterior"><ChevronLeft size={13} /></button><strong>{format(selected, "MMM yyyy", { locale: ptBR })}</strong><button type="button" className="rounded p-1 hover:bg-avvi-soft" onClick={() => changeDate(format(addMonths(selected, 1), "yyyy-MM-dd"))} title="Próximo mês"><ChevronRight size={13} /></button></div>
-      <div className="grid grid-cols-7 gap-0.5 text-center text-[9px] text-slate-500">
-        {["D", "S", "T", "Q", "Q", "S", "S"].map((day, index) => <span key={index}>{day}</span>)}
-        {Array.from({ length: startOfMonth(selected).getDay() }, (_, index) => <span key={`blank-${index}`} />)}
-        {days.map((day) => <button type="button" aria-label={`Selecionar dia ${format(day, "dd/MM/yyyy")}`} key={day.toISOString()} onClick={() => { changeDate(format(day, "yyyy-MM-dd")); setControlsOpen(false); }} className={`h-5 min-w-0 rounded text-[10px] ${isSameDay(day, selected) ? "bg-avvi-blue font-bold text-white" : "hover:bg-avvi-soft"}`}>{getDate(day)}</button>)}
-      </div>
-    </section>
+    <MonthCalendar date={props.selectedDate} onChange={changeDate} onDaySelected={() => setControlsOpen(false)} label="Calendário da agenda"/>
     <section className="space-y-2 rounded-lg border border-avvi-line bg-white p-2.5 shadow-sm">
       <label className="block text-[10px] font-semibold text-slate-500">Profissional<select aria-label="Filtrar profissional da agenda" value={props.professionals.some(professional => professional.id === professionalFilter && professional.showInAgenda !== false) ? professionalFilter : "todos"} onChange={(event) => { setProfessionalFilter(event.target.value); setProfessionalPage(0); }} className="mt-1 w-full min-w-0 rounded border border-avvi-line bg-white px-1.5 py-1.5 text-[11px]"><option value="todos">Todos</option>{props.professionals.filter(professional => professional.showInAgenda !== false).map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}</select></label>
       <div><p className="mb-1 text-[10px] font-semibold text-slate-500">Visão</p><div className="grid grid-cols-3 gap-1">{(["Dia", "Semana", "Mês"] as ViewMode[]).map((mode) => <button type="button" key={mode} onClick={() => props.setViewMode(mode)} className={`rounded px-1 py-1.5 text-[10px] font-semibold ${props.viewMode === mode ? "bg-avvi-blue text-white" : "bg-slate-100 text-slate-600"}`}>{mode}</button>)}</div></div>

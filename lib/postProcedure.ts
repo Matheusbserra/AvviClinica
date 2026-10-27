@@ -55,6 +55,16 @@ export type PostProcedureTask = {
   performedOn: string; dueDate: string; patientName: string; phone: string; professionalId: string; professionalName: string;
   serviceName: string; status: PostProcedureStatus; contact?: PostProcedureContact;
 };
+export function postProcedureInPeriod(task: Pick<PostProcedureTask, "dueDate" | "status">, period: string, reference: string) {
+  if (period === "completed") return task.status === "Concluído";
+  if (task.status === "Concluído") return false;
+  const offset = postProcedureElapsedDays(reference, task.dueDate);
+  if (offset === null) return false;
+  if (period === "today") return offset === 0;
+  if (period === "late") return offset >= -7 && offset < 0;
+  if (period === "next") return offset > 0 && offset <= 7;
+  return true;
+}
 // Derive the queue without writing records or polling. Only manual contact updates are persisted.
 export function postProcedureTasks(appointments: Appointment[], services: Service[], patients: Patient[], professionals: Professional[], contacts: PostProcedureContact[], today = postProcedureDay()): PostProcedureTask[] {
   const catalog = new Map(services.map(s => [s.id, s])), people = new Map(patients.map(p => [p.id, p])), team = new Map(professionals.map(p => [p.id, p]));

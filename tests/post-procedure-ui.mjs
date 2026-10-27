@@ -1,3 +1,4 @@
+import {selectCalendarDate} from './month-calendar-helper.mjs';
 import assert from 'node:assert/strict';
 import {navigationButton} from './navigation-helper.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE??'file:///C:/Users/mathe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs');
@@ -16,7 +17,7 @@ try{
   data.appointments=[{...base,id:'visit',closedAccount:account([{serviceId:'toxin',quantity:1},{serviceId:'toxin',quantity:2},{serviceId:'fill',quantity:1}])},{...base,id:'cancelled',status:'Cancelado',serviceId:'toxin'},{...base,id:'sale',closedAccount:account([{serviceId:'toxin',packageId:'package',quantity:3}])},{...base,id:'session',closedAccount:{...account([]),packageSessionUses:[{serviceId:'fill',quantity:1}]}},{...base,id:'collagen',status:'Compareceu',accountClosed:false,serviceId:'bio'},{...base,id:'future',startsAt:'2099-01-01T10:00:00',serviceId:'toxin'}];
   snap.syncedData=null;localStorage.setItem(key,JSON.stringify(snap));
  },key);
- await page.reload();await tab('Pós-procedimento').click();await page.getByLabel('Data de referência dos contatos').fill('2026-10-21');await row('visit','toxin','first').waitFor();
+ await page.reload();await tab('Pós-procedimento').click();await selectCalendarDate(page,'2026-10-21');await row('visit','toxin','first').waitFor();
  assert.equal(await page.locator('[data-testid^="post-contact-"]').count(),4);assert.equal(await page.locator('[data-testid*="cancelled"],[data-testid*="sale"],[data-testid*="future"]').count(),0);
  const href=await row('visit','toxin','first').getByRole('link').getAttribute('href');assert.match(href,/^https:\/\/wa.me\/5598999990000\?text=/);assert.match(decodeURIComponent(href),/Botox QA/);
  await row('visit','toxin','first').getByRole('button',{name:'Registrar contato'}).click();await page.getByLabel('Situação do contato').selectOption('Concluído');await page.getByLabel('Resposta do paciente').fill('Recuperação tranquila QA');await page.getByRole('button',{name:'Salvar contato',exact:true}).click();await dialog().waitFor({state:'hidden'});assert.equal(await row('visit','toxin','first').count(),0);
