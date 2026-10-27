@@ -37,6 +37,10 @@ export function postProcedureDay(date = new Date()) {
 export function addPostProcedureDays(date: string, days: number) {
   const time = new Date(date + "T12:00:00Z"); time.setUTCDate(time.getUTCDate() + days); return time.toISOString().slice(0, 10);
 }
+export function postProcedureElapsedDays(performedOn: string, reference = postProcedureDay()) {
+  if (!validPostProcedureDate(performedOn) || !validPostProcedureDate(reference)) return null;
+  return Math.round((Date.parse(reference + "T12:00:00Z") - Date.parse(performedOn + "T12:00:00Z")) / 86400000);
+}
 export const postProcedureId = (appointmentId: string, serviceId: string, stage: string) => JSON.stringify([appointmentId, serviceId, stage]);
 export function validPostProcedureContact(value: unknown): value is PostProcedureContact {
   const item = value as PostProcedureContact | undefined;
