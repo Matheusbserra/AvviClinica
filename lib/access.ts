@@ -36,6 +36,7 @@ export function canAccessTab(access: Access, tab: string) {
 export function hasLimitedProfessionalReport(access: Access) { return typeof access !== "string" && !!professionalScope(access); }
 export function hasFinancialAccess(access: Access) { return ["Dashboard", "Metas", "Relatórios", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional"].some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
 const readTabs: Record<string, string[]> = {
+  post_procedure_messages: ["Pós-procedimento"],
   post_procedure_contacts: ["Pós-procedimento"],
   service_packages: ["Agenda", "Cadastro de Serviços"],
   strategies: ["Estratégias"],
@@ -52,6 +53,7 @@ const readTabs: Record<string, string[]> = {
   followup_rules: ["Follow Up"], followup_contacts: ["Follow Up"], followup_logs: ["Follow Up"]
 };
 const writeTabs: Record<string, string[]> = {
+  post_procedure_messages: ["Pós-procedimento"],
   post_procedure_contacts: ["Pós-procedimento"],
   service_packages: ["Cadastro de Serviços"],
   strategies: ["Estratégias"],

@@ -1,4 +1,34 @@
-import type { Appointment, Patient, PostProcedureContact, PostProcedurePlan, PostProcedureStatus, Professional, Service } from "./types";
+import type { Appointment, Patient, PostProcedureContact, PostProcedureMessage, PostProcedureMessageStage, PostProcedurePlan, PostProcedureStatus, Professional, Service } from "./types";
+
+export const postProcedureMessageStages: { id: PostProcedureMessageStage; label: string }[] = [
+  { id: "first", label: "Primeiro contato" }, { id: "followup", label: "Acompanhamento" },
+  { id: "satisfaction", label: "Resultado e satisfação" }, { id: "reactivation", label: "Reativação" },
+];
+const messageStart = "Olá, {paciente}! Aqui é da AVVI Clínica. Estamos acompanhando seu procedimento de {procedimentos}.";
+const recoveryMessage = `${messageStart} Como você está se sentindo? Teve algum desconforto, alguma alteração ou dúvida sobre as orientações recebidas?`;
+export const postProcedureDefaultMessages: Record<PostProcedureMessageStage, string> = {
+  first: recoveryMessage, followup: recoveryMessage,
+  satisfaction: `${messageStart} Como você percebe a evolução e o resultado até agora? Ficou com alguma dúvida ou algo que gostaria de conversar com a profissional?`,
+  reactivation: "Olá, {paciente}! Aqui é da AVVI Clínica. Como você está? Gostaria de agendar uma nova avaliação para conversar sobre seus objetivos e os cuidados indicados para você?",
+};
+export const postProcedureMessageVariables = ["paciente", "procedimentos", "data", "profissionais", "etapa", "dias"] as const;
+export function validPostProcedureMessage(value: unknown): value is PostProcedureMessage {
+  const item = value as PostProcedureMessage | undefined;
+  if (!item || !postProcedureMessageStages.some(stage => stage.id === item.id) || typeof item.template !== "string" || !item.template.trim() || item.template.length > 5000 || typeof item.updatedAt !== "string" || !Number.isFinite(Date.parse(item.updatedAt))) return false;
+  return !/[{}]/.test(item.template.replace(/\{(paciente|procedimentos|data|profissionais|etapa|dias)\}/g, ""));
+}
+export function postProcedureMessageDraft(messages: PostProcedureMessage[]): Record<PostProcedureMessageStage, string> {
+  const draft = { ...postProcedureDefaultMessages };
+  for (const message of messages) if (validPostProcedureMessage(message)) draft[message.id] = message.template;
+  return draft;
+}
+export function savePostProcedureMessages(current: PostProcedureMessage[], initial: Record<PostProcedureMessageStage, string>, draft: Record<PostProcedureMessageStage, string>, at: string) {
+  const changes = postProcedureMessageStages.filter(stage => draft[stage.id] !== initial[stage.id]).map(stage => ({ id: stage.id, template: draft[stage.id], updatedAt: at }));
+  if (!changes.length || !changes.every(validPostProcedureMessage)) return current;
+  const records = new Map(current.map(message => [message.id, message]));
+  for (const message of changes) records.set(message.id, message);
+  return [...records.values()];
+}
 
 export const postProcedureStatuses: PostProcedureStatus[] = ["Aguardando contato", "Mensagem enviada", "Sem resposta", "Concluído", "Encaminhado à profissional"];
 export const postProcedureTemplates = {
@@ -78,9 +108,9 @@ export function groupPostProcedureDays(tasks: PostProcedureTask[]): PostProcedur
   return [...groups].map(([id, items]) => ({ id, patientId: items[0].patientId, patientName: items[0].patientName, performedOn: items[0].performedOn, stage: items[0].stage, label: items[0].label, tasks: items,
     dueDates: [...new Set(items.map(task => task.dueDate))].sort(), status: items.every(task => task.status === items[0].status) ? items[0].status : "" }));
 }
-export function postProcedureDayMessage(tasks: PostProcedureTask[]) {
+export function postProcedureDayMessage(tasks: PostProcedureTask[], messages: PostProcedureMessage[] = [], reference = postProcedureDay()) {
   if (!tasks.length) return "";
-  return postProcedureMessage({ ...tasks[0], serviceName: [...new Set(tasks.map(task => task.serviceName))].join(", ") });
+  return postProcedureMessage({ ...tasks[0], serviceName: [...new Set(tasks.map(task => task.serviceName))].join(", "), professionalName: [...new Set(tasks.map(task => task.professionalName))].join(", ") }, messages, reference);
 }
 export function postProcedureDayHistory(tasks: PostProcedureTask[]) {
   const history = new Map<string, Omit<PostProcedureContact["history"][number], "dueDate"> & { services: string[]; dueDates: string[] }>();
@@ -145,11 +175,10 @@ export function postProcedureTasks(appointments: Appointment[], services: Servic
   }
   return [...tasks.values()].sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.patientName.localeCompare(b.patientName, "pt-BR") || a.serviceName.localeCompare(b.serviceName, "pt-BR"));
 }
-export function postProcedureMessage(task: PostProcedureTask) {
-  const start = `Olá, ${task.patientName}! Aqui é da AVVI Clínica. Estamos acompanhando seu procedimento de ${task.serviceName}.`;
-  return task.stage.startsWith("reactivation") ? `Olá, ${task.patientName}! Aqui é da AVVI Clínica. Como você está? Gostaria de agendar uma nova avaliação para conversar sobre seus objetivos e os cuidados indicados para você?`
-    : task.stage === "satisfaction" ? `${start} Como você percebe a evolução e o resultado até agora? Ficou com alguma dúvida ou algo que gostaria de conversar com a profissional?`
-    : `${start} Como você está se sentindo? Teve algum desconforto, alguma alteração ou dúvida sobre as orientações recebidas?`;
+export function postProcedureMessage(task: PostProcedureTask, messages: PostProcedureMessage[] = [], reference = postProcedureDay()) {
+  const stage = task.stage.startsWith("reactivation") ? "reactivation" : task.stage.startsWith("followup") ? "followup" : task.stage === "satisfaction" ? "satisfaction" : "first";
+  const values: Record<typeof postProcedureMessageVariables[number], string> = { paciente: task.patientName, procedimentos: task.serviceName, data: task.performedOn.split("-").reverse().join("/"), profissionais: task.professionalName, etapa: task.label, dias: String(postProcedureElapsedDays(task.performedOn, reference) ?? "") };
+  return postProcedureMessageDraft(messages)[stage].replace(/\{(paciente|procedimentos|data|profissionais|etapa|dias)\}/g, (_, key: typeof postProcedureMessageVariables[number]) => values[key]);
 }
 export function postProcedureWhatsApp(phone: string, message: string) {
   let digits = phone.replace(/\D/g, "");

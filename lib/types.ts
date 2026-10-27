@@ -91,6 +91,8 @@ export type Service = {
 
 export type PostProcedurePlan = { enabled: boolean; firstContactDays: number; followUpDays: number[]; satisfactionDays: number; reactivationDays: number; reactivationDaysList?: number[] };
 export type PostProcedureStatus = "Aguardando contato" | "Mensagem enviada" | "Sem resposta" | "Concluído" | "Encaminhado à profissional";
+export type PostProcedureMessageStage = "first" | "followup" | "satisfaction" | "reactivation";
+export type PostProcedureMessage = { id: PostProcedureMessageStage; template: string; updatedAt: string };
 export type PostProcedureContact = {
   id: string; appointmentId: string; patientId: string; serviceId: string; stage: string;
   status: PostProcedureStatus; dueDate?: string; rescheduled?: boolean; response: string;

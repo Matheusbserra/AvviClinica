@@ -1,5 +1,5 @@
 import { validServicePackage } from "@/lib/servicePackages";
-import { validPostProcedurePlan, validPostProcedureContact, postProcedureTasks } from "@/lib/postProcedure";
+import { validPostProcedurePlan, validPostProcedureContact, validPostProcedureMessage, postProcedureTasks } from "@/lib/postProcedure";
 import { hasPackageSessionData, packageSessionError, validPackageSessionUses } from "@/lib/packageSessions";
 import { createClient } from "@supabase/supabase-js";
 import { createHash } from "node:crypto";
@@ -266,6 +266,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
       if (row.entity === "services" && row.data.postProcedure !== undefined && !validPostProcedurePlan(row.data.postProcedure)) return Response.json({ error: "Prazos de pós-procedimento inválidos." }, { status: 400, headers });
+      if (row.entity === "post_procedure_messages" && !validPostProcedureMessage(row.data)) return Response.json({ error: "Mensagem de pós-procedimento inválida. Confira o texto e as variáveis." }, { status: 400, headers });
       if (row.entity === "service_packages" && !validServicePackage(row.data)) return Response.json({ error: "Dados do pacote inválidos." }, { status: 400, headers });
       if (row.entity === "inventory" && row.data.visibleInStock !== undefined && typeof row.data.visibleInStock !== "boolean") return Response.json({ error: "Visibilidade do produto no estoque inválida." }, { status: 400, headers });
       if (row.entity === "appointments" && row.data.invoice !== undefined && (!validInvoice(row.data.invoice) || row.data.invoice.localPdf)) return Response.json({error:"Anexo fiscal inválido."},{status:400,headers});
