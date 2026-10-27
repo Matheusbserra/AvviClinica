@@ -67,6 +67,42 @@ export function groupPostProcedurePatients(tasks: PostProcedureTask[]) {
   }
   return [...patients.values()].map(patient => ({ ...patient, procedureCount: new Set(patient.tasks.map(task => JSON.stringify([task.appointmentId, task.serviceId]))).size }));
 }
+export type PostProcedureDayContact = { id: string; patientId: string; patientName: string; performedOn: string; stage: string; label: string; tasks: PostProcedureTask[]; dueDates: string[]; status: PostProcedureStatus | "" };
+export function groupPostProcedureDays(tasks: PostProcedureTask[]): PostProcedureDayContact[] {
+  const groups = new Map<string, PostProcedureTask[]>();
+  for (const task of tasks) {
+    // Separate repeated follow-up/reactivation stages even when the treatment date is the same.
+    const key = JSON.stringify([task.patientId, task.performedOn, task.stage]);
+    const group = groups.get(key) ?? []; group.push(task); groups.set(key, group);
+  }
+  return [...groups].map(([id, items]) => ({ id, patientId: items[0].patientId, patientName: items[0].patientName, performedOn: items[0].performedOn, stage: items[0].stage, label: items[0].label, tasks: items,
+    dueDates: [...new Set(items.map(task => task.dueDate))].sort(), status: items.every(task => task.status === items[0].status) ? items[0].status : "" }));
+}
+export function postProcedureDayMessage(tasks: PostProcedureTask[]) {
+  if (!tasks.length) return "";
+  return postProcedureMessage({ ...tasks[0], serviceName: [...new Set(tasks.map(task => task.serviceName))].join(", ") });
+}
+export function postProcedureDayHistory(tasks: PostProcedureTask[]) {
+  const history = new Map<string, Omit<PostProcedureContact["history"][number], "dueDate"> & { services: string[]; dueDates: string[] }>();
+  for (const task of tasks) for (const entry of task.contact?.history ?? []) {
+    const key = JSON.stringify([entry.at, entry.by, entry.status, entry.response]);
+    const group = history.get(key) ?? { at: entry.at, by: entry.by, status: entry.status, response: entry.response, services: [], dueDates: [] };
+    if (!group.services.includes(task.serviceName)) group.services.push(task.serviceName);
+    if (entry.dueDate && !group.dueDates.includes(entry.dueDate)) group.dueDates.push(entry.dueDate);
+    history.set(key, group);
+  }
+  return [...history.values()].sort((a, b) => b.at.localeCompare(a.at));
+}
+export function savePostProcedureDay(contacts: PostProcedureContact[], tasks: PostProcedureTask[], change: { status: PostProcedureStatus; response?: string; dueDate?: string; at: string; by: string }) {
+  const records = new Map(contacts.map(contact => [contact.id, contact]));
+  for (const task of tasks) {
+    const previous = records.get(task.id), response = change.response === undefined ? previous?.response ?? "" : change.response.trim(), dueDate = change.dueDate || task.dueDate;
+    records.set(task.id, { id: task.id, appointmentId: task.appointmentId, patientId: task.patientId, serviceId: task.serviceId, stage: task.stage, status: change.status, response, dueDate,
+      rescheduled: change.dueDate ? dueDate !== task.scheduledDate : previous?.rescheduled ?? false, updatedAt: change.at,
+      history: [...(previous?.history ?? []), { at: change.at, by: change.by, status: change.status, response, dueDate }].slice(-100) });
+  }
+  return [...records.values()];
+}
 export function postProcedureInPeriod(task: Pick<PostProcedureTask, "dueDate" | "status">, period: string, reference: string) {
   if (period === "completed") return task.status === "Concluído";
   if (task.status === "Concluído") return false;

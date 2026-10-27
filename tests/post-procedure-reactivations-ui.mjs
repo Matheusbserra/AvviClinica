@@ -1,7 +1,8 @@
+import {taskContact} from './post-procedure-contact-helper.mjs';
 import assert from 'node:assert/strict';import {navigationButton} from './navigation-helper.mjs';import {selectCalendarDate} from './month-calendar-helper.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE??'file:///C:/Users/mathe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs');
 const origin=process.env.AVVI_TEST_URL??'http://127.0.0.1:3107';assert.ok(['127.0.0.1','localhost'].includes(new URL(origin).hostname));
-const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH??'C:/Program Files/Google/Chrome/Application/chrome.exe'}),page=await browser.newPage({viewport:{width:1440,height:1000}}),key='avvi.data.snapshot.v1',errors=[];page.on('pageerror',e=>errors.push(e.message));const tab=name=>navigationButton(page,name),dialog=()=>page.getByRole('dialog'),row=stage=>page.getByTestId('post-contact-visit-botox-'+stage);
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH??'C:/Program Files/Google/Chrome/Application/chrome.exe'}),page=await browser.newPage({viewport:{width:1440,height:1000}}),key='avvi.data.snapshot.v1',errors=[];page.on('pageerror',e=>errors.push(e.message));const tab=name=>navigationButton(page,name),dialog=()=>page.getByRole('dialog'),row=stage=>taskContact(page,'visit','botox',stage);
 async function editor(){await tab('Cadastro de Serviços').click();await page.getByRole('row').filter({hasText:'Botox retroativo QA'}).getByRole('button',{name:'Editar serviço',exact:true}).click();await dialog().getByRole('button',{name:/^Pós-procedimento/}).click();}
 try{
  await page.route('**/api/access',route=>route.fulfill({json:{user:{login:'admin',role:'admin'}}}));await page.goto(origin);await page.getByRole('status',{name:'Status do salvamento',exact:true}).filter({hasText:'Prévia local'}).waitFor();
