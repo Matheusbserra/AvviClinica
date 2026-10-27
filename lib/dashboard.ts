@@ -3,7 +3,7 @@ import { professionalReports } from "./professionalReports";
 import { validReportDate } from "./reports";
 import type { FixedCost, RevenueEntry } from "./types";
 
-// Dashboard performance uses the same ledger/date basis as each professional.
+// Dashboard performance uses the same receipt/date basis as each professional.
 // Receipts linked to those accounts are copies, not additional revenue.
 export function dashboardPeriod(input: Parameters<typeof professionalReports>[0] & { revenues: RevenueEntry[]; costs: FixedCost[] }) {
   const accounting = excludeZeroAccounts(input.appointments, input.entries, input.services);

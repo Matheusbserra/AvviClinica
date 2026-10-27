@@ -1,6 +1,6 @@
 import { calculateEntry, excludeZeroAccounts } from "./calculations";
 import { appointmentServices } from "./appointmentServices";
-import { clinicRankings, reportCapacity, reportMonthPeriod, validReportDate } from "./reports";
+import { clinicRankings, reportFinancialRows, reportCapacity, reportMonthPeriod, validReportDate } from "./reports";
 import type { Appointment, FinancialEntry, Patient, Procedure, Professional, Service } from "./types";
 import type { MonthlyGoals } from "./database";
 
@@ -20,8 +20,8 @@ export type ProfessionalReport = {
   monthlyInsights?: MonthlyProfessionalInsights;
 };
 
-// Financial totals retain the existing ledger calculation. Service quantities
-// come from attended appointments and explicitly linked services, never products.
+// Both reports use the same receipts, with linked ledger copies counted once.
+// Service quantities come from attended appointments and linked services.
 function periodProfessionalReports(input: {
   start: string; end: string; entries: FinancialEntry[]; appointments: Appointment[];
   professionals: Professional[]; patients: Patient[]; services: Service[]; procedures?: Procedure[]; monthlyGoals: MonthlyGoals[];
@@ -33,6 +33,7 @@ function periodProfessionalReports(input: {
   const services = new Map(input.services.map(service => [service.id, service.name]));
   const appointments = new Map(input.appointments.map(appointment => [appointment.id, appointment]));
   const entries = new Map(input.entries.map(entry => [entry.id, entry]));
+  const financialRows=reportFinancialRows(input.appointments,input.entries);
   const top = (rows: Map<string, IndividualRanking>) => [...rows.values()].sort((a, b) => b.value - a.value || a.name.localeCompare(b.name, "pt-BR") || a.id.localeCompare(b.id)).slice(0, 5);
   const number = (value: number) => Number.isFinite(value) ? value : 0;
   const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -46,13 +47,13 @@ function periodProfessionalReports(input: {
     const patientName = (id?: string) => patients.get(id ?? "") ?? "Paciente não cadastrado";
     const closedPatientIds = new Set<string>();
     const totals = { totalPaid: 0, totalProfit: 0, companyRevenue: 0, professionalValue: 0, count: 0 };
-    for (const entry of input.entries) {
-      if (entry.professionalId !== professional.id || !inPeriod(entry.date)) continue;
-      const summary = calculateEntry(entry);
+    for (const row of financialRows) {
+      if (row.professionalId !== professional.id || !inPeriod(row.date)) continue;
+      const entry=row.source,summary = calculateEntry(entry);
       totals.totalPaid += number(summary.received); totals.totalProfit += number(summary.baseProfit);
       totals.companyRevenue += number(summary.companyValue); totals.professionalValue += number(summary.professionalValue); totals.count++;
-      const patientId = entry.patientId || appointments.get(entry.appointmentId ?? "")?.patientId;
-      if (entry.accountClosed) closedPatientIds.add(patientId || "account:" + (entry.appointmentId || entry.id));
+      const patientId = row.patientId || appointments.get(row.appointmentId ?? "")?.patientId;
+      if (entry.accountClosed) closedPatientIds.add(patientId || "account:" + (row.appointmentId || entry.id));
       add(revenue, patientId, patientName(patientId), summary.received);
     }
     let serviceCount = 0;
@@ -93,6 +94,7 @@ function periodProfessionalReports(input: {
       const last = new Date(reportMonthPeriod(month)!.end + "T12:00:00Z"); last.setUTCDate(last.getUTCDate() + 1); month = last.toISOString().slice(0, 7);
     }
     for (const rows of [revenue]) for (const row of rows.values()) row.value = round(row.value);
+    for(const key of ["totalPaid","totalProfit","companyRevenue","professionalValue"] as const)totals[key]=round(totals[key]);
     const products = clinicRankings({ start: input.start, end: input.end,
       professionals: [professional],
       appointments: input.appointments.filter(item => item.professionalId === professional.id),

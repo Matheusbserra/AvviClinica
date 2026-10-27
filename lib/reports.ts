@@ -3,6 +3,41 @@ import { calculateEntry, excludeZeroAccounts } from "./calculations";
 import { appointmentServices } from "./appointmentServices";
 export type ProfessionalRanking = { id: string; name: string; avatar?: string; revenue: number; attendances: number; serviceCount: number; closedPatientCount: number; averageTicket: number; capacity: number; productivity: number };
 export type UsageRanking = { id: string; name: string; quantity: number };
+// A checkout and its procedure ledger are two representations of one receipt.
+// Use the checkout's payments/date; a linked ledger is only a legacy fallback
+// when the checkout did not save payment methods. Never add both representations.
+export function reportFinancialRows(appointments: Appointment[], entries: FinancialEntry[]) {
+  const byId=new Map(entries.map(entry=>[entry.id,entry]));
+  const linkedIds=new Set<string>(),resolved=new Map<string,{appointment:Appointment;account:FinancialEntry;source:FinancialEntry}>();
+  for(const appointment of appointments) {
+    const legacy=byId.get(appointment.financialEntryId??"");
+    const closed=appointment.accountClosed || (appointment.accountClosed!==false && (appointment.closedAccount||legacy?.accountClosed));
+    const account=closed ? appointment.closedAccount??legacy : undefined;
+    if(!account)continue;
+    const fallback=byId.get(appointment.closedAccount?.generatedEntryId??"")??legacy??entries.find(entry=>entry.sourceAccountId===account.id)??entries.find(entry=>entry.appointmentId===appointment.id);
+    // Product costs/commission remain those of the primary procedure ledger.
+    // Its payment copy must never override the independently saved checkout.
+    const source=Array.isArray(account.payments)?{...(fallback??account),payments:account.payments}:fallback??account;
+    resolved.set(appointment.id,{appointment,account,source});
+    for(const id of [account.id,appointment.closedAccount?.generatedEntryId,appointment.financialEntryId,source.id])if(id)linkedIds.add(id);
+  }
+  const finite=(value:unknown)=>Number.isFinite(Number(value))?Number(value):0;
+  const normalize=(entry:FinancialEntry,closed=false):FinancialEntry=>({...entry,accountClosed:closed||entry.accountClosed,
+    quantity:finite(entry.quantity),servicePrice:finite(entry.servicePrice),productCost:finite(entry.productCost),machineFee:finite(entry.machineFee),commercialDiscount:finite(entry.commercialDiscount),professionalPercent:finite(entry.professionalPercent),
+    payments:(entry.payments??[]).map(payment=>({...payment,amount:finite(payment.amount),fee:finite(payment.fee),discount:finite(payment.discount)})),
+    procedureLines:entry.procedureLines?.map(line=>({...line,quantity:finite(line.quantity),servicePrice:finite(line.servicePrice),productCost:finite(line.productCost),professionalPercent:finite(line.professionalPercent??entry.professionalPercent)})),
+    products:entry.products?.map(product=>({...product,quantity:finite(product.quantity),unitCost:finite(product.unitCost)}))});
+  const result:{professionalId:string;patientId?:string;date:string;appointmentId?:string;source:FinancialEntry}[]=[],seen=new Set<string>();
+  for(const {appointment,account,source} of resolved.values()) {
+    const key=source.id||account.id||appointment.id;if(seen.has(key))continue;seen.add(key);
+    result.push({professionalId:appointment.professionalId,patientId:appointment.patientId||source.patientId,date:appointment.startsAt.slice(0,10),appointmentId:appointment.id,source:normalize(source,true)});
+  }
+  for(const entry of entries) {
+    if(linkedIds.has(entry.id)||(entry.sourceAccountId&&linkedIds.has(entry.sourceAccountId))||(entry.appointmentId&&resolved.has(entry.appointmentId)))continue;
+    result.push({professionalId:entry.professionalId,patientId:entry.patientId,date:entry.date,appointmentId:entry.appointmentId,source:normalize(entry)});
+  }
+  return result;
+}
 export function validReportDate(date: string) { if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false; const value = new Date(date + "T12:00:00Z"); return Number.isFinite(value.getTime()) && value.toISOString().slice(0, 10) === date; }
 export function reportMonthPeriod(month: string) { if (!/^\d{4}-\d{2}$/.test(month) || !validReportDate(month + "-01")) return null; const [year, number] = month.split("-").map(Number); const last = new Date(Date.UTC(year, number, 0)).getUTCDate(); return { start: month + "-01", end: `${month}-${String(last).padStart(2, "0")}` }; }
 export function reportCapacity(start: string, end: string) {
@@ -47,10 +82,6 @@ export function clinicRankings(input: { start: string; end: string; professional
     if (!inPeriod(appointment.startsAt) || (!resolvedAccounts.has(appointment.id) && !["Compareceu", "Finalizado"].includes(appointment.status))) continue;
     serviceAppointments.add(appointment.id);
     if (appointment.accountClosed || resolvedAccounts.has(appointment.id)) closedPatient(appointment.professionalId, appointment.patientId || resolvedAccounts.get(appointment.id)?.patientId, appointment.id);
-    if (resolvedAccounts.has(appointment.id)) {
-      const account = resolvedAccounts.get(appointment.id)!;
-      person(appointment.professionalId).revenue += (account.payments ?? []).reduce((sum, payment) => sum + amount(payment.amount), 0);
-    }
     const serviceLines = resolvedAccounts.get(appointment.id)?.procedureLines?.filter(line => line.serviceId || !line.procedureId) ?? [];
     if (serviceLines.length) {
       for (const line of serviceLines) { const key = line.serviceId ?? "name:" + (line.manualProcedure || "Serviço registrado"); addService(appointment.professionalId, key, line.manualProcedure || serviceNames.get(line.serviceId ?? "") || "Serviço registrado", line.quantity); }
@@ -62,7 +93,6 @@ export function clinicRankings(input: { start: string; end: string; professional
   if (period.valid) for (const entry of input.entries) {
     if (!inPeriod(entry.date) || linkedAccounts.has(entry.id) || (entry.sourceAccountId && linkedAccounts.has(entry.sourceAccountId)) || (entry.appointmentId && resolvedAccounts.has(entry.appointmentId))) continue;
     if (entry.accountClosed) closedPatient(entry.professionalId, entry.patientId || appointmentsById.get(entry.appointmentId ?? "")?.patientId, entry.appointmentId || entry.id);
-    person(entry.professionalId).revenue += amount(calculateEntry(entry).received);
     if (!entry.appointmentId || !accountedAppointments.has(entry.appointmentId)) {
       const lines = entry.products ?? (entry.procedureLines?.length ? entry.procedureLines : [{ procedureId: entry.procedureId, manualProcedure: entry.manualProcedure, quantity: entry.quantity }]);
       for (const line of lines) if (line.procedureId || ("manualProcedure" in line && line.manualProcedure)) { const id = line.procedureId ?? "manual:" + ("manualProcedure" in line ? line.manualProcedure : ""); add(products, id, productNames.get(id) ?? ("manualProcedure" in line ? line.manualProcedure : undefined) ?? "Produto registrado", line.quantity); }
@@ -71,9 +101,11 @@ export function clinicRankings(input: { start: string; end: string; professional
       for (const line of entry.procedureLines ?? []) if (line.serviceId) addService(entry.professionalId, line.serviceId, serviceNames.get(line.serviceId) ?? line.manualProcedure ?? "Serviço registrado", line.quantity);
     }
   }
+  if(period.valid)for(const row of reportFinancialRows(input.appointments,input.entries))if(inPeriod(row.date))person(row.professionalId).revenue+=amount(calculateEntry(row.source).received);
   const all = [...people.values()].map(item => {
     const closedPatientCount = closedPatients.get(item.id)?.size ?? 0;
-    return { ...item, revenue: Math.round(item.revenue * 100) / 100, attendances: closedPatientCount, closedPatientCount, averageTicket: closedPatientCount ? item.revenue / closedPatientCount : 0, productivity: item.capacity ? closedPatientCount / item.capacity * 100 : 0 };
+    const revenue=Math.round(item.revenue*100)/100;
+    return { ...item, revenue, attendances: closedPatientCount, closedPatientCount, averageTicket: closedPatientCount ? revenue / closedPatientCount : 0, productivity: item.capacity ? closedPatientCount / item.capacity * 100 : 0 };
   });
   const rank = (key: "revenue" | "averageTicket" | "attendances" | "serviceCount" | "productivity") => [...all].sort((a, b) => b[key] - a[key] || a.name.localeCompare(b.name, "pt-BR"));
   const usage = (map: Map<string, UsageRanking>) => [...map.values()].sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name, "pt-BR")).slice(0, 10);
