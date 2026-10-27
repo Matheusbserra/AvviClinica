@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import ts from 'typescript';
 const load=async file=>import('data:text/javascript;base64,'+Buffer.from(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText).toString('base64'));
 const post=await load('lib/postProcedure.ts'),access=await load('lib/access.ts');
-const services=[{id:'toxin',name:'Botox facial'},{id:'fill',name:'Preenchimento labial'},{id:'bio',name:'Bioestimulador Sculptra'},{id:'laser',name:'Laser Lavieen'},{id:'other',name:'Avaliação'}];
+const suggestedServices=[{id:'toxin',name:'Botox facial'},{id:'fill',name:'Preenchimento labial'},{id:'bio',name:'Bioestimulador Sculptra'},{id:'laser',name:'Laser Lavieen'},{id:'other',name:'Avaliação'}];
+for(const service of suggestedServices){assert.equal(post.servicePostProcedurePlan(service).reactivationDays,180);assert.deepEqual(post.postProcedureReactivationDays(post.servicePostProcedurePlan(service)),[180,365]);}
+// Retain coverage of existing saved plans with one 60-day reactivation.
+const services=suggestedServices.map(service=>({...service,postProcedure:{...post.servicePostProcedurePlan(service),reactivationDays:60,reactivationDaysList:undefined}}));
 for(const s of services)assert.equal(post.servicePostProcedurePlan(s).firstContactDays,1);
 assert.equal(post.servicePostProcedurePlan(services[0]).reactivationDays,60);
 assert.deepEqual(post.servicePostProcedurePlan(services[2]).followUpDays,[7,30]);

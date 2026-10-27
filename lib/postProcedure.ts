@@ -11,11 +11,11 @@ export const postProcedureDefaultMessages: Record<PostProcedureMessageStage, str
   satisfaction: `${messageStart} Como você percebe a evolução e o resultado até agora? Ficou com alguma dúvida ou algo que gostaria de conversar com a profissional?`,
   reactivation: "Olá, {paciente}! Aqui é da AVVI Clínica. Como você está? Gostaria de agendar uma nova avaliação para conversar sobre seus objetivos e os cuidados indicados para você?",
 };
-export const postProcedureMessageVariables = ["paciente", "procedimentos", "data", "profissionais", "etapa", "dias"] as const;
+export const postProcedureMessageVariables = ["primeiro_nome", "paciente", "procedimentos", "data", "profissionais", "etapa", "dias"] as const;
 export function validPostProcedureMessage(value: unknown): value is PostProcedureMessage {
   const item = value as PostProcedureMessage | undefined;
   if (!item || !postProcedureMessageStages.some(stage => stage.id === item.id) || typeof item.template !== "string" || !item.template.trim() || item.template.length > 5000 || typeof item.updatedAt !== "string" || !Number.isFinite(Date.parse(item.updatedAt))) return false;
-  return !/[{}]/.test(item.template.replace(/\{(paciente|procedimentos|data|profissionais|etapa|dias)\}/g, ""));
+  return !/[{}]/.test(item.template.replace(/\{(primeiro_nome|paciente|procedimentos|data|profissionais|etapa|dias)\}/g, ""));
 }
 export function postProcedureMessageDraft(messages: PostProcedureMessage[]): Record<PostProcedureMessageStage, string> {
   const draft = { ...postProcedureDefaultMessages };
@@ -39,7 +39,7 @@ export const postProcedureTemplates = {
   laser: { label: "Laser Lavieen", followUpDays: [10], satisfactionDays: 30 },
 };
 export function postProcedureTemplatePlan(key: keyof typeof postProcedureTemplates): PostProcedurePlan {
-  return { enabled: true, firstContactDays: 1, followUpDays: [...postProcedureTemplates[key].followUpDays], satisfactionDays: postProcedureTemplates[key].satisfactionDays, reactivationDays: 60 };
+  return { enabled: true, firstContactDays: 1, followUpDays: [...postProcedureTemplates[key].followUpDays], satisfactionDays: postProcedureTemplates[key].satisfactionDays, reactivationDays: 180, reactivationDaysList: [180, 365] };
 }
 export function servicePostProcedurePlan(service: Pick<Service, "name" | "postProcedure">): PostProcedurePlan {
   if (service.postProcedure) return service.postProcedure;
@@ -58,6 +58,9 @@ export function validPostProcedurePlan(value: unknown): value is PostProcedurePl
     && new Set(plan.followUpDays).size === plan.followUpDays.length
     && (plan.reactivationDaysList === undefined || Array.isArray(plan.reactivationDaysList) && plan.reactivationDaysList.length <= 12 && plan.reactivationDaysList.every(day) && plan.reactivationDaysList.every((n, index) => !index || n > plan.reactivationDaysList![index - 1]))
     && plan.followUpDays.every((n, index) => n >= plan.firstContactDays && n <= plan.satisfactionDays && (!index || n > plan.followUpDays[index - 1]));
+}
+export function standardServiceReactivations(service: Service): Service {
+  return { ...service, postProcedure: { ...servicePostProcedurePlan(service), reactivationDays: 180, reactivationDaysList: [180, 365] } };
 }
 export function postProcedureReactivationDays(plan: PostProcedurePlan) { return plan.reactivationDaysList ?? [plan.reactivationDays]; }
 export function validPostProcedureDate(value: string) {
@@ -177,8 +180,8 @@ export function postProcedureTasks(appointments: Appointment[], services: Servic
 }
 export function postProcedureMessage(task: PostProcedureTask, messages: PostProcedureMessage[] = [], reference = postProcedureDay()) {
   const stage = task.stage.startsWith("reactivation") ? "reactivation" : task.stage.startsWith("followup") ? "followup" : task.stage === "satisfaction" ? "satisfaction" : "first";
-  const values: Record<typeof postProcedureMessageVariables[number], string> = { paciente: task.patientName, procedimentos: task.serviceName, data: task.performedOn.split("-").reverse().join("/"), profissionais: task.professionalName, etapa: task.label, dias: String(postProcedureElapsedDays(task.performedOn, reference) ?? "") };
-  return postProcedureMessageDraft(messages)[stage].replace(/\{(paciente|procedimentos|data|profissionais|etapa|dias)\}/g, (_, key: typeof postProcedureMessageVariables[number]) => values[key]);
+  const values: Record<typeof postProcedureMessageVariables[number], string> = { primeiro_nome: task.patientName.trim().split(/\s+/u)[0], paciente: task.patientName, procedimentos: task.serviceName, data: task.performedOn.split("-").reverse().join("/"), profissionais: task.professionalName, etapa: task.label, dias: String(postProcedureElapsedDays(task.performedOn, reference) ?? "") };
+  return postProcedureMessageDraft(messages)[stage].replace(/\{(primeiro_nome|paciente|procedimentos|data|profissionais|etapa|dias)\}/g, (_, key: typeof postProcedureMessageVariables[number]) => values[key]);
 }
 export function postProcedureWhatsApp(phone: string, message: string) {
   let digits = phone.replace(/\D/g, "");

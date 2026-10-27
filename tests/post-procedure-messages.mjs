@@ -8,6 +8,10 @@ assert.equal(post.postProcedureMessage({...task,stage:'satisfaction'}),start+' C
 assert.equal(post.postProcedureMessage({...task,stage:'reactivation-1'}),'Olá, Paciente QA! Aqui é da AVVI Clínica. Como você está? Gostaria de agendar uma nova avaliação para conversar sobre seus objetivos e os cuidados indicados para você?');
 const custom={id:'first',template:'Olá, {paciente}!\n{procedimentos} em {data}, com {profissionais}. {etapa}: {dias} dias. {paciente}',updatedAt:'2026-10-27T12:00:00Z'};
 assert.equal(post.validPostProcedureMessage(custom),true);
+const firstName={...custom,template:'Oi, {primeiro_nome}! Nome completo: {paciente}. {primeiro_nome}'};
+assert.equal(post.validPostProcedureMessage(firstName),true);
+assert.equal(post.postProcedureMessage({...task,patientName:'  Ana Maria Souza  '},[firstName]),'Oi, Ana! Nome completo:   Ana Maria Souza  . Ana');
+for(const [name,expected] of [['João\tSilva','João'],['Érica\u00a0Santos','Érica'],['Maria-Clara Silva','Maria-Clara'],['Ana','Ana'],['   ','']])assert.equal(post.postProcedureMessage({...task,patientName:name},[{...custom,template:'{primeiro_nome}'}]),expected);
 const tasks=[task,{...task,serviceName:'Preenchimento QA',professionalName:'Outra profissional QA'},task],before=JSON.stringify(tasks);
 assert.equal(post.postProcedureDayMessage(tasks,[custom],'2026-10-27'),'Olá, Paciente QA!\nBotox QA, Preenchimento QA em 20/10/2026, com Profissional QA, Outra profissional QA. Primeiro contato: 7 dias. Paciente QA');
 assert.equal(JSON.stringify(tasks),before);assert.equal(post.postProcedureDayMessage([], [custom]),'');
