@@ -2,6 +2,21 @@ import { canAccessProfessional, canAccessTab, canReadEntity, hasFinancialAccess,
 import type { AppUser } from "./access";
 import type { DataSnapshot } from "./persistence";
 import type { FinancialEntry, Professional, ProfessionalStrategy } from "./types";
+export function postProcedureOnly(user: AppUser) { return user.role === "standard" && !!user.tabs?.length && user.tabs.every(tab => tab === "Pós-procedimento"); }
+export function postProcedureEntityRows<T>(entity: string, rows: T[]): T[] {
+  const fields: Record<string, string[]> = { patients: ["id", "name", "phone"], professionals: ["id", "name", "active", "color"], services: ["id", "name", "postProcedure", "active"], appointments: ["id", "patientId", "professionalId", "serviceId", "services", "startsAt", "endsAt", "status", "eventType", "accountClosed", "closedAccount"] };
+  const allowed = fields[entity];
+  if (!allowed) return rows;
+  return rows.map(row => {
+    const copy = Object.fromEntries(Object.entries(row as Record<string, unknown>).filter(([key]) => allowed.includes(key)));
+    if (entity === "appointments") {
+      const visit = row as unknown as import("./types").Appointment;
+      if (visit.services) copy.services = visit.services.map(({ serviceId }) => ({ serviceId }));
+      if (visit.closedAccount) copy.closedAccount = { procedureLines: (visit.closedAccount.procedureLines ?? []).map(({ serviceId, packageId, quantity }) => ({ serviceId, packageId, quantity })), packageSessionUses: visit.closedAccount.packageSessionUses?.map(({ serviceId, quantity }) => ({ serviceId, quantity })) };
+    }
+    return copy as T;
+  });
+}
 export function followUpEntityRows<T>(entity: string, rows: T[]): T[] {
   const fields: Record<string, string[]> = { patients: ["id", "name", "phone"], professionals: ["id", "name", "active", "color"], services: ["id", "name", "description", "durationMinutes", "category", "price", "priceType", "active"], appointments: ["id", "patientId", "professionalId", "serviceId", "startsAt", "endsAt", "status", "eventType"] };
   const allowed = fields[entity];
@@ -16,6 +31,7 @@ export function stockHistoryEntry(entry: FinancialEntry): FinancialEntry {
 // Keep the current user's pending checkout derivatives, even when their finance tabs are hidden.
 // Every user/revision has a separate cache; data from another profile is never imported.
 export function permittedSnapshot(snapshot: DataSnapshot, user: AppUser): DataSnapshot {
+  if (postProcedureOnly(user)) return Object.fromEntries(Object.entries(snapshot).map(([entity, rows]) => [entity, canReadEntity(user, entity) ? postProcedureEntityRows<unknown>(entity, rows) : []])) as DataSnapshot;
   if (isMetaReviewer(user)) return Object.fromEntries(Object.entries(snapshot).map(([entity, rows]) => [entity, canReadEntity(user, entity) ? followUpEntityRows<unknown>(entity, rows) : []])) as DataSnapshot;
   const accounts = new Set(snapshot.appointments.flatMap(item => item.closedAccount?.id ? [item.closedAccount.id] : []));
   const derived = (entity: string, row: { id?: string; month?: string; sourceAccountId?: string; sourceFinancialEntryId?: string }) => canAccessTab(user, "Agenda") && (entity === "financial_entries" ? accounts.has(row.sourceAccountId ?? "") && row.id === `procedure-account-${row.sourceAccountId}` : accounts.has(row.sourceFinancialEntryId ?? "") && row.id === `${entity === "revenues" ? "receita-entry" : "taxa-maquininha"}-${row.sourceFinancialEntryId}`);

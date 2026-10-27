@@ -1,7 +1,7 @@
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import assert from 'node:assert/strict'; import { pathToFileURL } from 'node:url'; import { createRequire } from 'node:module'; import ts from 'typescript';
 const require = createRequire(import.meta.url), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'avvi-packages-movements-'));
 try {
-  const names = ['packageSessions','stockAccess','inventory','gifts','servicePackages','movements','checkout','appointmentServices','access','accessServer','accountsServer','accessSnapshot','database','supabase','persistence','ultraformer','agendaAvailability','invoices','strategyDefinitions','anamnese','bodyAnamnese','calculations'];
+  const names = ['postProcedure','packageSessions','stockAccess','inventory','gifts','servicePackages','movements','checkout','appointmentServices','access','accessServer','accountsServer','accessSnapshot','database','supabase','persistence','ultraformer','agendaAvailability','invoices','strategyDefinitions','anamnese','bodyAnamnese','calculations'];
   for (const name of [...names,'gateway']) {
     let source = fs.readFileSync(name === 'gateway' ? 'app/api/access/data/route.ts' : `lib/${name}.ts`, 'utf8');
     for (const dependency of names) source = source.replaceAll(`"./${dependency}"`, `"./${dependency}.mjs"`).replaceAll(`"@/lib/${dependency}"`, `"./${dependency}.mjs"`);

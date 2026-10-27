@@ -62,6 +62,20 @@ Na agenda, selecione o serviço para preencher a duração. O agendamento guarda
 
 Serviços usam a entidade `services` na tabela `avvi_records`; não é necessária uma nova tabela SQL. Serviços e agendamentos também são preservados no navegador quando o Supabase não está configurado ou está indisponível. A sincronização segue a fila e o botão de retentativa existentes.
 
+## Pós-procedimento
+
+Em **Operação > Pós-procedimento**, a agenda reúne **Hoje, Atrasados, Próximos, Todos pendentes e Concluídos**. É possível buscar paciente/serviço, filtrar profissional e etapa, abrir uma mensagem sugerida no WhatsApp e registrar situação, resposta, próxima tentativa e histórico. Abrir o WhatsApp não confirma envio: a equipe registra o resultado do contato. Os dias são corridos, calculados pela data de realização do atendimento, com referência diária no fuso de São Paulo.
+
+Em **Cadastro de Serviços > novo serviço ou lápis > Pós-procedimento**, configure ativação, primeiro contato (padrão 1 dia), um ou mais acompanhamentos, resultado/satisfação e reativação (padrão 60 dias). Há sugestões editáveis para toxina (7/14 dias), preenchimento (7/21), bioestimulador (7 e 30/90) e Lavieen (10/30). Serviços existentes reconhecidos pelo nome usam essas sugestões; os demais ficam desativados até configuração. As profissionais devem revisar os prazos. Reativação é convite para avaliação, sem determinar nova aplicação.
+
+São considerados atendimentos Compareceu/Finalizado ou com conta fechada, realizados até hoje. Os serviços do fechamento têm precedência sobre o agendado; venda de pacote não conta como realização, mas sessão consumida conta. Cancelados, reagendados, faltas e atendimentos futuros não entram. Serviços repetidos no mesmo atendimento geram uma etapa de cada tipo; sessões em atendimentos distintos mantêm seus próprios contatos. Alterações no plano recalculam a programação; registros de contato já salvos conservam sua situação e data. Queixas são encaminhadas à profissional sem aguardar o próximo prazo.
+
+Os planos ficam no JSON de `services`; apenas os registros manuais de contatos são gravados em `post_procedure_contacts`, na tabela existente `avvi_records`, sem migração SQL. A fila é derivada dos atendimentos, sem gravações automáticas nem consultas periódicas. O salvamento valida somente os atendimentos/serviços referenciados, evitando baixar toda a agenda a cada contato. Usa a fila compartilhada de persistência, confirmação de nuvem e recuperação local existentes. Não depende da integração Meta nem envia mensagens automaticamente.
+
+A permissão **Pós-procedimento** pode ser liberada por usuário em **Contas**; o administrador tem acesso. As permissões já existentes dos usuários padrão são preservadas. Uma conta somente com essa aba recebe nome/telefone, dados de identificação dos serviços e os vínculos necessários dos atendimentos, sem CPF, notas clínicas ou valores financeiros, e só pode gravar os contatos.
+
+Verificações isoladas: `node tests/post-procedure.mjs`, `node tests/post-procedure-cloud.mjs` e `node tests/post-procedure-ui.mjs` (prévia local na porta 3107). Cobrem prazos, reativação, validação, pacotes, cancelamentos, duplicidade, histórico e recarga, cadastro/edição de serviços, permissões, falhas de nuvem, celular e modo escuro. Testes não modificam pacientes ou registros reais.
+
 ## Estoque e fechamento de conta
 
 Em **Operação > Estoque**, todos os procedimentos aparecem com sua quantidade. Use as setas para adicionar ou remover uma unidade, ou edite a quantidade diretamente. O saldo inicial é zero quando ainda não existe registro; o estoque permite quantidades negativas, exibidas em vermelho. Ao concluir o fechamento da conta, as quantidades dos procedimentos utilizados são descontadas automaticamente. Reabrir a mesma conta ajusta apenas a diferença; reduzir a quantidade ou remover um procedimento devolve as unidades correspondentes. Os saldos usam a entidade `inventory` da tabela `avvi_records`, além da persistência local existente.

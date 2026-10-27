@@ -1,4 +1,5 @@
 import type { ServicePackage } from "./servicePackages";
+import type { PostProcedureContact } from "./types";
 import { supabase } from "./supabase";
 import type { AppRole, AppUser } from "./access";
 import { canReadEntity } from "./access";
@@ -31,6 +32,7 @@ export type EntityName =
   | "followup_rules"
   | "followup_contacts"
   | "followup_logs"
+  | "post_procedure_contacts"
   | "appointments"
   | "financial_entries"
   | "revenues"
@@ -53,6 +55,7 @@ export type EntityPayloadMap = {
   followup_rules: FollowUpRule;
   followup_contacts: FollowUpContact;
   followup_logs: FollowUpLog;
+  post_procedure_contacts: PostProcedureContact;
   appointments: Appointment;
   financial_entries: FinancialEntry;
   revenues: RevenueEntry;
@@ -76,6 +79,7 @@ export const entityNames: EntityName[] = [
   "followup_rules",
   "followup_contacts",
   "followup_logs",
+  "post_procedure_contacts",
   "appointments",
   "financial_entries",
   "revenues",

@@ -3,7 +3,7 @@ import fs from 'node:fs';import path from 'node:path';import os from 'node:os';i
 import {createPackageTestDatabase} from './package-session-db-helper.mjs';
 const db=await createPackageTestDatabase(),dir=fs.mkdtempSync(path.join(os.tmpdir(),'avvi-package-sessions-')),require=createRequire(import.meta.url);
 try{
- const names=['packageSessions','stockAccess','inventory','gifts','servicePackages','checkout','appointmentServices','access','accessServer','accountsServer','accessSnapshot','database','supabase','persistence','ultraformer','agendaAvailability','invoices','strategyDefinitions','anamnese','bodyAnamnese','calculations'];
+ const names=['postProcedure','packageSessions','stockAccess','inventory','gifts','servicePackages','checkout','appointmentServices','access','accessServer','accountsServer','accessSnapshot','database','supabase','persistence','ultraformer','agendaAvailability','invoices','strategyDefinitions','anamnese','bodyAnamnese','calculations'];
  for(const name of [...names,'route']){
   let source=fs.readFileSync(name==='route'?'app/api/access/data/route.ts':`lib/${name}.ts`,'utf8');
   for(const dependency of names)source=source.replaceAll(`"./${dependency}"`,`"./${dependency}.mjs"`).replaceAll(`"@/lib/${dependency}"`,`"./${dependency}.mjs"`);

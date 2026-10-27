@@ -109,6 +109,10 @@ import { tabLabel, canManageProfessional, canAccessTab, canReadEntity, canWriteE
 import { permittedSnapshot } from "@/lib/accessSnapshot";
 import { AccountsView } from "@/app/components/AccountsView";
 import { MyAccountView } from "@/app/components/MyAccountView";
+import { PostProcedureView } from "@/app/components/PostProcedureView";
+import { ServicePostProcedureEditor } from "@/app/components/ServicePostProcedureEditor";
+import { servicePostProcedurePlan, validPostProcedurePlan } from "@/lib/postProcedure";
+import type { PostProcedureContact } from "@/lib/types";
 import { SimulationView } from "@/app/components/SimulationView";
 import { calculateCardFee, calculateDebitFee } from "@/lib/paymentFees";
 import { StrategiesView } from "@/app/components/StrategiesView";
@@ -119,10 +123,10 @@ import { ProfessionalReportView } from "@/app/components/ProfessionalReportView"
 import { createPatientReceiptPdf, receiptServiceNames, receiptPayments, receiptPaymentTotal } from "@/lib/patientReceiptPdf";
 import type { AppRole, AppUser } from "@/lib/access";
 
-type Tab = "Simulação" | "Estratégias" | "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
+type Tab = "Pós-procedimento" | "Simulação" | "Estratégias" | "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
 const sidebarGroups: { label: string; icon: ElementType; tabs: Tab[] }[] = [
-  { label: "Operação", icon: CalendarDays, tabs: ["Agenda", "Follow Up", "Anamnese", "Simulação"] },
+  { label: "Operação", icon: CalendarDays, tabs: ["Agenda", "Pós-procedimento", "Follow Up", "Anamnese", "Simulação"] },
   { label: "Meu estabelecimento", icon: Building2, tabs: ["Estoque", "Ultraformer MPT"] },
   { label: "Profissional", icon: Users, tabs: ["Relatórios", "Relatório Profissional", "Estratégias"] },
   { label: "Financeiro", icon: CircleDollarSign, tabs: ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos"] },
@@ -132,6 +136,7 @@ const savedLoginKey = "avvi.saved.login.v1";
 
 const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
+  { id: "Pós-procedimento", icon: MessageCircle },
   { id: "Simulação", icon: Calculator },
   { id: "Estoque", icon: WalletCards },
   { id: "Follow Up", icon: MessageCircle },
@@ -448,6 +453,7 @@ export default function Home() {
   const [followUpRules, setFollowUpRules] = useState<FollowUpRule[]>([]);
   const [followUpContacts, setFollowUpContacts] = useState<FollowUpContact[]>([]);
   const [followUpLogs, setFollowUpLogs] = useState<FollowUpLog[]>([]);
+  const [postProcedureContacts, setPostProcedureContacts] = useState<PostProcedureContact[]>([]);
   const [checkoutDraft, setCheckoutDraft] = useState<CheckoutDraft | null>(null);
   const [checkoutConfirmation, setCheckoutConfirmation] = useState<{ appointmentId: string; accountId: string } | null>(null);
   const [accountSummary, setAccountSummary] = useState<{ draft: CheckoutDraft; closedAt?: string; change: number } | null>(null);
@@ -487,7 +493,7 @@ export default function Home() {
   const latestDraft = useRef<DataSnapshot | null>(null);
   const startupSnapshot = useRef<DataSnapshot>({
     patients, professionals, procedures, services, service_packages: servicePackages, inventory, gifts, anamneses, strategies, ultraformer_tips: ultraformerTips,
-    followup_rules: followUpRules, followup_contacts: followUpContacts, followup_logs: followUpLogs,
+    followup_rules: followUpRules, followup_contacts: followUpContacts, followup_logs: followUpLogs, post_procedure_contacts: postProcedureContacts,
     appointments, financial_entries: entries, revenues, fixed_costs: costs, receipts,
     professional_receipts: professionalReceipts, monthly_goals: monthlyGoals
   });
@@ -513,7 +519,7 @@ export default function Home() {
     setProcedures(snapshot.procedures); setServices(snapshot.services); setServicePackages(snapshot.service_packages);
     setInventory(snapshot.inventory); setGifts(snapshot.gifts); setAnamneses(snapshot.anamneses); setStrategies(snapshot.strategies);
     setUltraformerTips(snapshot.ultraformer_tips); setFollowUpRules(snapshot.followup_rules);
-    setFollowUpContacts(snapshot.followup_contacts); setFollowUpLogs(snapshot.followup_logs);
+    setFollowUpContacts(snapshot.followup_contacts); setFollowUpLogs(snapshot.followup_logs); setPostProcedureContacts(snapshot.post_procedure_contacts);
     setAppointments(snapshot.appointments); setEntries(snapshot.financial_entries);
     setRevenues(snapshot.revenues); setCosts(snapshot.fixed_costs); setReceipts(snapshot.receipts);
     setProfessionalReceipts(snapshot.professional_receipts); setMonthlyGoals(snapshot.monthly_goals);
@@ -583,7 +589,7 @@ export default function Home() {
       setUltraformerTips(snapshot?.ultraformer_tips ?? []);
       setFollowUpRules(snapshot?.followup_rules ?? []);
       setFollowUpContacts(snapshot?.followup_contacts ?? []);
-      setFollowUpLogs(snapshot?.followup_logs ?? []);
+      setFollowUpLogs(snapshot?.followup_logs ?? []); setPostProcedureContacts(snapshot?.post_procedure_contacts ?? []);
       setIsDataReady(true);
     }
     if (!isSupabaseConfigured) {
@@ -607,6 +613,7 @@ export default function Home() {
           dbFollowUpRulesState,
           dbFollowUpContactsState,
           dbFollowUpLogsState,
+          dbPostProcedureContactsState,
           dbAppointmentsState,
           dbEntriesState,
           dbRevenuesState,
@@ -628,6 +635,7 @@ export default function Home() {
           selectEntityState("followup_rules"),
           selectEntityState("followup_contacts"),
           selectEntityState("followup_logs"),
+          selectEntityState("post_procedure_contacts"),
           selectEntityState("appointments"),
           selectEntityState("financial_entries"),
           selectEntityState("revenues"),
@@ -660,7 +668,7 @@ export default function Home() {
         const initialCosts = mergeCosts(seedFixedCosts, importedCosts);
         const initialReceipts = seedReceipts;
         const initialGoals = [makeMonthlyGoal(todayKey().slice(0, 7), seedProfessionals)];
-        const isEmptyDatabase = userRole === "admin" && !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbServicePackagesState.records.length && !dbInventory.length && !dbGiftsState.records.length && !dbStrategiesState.records.length && !dbAnamnesesState.records.length && !dbUltraformerState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
+        const isEmptyDatabase = userRole === "admin" && !dbPatients.length && !dbProfessionals.length && !dbProcedures.length && !dbServices.length && !dbServicePackagesState.records.length && !dbInventory.length && !dbGiftsState.records.length && !dbStrategiesState.records.length && !dbAnamnesesState.records.length && !dbUltraformerState.records.length && !dbFollowUpRulesState.records.length && !dbFollowUpContactsState.records.length && !dbFollowUpLogsState.records.length && !dbPostProcedureContactsState.records.length && !dbAppointments.length && !dbEntries.length && !dbRevenues.length && !dbCosts.length && !dbReceipts.length && !dbProfessionalReceipts.length && !dbGoals.length;
         const remoteSnapshot: DataSnapshot = {
           patients: isEmptyDatabase ? initialPatients : dbPatients,
           professionals: isEmptyDatabase ? initialProfessionals : dbProfessionals,
@@ -674,7 +682,7 @@ export default function Home() {
           ultraformer_tips: dbUltraformerState.records,
           followup_rules: dbFollowUpRulesState.records,
           followup_contacts: dbFollowUpContactsState.records,
-          followup_logs: dbFollowUpLogsState.records,
+          followup_logs: dbFollowUpLogsState.records, post_procedure_contacts: dbPostProcedureContactsState.records,
           appointments: isEmptyDatabase ? initialAppointments : dbAppointments,
           financial_entries: isEmptyDatabase && hasFinancialAccess(currentUser) ? initialEntries : dbEntries,
           revenues: canReadEntity(currentUser, "revenues") ? (isEmptyDatabase ? initialRevenues : dbRevenues) : [],
@@ -699,7 +707,7 @@ export default function Home() {
             ultraformer_tips: savedLocalSnapshot.data.ultraformer_tips ?? [],
             followup_rules: savedLocalSnapshot.data.followup_rules ?? [],
             followup_contacts: savedLocalSnapshot.data.followup_contacts ?? [],
-            followup_logs: savedLocalSnapshot.data.followup_logs ?? []
+            followup_logs: savedLocalSnapshot.data.followup_logs ?? [], post_procedure_contacts: savedLocalSnapshot.data.post_procedure_contacts ?? []
           }
         } : null;
         const recoveredSnapshot = localSnapshot?.syncedData
@@ -717,7 +725,7 @@ export default function Home() {
           patients: dbPatients, professionals: dbProfessionals, procedures: dbProceduresState.records,
           services: dbServices, service_packages: dbServicePackagesState.records, inventory: dbInventory, gifts: dbGiftsState.records, strategies: dbStrategiesState.records, anamneses: dbAnamnesesState.records, ultraformer_tips: dbUltraformerState.records,
           followup_rules: dbFollowUpRulesState.records, followup_contacts: dbFollowUpContactsState.records,
-          followup_logs: dbFollowUpLogsState.records, appointments: dbAppointments,
+          followup_logs: dbFollowUpLogsState.records, post_procedure_contacts: dbPostProcedureContactsState.records, appointments: dbAppointments,
           financial_entries: dbEntries, revenues: dbRevenues, fixed_costs: dbCosts,
           receipts: dbReceipts, professional_receipts: dbProfessionalReceipts, monthly_goals: dbGoals
         };
@@ -734,7 +742,7 @@ export default function Home() {
         setUltraformerTips(hydratedSnapshot.ultraformer_tips ?? []);
         setFollowUpRules(hydratedSnapshot.followup_rules);
         setFollowUpContacts(hydratedSnapshot.followup_contacts);
-        setFollowUpLogs(hydratedSnapshot.followup_logs);
+        setFollowUpLogs(hydratedSnapshot.followup_logs); setPostProcedureContacts(hydratedSnapshot.post_procedure_contacts);
         setAppointments(hydratedSnapshot.appointments);
         setEntries(hydratedSnapshot.financial_entries);
         setRevenues(hydratedSnapshot.revenues);
@@ -783,7 +791,7 @@ export default function Home() {
       ultraformer_tips: ultraformerTips,
       followup_rules: followUpRules,
       followup_contacts: followUpContacts,
-      followup_logs: followUpLogs,
+      followup_logs: followUpLogs, post_procedure_contacts: postProcedureContacts,
       appointments,
       financial_entries: entries,
       revenues,
@@ -833,7 +841,7 @@ export default function Home() {
         pendingSyncs.current -= 1;
         setIsSyncing(pendingSyncs.current > 0);
       });
-  }, [patients, professionals, procedures, services, servicePackages, inventory, gifts, anamneses, strategies, ultraformerTips, followUpRules, followUpContacts, followUpLogs, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
+  }, [patients, professionals, procedures, services, servicePackages, inventory, gifts, anamneses, strategies, ultraformerTips, followUpRules, followUpContacts, followUpLogs, postProcedureContacts, appointments, entries, revenues, costs, receipts, professionalReceipts, monthlyGoals, syncRetry, isDataReady, isAuthenticated, userRole, persistLocalDraft]);
 
   useEffect(() => {
     if (!isAuthenticated || !isDataReady || !isSupabaseConfigured) return;
@@ -924,7 +932,7 @@ export default function Home() {
     setPatients(startupSnapshot.current.patients); setProfessionals(startupSnapshot.current.professionals);
     setProcedures(startupSnapshot.current.procedures); setServices(startupSnapshot.current.services);
     setInventory([]); setGifts([]); setAppointments(startupSnapshot.current.appointments); setCosts(startupSnapshot.current.fixed_costs);
-    setFollowUpRules([]); setFollowUpContacts([]); setFollowUpLogs([]);
+    setFollowUpRules([]); setFollowUpContacts([]); setFollowUpLogs([]); setPostProcedureContacts([]);
     const firstTab = tabs.find(tab => canAccessTab(user, tab.id))?.id ?? "Agenda"; setActiveTab(firstTab); setOpenSidebarGroup(null); setIsAuthenticated(true);
   }
   useEffect(() => {
@@ -1767,6 +1775,7 @@ export default function Home() {
             />
           )}
 
+          {canAccessTab(currentUser, "Pós-procedimento") && activeTab === "Pós-procedimento" && <PostProcedureView appointments={appointments} services={services} patients={patients} professionals={professionals} contacts={postProcedureContacts} setContacts={setPostProcedureContacts} user={currentUser} />}
           {activeTab === "Follow Up" && <FollowUpView restrictedLab={isMetaReviewer(currentUser)} tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={accounting.appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
 
           {canAccessTab(currentUser, "Contas") && activeTab === "Contas" && (userRole === "admin" ? <AccountsView professionals={professionals} /> : <MyAccountView professionals={professionals} onPasswordChanged={handleOwnPasswordChanged} />)}
@@ -2687,11 +2696,12 @@ function ServicesView({ services, setServices, packages, setPackages }: { servic
       setError("Informe o nome, uma duração válida e um preço igual ou maior que zero.");
       return;
     }
+    if (!validPostProcedurePlan(servicePostProcedurePlan(serviceForm))) { setError("Confira os dias do pós-procedimento: use números inteiros de 1 a 730 e acompanhamentos em ordem, entre o primeiro contato e a satisfação."); return; }
     if (services.some((service) => service.id !== serviceForm.id && serviceKey(service.name) === serviceKey(serviceForm.name))) {
       setError("Já existe um serviço com este nome. Edite o cadastro existente.");
       return;
     }
-    const saved: Service = { ...serviceForm, id: serviceForm.id || id("service"), name: serviceForm.name.trim(),
+    const saved: Service = { ...serviceForm, postProcedure: servicePostProcedurePlan(serviceForm), id: serviceForm.id || id("service"), name: serviceForm.name.trim(),
       description: serviceForm.description.trim(), category: serviceForm.category.trim(), price: Math.round(serviceForm.price * 100) / 100 };
     setServices((current) => serviceForm.id ? current.map((service) => service.id === serviceForm.id ? saved : service) : [saved, ...current]);
     setOpen(false);
@@ -2722,6 +2732,7 @@ function ServicesView({ services, setServices, packages, setPackages }: { servic
               </div>
             </div>
           </div>
+          <ServicePostProcedureEditor service={serviceForm} onChange={postProcedure => setServiceForm({ ...serviceForm, postProcedure })}/>
           {error && <p role="alert" className="mt-3 text-sm font-bold text-avvi-red">{error}</p>}
           <div className="mt-4 flex gap-3">
             <button type="submit" className="rounded-md bg-avvi-blue px-5 py-2 font-bold text-white"><Save className="mr-2 inline" size={16} />Salvar serviço</button>

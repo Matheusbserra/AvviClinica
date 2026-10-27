@@ -78,6 +78,7 @@ export type Procedure = {
 };
 
 export type Service = {
+  postProcedure?: PostProcedurePlan;
   id: string;
   name: string;
   description: string;
@@ -86,6 +87,15 @@ export type Service = {
   price: number;
   priceType: "fixed" | "from";
   active: boolean;
+};
+
+export type PostProcedurePlan = { enabled: boolean; firstContactDays: number; followUpDays: number[]; satisfactionDays: number; reactivationDays: number };
+export type PostProcedureStatus = "Aguardando contato" | "Mensagem enviada" | "Sem resposta" | "Concluído" | "Encaminhado à profissional";
+export type PostProcedureContact = {
+  id: string; appointmentId: string; patientId: string; serviceId: string; stage: string;
+  status: PostProcedureStatus; dueDate?: string; response: string;
+  history: { at: string; by: string; status: PostProcedureStatus; response: string; dueDate?: string }[];
+  updatedAt: string;
 };
 
 export type GiftStockItem = { id: string; name: string; quantity: number };

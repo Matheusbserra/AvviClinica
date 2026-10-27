@@ -5,7 +5,7 @@ export function navigationButton(page, name) {
   const locator = page.getByRole('button', {name:visibleName,exact:true}).filter({visible:true}).first();
   return new Proxy(locator, {get(target, property) {
     if (property === 'click' || property === 'waitFor') return async (...args) => {
-      const names = ['Agenda','Simulação','Estoque','Follow Up','Anamnese','Ultraformer MPT','Rankings','Relatório Profissional','Estratégias','Dashboard','Movimentações','Lançamento de Procedimentos','Pagamento Profissional','Recibos de Pagamento','Nota Fiscal','Custos','Cadastro de Produtos','Cadastro de Serviços','Cadastro de Profissionais','Cadastro de Pacientes','Metas','Contas'];
+      const names = ['Agenda','Pós-procedimento','Simulação','Estoque','Follow Up','Anamnese','Ultraformer MPT','Rankings','Relatório Profissional','Estratégias','Dashboard','Movimentações','Lançamento de Procedimentos','Pagamento Profissional','Recibos de Pagamento','Nota Fiscal','Custos','Cadastro de Produtos','Cadastro de Serviços','Cadastro de Profissionais','Cadastro de Pacientes','Metas','Contas'];
       const mobileMenu = page.getByRole('combobox',{name:'Navegar pelo sistema',exact:true});
       if (names.includes(visibleName) && (page.viewportSize()?.width ?? 1440) < 1024) {
         await mobileMenu.waitFor({state:'visible'});

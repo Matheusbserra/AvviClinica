@@ -1,4 +1,5 @@
 import { validServicePackage } from "@/lib/servicePackages";
+import { validPostProcedurePlan, validPostProcedureContact, postProcedureTasks } from "@/lib/postProcedure";
 import { hasPackageSessionData, packageSessionError, validPackageSessionUses } from "@/lib/packageSessions";
 import { createClient } from "@supabase/supabase-js";
 import { createHash } from "node:crypto";
@@ -6,7 +7,7 @@ import type { AppUser } from "@/lib/access";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
 import { canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, isMetaReviewer, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { checkoutStockUpdates } from "@/lib/stockAccess";
-import { stockHistoryEntry, followUpEntityRows } from "@/lib/accessSnapshot";
+import { stockHistoryEntry, followUpEntityRows, postProcedureOnly, postProcedureEntityRows } from "@/lib/accessSnapshot";
 import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAvailability";
 import { applyCheckoutUltraformer, isUltraformerTip, usageOnlyTipUpdate, validCheckoutShots } from "@/lib/ultraformer";
 import { validStrategy } from "@/lib/strategyDefinitions";
@@ -35,6 +36,7 @@ async function permittedRecords(user: AppUser, entity: string) {
     const records = await rows(entity);
     const permitted = entity === "strategies" ? records.filter(row => canAccessProfessional(user, String(row.data.professionalId))) : entity === "professionals" && registrationOnly(user) ? records.filter(row => canAccessProfessional(user, row.record_id)) : records;
     const data = permitted.map((row) => {
+      if (postProcedureOnly(user)) return postProcedureEntityRows(entity, [row.data])[0];
       if (isMetaReviewer(user)) return followUpEntityRows(entity, [row.data])[0];
       if (user.role === "admin") return row.data;
       if (entity === "professionals") {
@@ -126,6 +128,27 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     if (isMetaReviewer(user) && [...upserts, ...removed].some(row => !canWriteEntity(user, row.entity))) return Response.json({ error: "Acesso restrito ao Follow Up." }, { status: 403, headers });
     if (canAccessTab(user, "Simulação") && !entityNames.some(entity => canWriteEntity(user, entity))) return Response.json({ error: "Esta conta tem acesso somente à simulação, sem gravação de dados." }, { status: 403, headers });
     const db = database();
+    const postContacts = upserts.filter(row => row.entity === "post_procedure_contacts");
+    if (postContacts.length) {
+      if (!canWriteEntity(user, "post_procedure_contacts")) return Response.json({ error: "Acesso ao pós-procedimento não autorizado." }, { status: 403, headers });
+      if (postContacts.some(row => !validPostProcedureContact(row.data))) return Response.json({ error: "Confira os dados do contato pós-procedimento." }, { status: 400, headers });
+      // Validate only the referenced visits/services, avoiding a full agenda download per contact.
+      const referencedRows = async (entity: string, ids: string[]) => {
+        const result: { data: Record<string, unknown> }[] = [], unique = [...new Set(ids)];
+        for (let offset = 0; offset < unique.length; offset += 100) {
+          const { data, error } = await db.from("avvi_records").select("record_id,data").eq("entity", entity).in("record_id", unique.slice(offset, offset + 100));
+          if (error) throw error;
+          result.push(...data);
+        }
+        return result;
+      };
+      const [visits, catalog] = await Promise.all([referencedRows("appointments", postContacts.map(row => row.data.appointmentId)), referencedRows("services", postContacts.map(row => row.data.serviceId))]);
+      const validTasks = new Map(postProcedureTasks(visits.map(row => row.data) as unknown as Appointment[], catalog.map(row => row.data) as unknown as import("@/lib/types").Service[], [], [], []).map(task => [task.id, task]));
+      for (const row of postContacts) {
+        const task = validTasks.get(row.data.id);
+        if (!task || task.patientId !== row.data.patientId || row.data.dueDate && row.data.dueDate < task.performedOn) return Response.json({ error: "O atendimento ou serviço foi alterado. Atualize os dados antes de registrar este contato." }, { status: 409, headers });
+      }
+    }
     const selectedStockProducts = upserts.filter(row => row.entity === "inventory" && row.data?.visibleInStock === true);
     if (selectedStockProducts.length) {
       const productIds = new Set((await rows("procedures")).map(row => row.record_id));
@@ -242,6 +265,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const acknowledgedRows = new Set<(typeof upserts)[number]>();
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
+      if (row.entity === "services" && row.data.postProcedure !== undefined && !validPostProcedurePlan(row.data.postProcedure)) return Response.json({ error: "Prazos de pós-procedimento inválidos." }, { status: 400, headers });
       if (row.entity === "service_packages" && !validServicePackage(row.data)) return Response.json({ error: "Dados do pacote inválidos." }, { status: 400, headers });
       if (row.entity === "inventory" && row.data.visibleInStock !== undefined && typeof row.data.visibleInStock !== "boolean") return Response.json({ error: "Visibilidade do produto no estoque inválida." }, { status: 400, headers });
       if (row.entity === "appointments" && row.data.invoice !== undefined && (!validInvoice(row.data.invoice) || row.data.invoice.localPdf)) return Response.json({error:"Anexo fiscal inválido."},{status:400,headers});

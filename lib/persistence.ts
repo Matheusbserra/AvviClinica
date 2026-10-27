@@ -3,7 +3,7 @@ import type { EntityName, EntityPayloadMap } from "./database";
 export type DataSnapshot = { [K in EntityName]: EntityPayloadMap[K][] };
 export type LocalSnapshot = { savedAt: string; data: DataSnapshot; syncedData?: DataSnapshot };
 export const snapshotKey = "avvi.data.snapshot.v1";
-export const snapshotEntities: EntityName[] = ["patients", "professionals", "procedures", "services", "service_packages", "inventory", "gifts", "anamneses", "strategies", "ultraformer_tips", "followup_rules", "followup_contacts", "followup_logs", "appointments", "financial_entries", "revenues", "fixed_costs", "receipts", "professional_receipts", "monthly_goals"];
+export const snapshotEntities: EntityName[] = ["patients", "professionals", "procedures", "services", "service_packages", "inventory", "gifts", "anamneses", "strategies", "ultraformer_tips", "followup_rules", "followup_contacts", "followup_logs", "post_procedure_contacts", "appointments", "financial_entries", "revenues", "fixed_costs", "receipts", "professional_receipts", "monthly_goals"];
 const recordId = (item: { id?: string; month?: string }) => item.id || item.month || "";
 const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
