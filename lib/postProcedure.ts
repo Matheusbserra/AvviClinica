@@ -58,6 +58,15 @@ export type PostProcedureTask = {
   performedOn: string; scheduledDate: string; dueDate: string; patientName: string; phone: string; professionalId: string; professionalName: string;
   serviceName: string; status: PostProcedureStatus; contact?: PostProcedureContact;
 };
+export function groupPostProcedurePatients(tasks: PostProcedureTask[]) {
+  const patients = new Map<string, { patientId: string; patientName: string; tasks: PostProcedureTask[] }>();
+  for (const task of tasks) {
+    let patient = patients.get(task.patientId);
+    if (!patient) { patient = { patientId: task.patientId, patientName: task.patientName, tasks: [] }; patients.set(task.patientId, patient); }
+    patient.tasks.push(task);
+  }
+  return [...patients.values()].map(patient => ({ ...patient, procedureCount: new Set(patient.tasks.map(task => JSON.stringify([task.appointmentId, task.serviceId]))).size }));
+}
 export function postProcedureInPeriod(task: Pick<PostProcedureTask, "dueDate" | "status">, period: string, reference: string) {
   if (period === "completed") return task.status === "Concluído";
   if (task.status === "Concluído") return false;
