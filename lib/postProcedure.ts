@@ -192,7 +192,20 @@ export function postProcedureMessage(task: PostProcedureTask, messages: PostProc
 }
 export function postProcedureWhatsApp(phone: string, message: string) {
   let digits = phone.replace(/\D/g, "");
-  if (digits.length === 10 || digits.length === 11) digits = "55" + digits;
+  if (!phone.trim().startsWith("+") && (digits.length === 10 || digits.length === 11)) digits = "55" + digits;
   if (!/^[1-9]\d{10,14}$/.test(digits)) return "";
   return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+}
+export function validPostProcedurePhone(phone: unknown): phone is string {
+  return typeof phone === "string" && phone.length <= 40 && /^\+?[\d\s().-]+$/.test(phone.trim()) && !!postProcedureWhatsApp(phone, "");
+}
+export function postProcedurePhoneOnlyUpdate(previous: unknown, next: unknown, projected = false) {
+  if (!previous || !next || typeof previous !== "object" || typeof next !== "object" || Array.isArray(previous) || Array.isArray(next)) return false;
+  const before = previous as Record<string, unknown>, after = next as Record<string, unknown>;
+  if (!before.id || before.id !== after.id || !validPostProcedurePhone(after.phone)) return false;
+  if (validPostProcedurePhone(before.phone) && before.phone !== after.phone) return false;
+  const stable = (record: Record<string, unknown>) => JSON.stringify(record, (_key, value) => value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value);
+  const withoutPhone = (record: Record<string, unknown>) => Object.fromEntries(Object.entries(record).filter(([key]) => key !== "phone"));
+  const baseline = projected ? Object.fromEntries(Object.entries(before).filter(([key]) => ["id", "name", "phone"].includes(key))) : before;
+  return stable(withoutPhone(baseline)) === stable(withoutPhone(after));
 }

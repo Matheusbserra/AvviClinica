@@ -1,5 +1,5 @@
 import { validServicePackage } from "@/lib/servicePackages";
-import { validPostProcedurePlan, validPostProcedureContact, validPostProcedureMessage, postProcedureTasks } from "@/lib/postProcedure";
+import { validPostProcedurePlan, validPostProcedureContact, validPostProcedureMessage, postProcedurePhoneOnlyUpdate, postProcedureTasks } from "@/lib/postProcedure";
 import { hasPackageSessionData, packageSessionError, validPackageSessionUses } from "@/lib/packageSessions";
 import { createClient } from "@supabase/supabase-js";
 import { createHash } from "node:crypto";
@@ -302,6 +302,15 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
         continue;
       }
       if (row.entity === "appointments" && canAccessTab(user,"Nota Fiscal") && invoiceOnlyUpdate(stored.find(item=>item.id===row.record_id),row.data)) continue;
+      if (row.entity === "patients" && canAccessTab(user, "Pós-procedimento")) {
+        const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "patients").eq("record_id", row.record_id).maybeSingle();
+        if (error) throw error;
+        if (postProcedurePhoneOnlyUpdate(previous?.data, row.data, postProcedureOnly(user))) {
+          // A projected post-procedure record must never erase hidden patient fields.
+          row.data = { ...previous!.data, phone: row.data.phone };
+          continue;
+        }
+      }
       if (row.entity === "patients" && canAccessTab(user, "Nota Fiscal")) {
         const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "patients").eq("record_id", row.record_id).maybeSingle();
         if (error) throw error;
