@@ -89,7 +89,7 @@ export type Service = {
   active: boolean;
 };
 
-export type PostProcedurePlan = { enabled: boolean; firstContactDays: number; followUpDays: number[]; satisfactionDays: number; reactivationDays: number; reactivationDaysList?: number[] };
+export type PostProcedurePlan = { enabled: boolean; firstContactDays: number; followUpDays: number[]; satisfactionDays: number; satisfactionEnabled?: boolean; reactivationDays: number; reactivationDaysList?: number[] };
 export type PostProcedureStatus = "Aguardando contato" | "Mensagem enviada" | "Sem resposta" | "Concluído" | "Encaminhado à profissional";
 export type PostProcedureMessageStage = "first" | "followup" | "satisfaction" | "reactivation";
 export type PostProcedureMessage = { id: PostProcedureMessageStage; template: string; updatedAt: string };

@@ -32,32 +32,39 @@ export function savePostProcedureMessages(current: PostProcedureMessage[], initi
 
 export const postProcedureStatuses: PostProcedureStatus[] = ["Aguardando contato", "Mensagem enviada", "Sem resposta", "Concluído", "Encaminhado à profissional"];
 export const postProcedureTemplates = {
-  custom: { label: "Personalizado", followUpDays: [7], satisfactionDays: 30 },
-  toxin: { label: "Toxina botulínica", followUpDays: [7], satisfactionDays: 14 },
-  filler: { label: "Preenchimento com ácido hialurônico", followUpDays: [7], satisfactionDays: 21 },
-  collagen: { label: "Bioestimulador de colágeno", followUpDays: [7, 30], satisfactionDays: 90 },
-  laser: { label: "Laser Lavieen", followUpDays: [10], satisfactionDays: 30 },
+  custom: { label: "Outros · reativação anual", followUpDays: [], satisfactionDays: 30, reactivationDays: 365, regular: false },
+  toxin: { label: "Botox / toxina botulínica", followUpDays: [10], satisfactionDays: 30, reactivationDays: 150, regular: true },
+  filler: { label: "Preenchimento (exceto glúteo)", followUpDays: [25], satisfactionDays: 120, reactivationDays: 300, regular: true },
+  collagen: { label: "Bioestimulador de colágeno", followUpDays: [], satisfactionDays: 90, reactivationDays: 365, regular: true },
+  laser: { label: "Laser Lavien / Lavieen", followUpDays: [], satisfactionDays: 30, reactivationDays: 30, regular: false },
+  gluteal: { label: "Glúteo / Gluteus", followUpDays: [30], satisfactionDays: 90, reactivationDays: 365, regular: true },
+  threads: { label: "Fios / fios de PDO", followUpDays: [30], satisfactionDays: 60, reactivationDays: 300, regular: true },
 };
 export function postProcedureTemplatePlan(key: keyof typeof postProcedureTemplates): PostProcedurePlan {
-  return { enabled: true, firstContactDays: 1, followUpDays: [...postProcedureTemplates[key].followUpDays], satisfactionDays: postProcedureTemplates[key].satisfactionDays, reactivationDays: 180, reactivationDaysList: [180, 365] };
+  const template = postProcedureTemplates[key];
+  return { enabled: true, firstContactDays: 1, followUpDays: [...template.followUpDays], satisfactionDays: template.satisfactionDays, satisfactionEnabled: template.regular, reactivationDays: template.reactivationDays, reactivationDaysList: [template.reactivationDays] };
+}
+export function postProcedureCategory(value: string): keyof typeof postProcedureTemplates {
+  const name = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return /gluteo|gluteus/.test(name) ? "gluteal" : /botox|toxina\s+botulinica/.test(name) ? "toxin"
+    : /bioestimulador/.test(name) ? "collagen" : /preench/.test(name) ? "filler"
+    : /lavieen|lavien/.test(name) ? "laser" : /\bfios?\b/.test(name) ? "threads" : "custom";
 }
 export function servicePostProcedurePlan(service: Pick<Service, "name" | "postProcedure">): PostProcedurePlan {
-  if (service.postProcedure) return service.postProcedure;
-  const name = service.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const key = /lavieen|lavien/.test(name) ? "laser"
-    : /bioestimul|sculptra|radiesse|hidroxiapatita|poli.?latico|ellanse/.test(name) ? "collagen"
-    : /preench|acido hialuronico/.test(name) ? "filler"
-    : /botox|toxina botulinica|dysport|xeomin|botulift|nabota/.test(name) ? "toxin" : "custom";
-  return { ...postProcedureTemplatePlan(key), enabled: key !== "custom" };
+  return service.postProcedure ?? postProcedureTemplatePlan(postProcedureCategory(service.name));
+}
+export function serviceWithProcedureSchedule(service: Service): Service {
+  return { ...service, postProcedure: postProcedureTemplatePlan(postProcedureCategory(service.name)) };
 }
 export function validPostProcedurePlan(value: unknown): value is PostProcedurePlan {
   const plan = value as PostProcedurePlan | undefined;
   const day = (n: unknown) => Number.isSafeInteger(n) && Number(n) >= 1 && Number(n) <= 730;
-  return !!plan && typeof plan.enabled === "boolean" && day(plan.firstContactDays) && day(plan.satisfactionDays) && plan.firstContactDays <= plan.satisfactionDays && day(plan.reactivationDays)
+  return !!plan && typeof plan.enabled === "boolean" && (plan.satisfactionEnabled === undefined || typeof plan.satisfactionEnabled === "boolean")
+    && day(plan.firstContactDays) && day(plan.satisfactionDays) && (plan.satisfactionEnabled === false || plan.firstContactDays <= plan.satisfactionDays) && day(plan.reactivationDays)
     && Array.isArray(plan.followUpDays) && plan.followUpDays.length <= 12 && plan.followUpDays.every(day)
     && new Set(plan.followUpDays).size === plan.followUpDays.length
     && (plan.reactivationDaysList === undefined || Array.isArray(plan.reactivationDaysList) && plan.reactivationDaysList.length <= 12 && plan.reactivationDaysList.every(day) && plan.reactivationDaysList.every((n, index) => !index || n > plan.reactivationDaysList![index - 1]))
-    && plan.followUpDays.every((n, index) => n >= plan.firstContactDays && n <= plan.satisfactionDays && (!index || n > plan.followUpDays[index - 1]));
+    && plan.followUpDays.every((n, index) => n >= plan.firstContactDays && (plan.satisfactionEnabled === false || n <= plan.satisfactionDays) && (!index || n > plan.followUpDays[index - 1]));
 }
 export function standardServiceReactivations(service: Service): Service {
   return { ...service, postProcedure: { ...servicePostProcedurePlan(service), reactivationDays: 180, reactivationDaysList: [180, 365] } };
@@ -165,7 +172,7 @@ export function postProcedureTasks(appointments: Appointment[], services: Servic
       const plan = servicePostProcedurePlan(service);
       if (!validPostProcedurePlan(plan) || !plan.enabled) continue;
       const reactivations = postProcedureReactivationDays(plan);
-      const stages = [{ stage: "first", label: "Primeiro contato", days: plan.firstContactDays }, ...plan.followUpDays.map((days, index) => ({ stage: `followup-${index}`, label: `Acompanhamento ${index + 1}`, days })), { stage: "satisfaction", label: "Resultado e satisfação", days: plan.satisfactionDays }, ...reactivations.map((days, index) => ({ stage: index ? `reactivation-${index}` : "reactivation", label: reactivations.length > 1 ? `Reativação ${index + 1}` : "Reativação", days }))];
+      const stages = [{ stage: "first", label: "Primeiro contato", days: plan.firstContactDays }, ...plan.followUpDays.map((days, index) => ({ stage: `followup-${index}`, label: `Acompanhamento ${index + 1}`, days })), ...(plan.satisfactionEnabled === false ? [] : [{ stage: "satisfaction", label: "Resultado e satisfação", days: plan.satisfactionDays }]), ...reactivations.map((days, index) => ({ stage: index ? `reactivation-${index}` : "reactivation", label: reactivations.length > 1 ? `Reativação ${index + 1}` : "Reativação", days }))];
       for (const stage of stages) {
         const id = postProcedureId(appointment.id, service.id, stage.stage), contact = saved.get(id);
         const scheduledDate = addPostProcedureDays(performedOn, stage.days);
