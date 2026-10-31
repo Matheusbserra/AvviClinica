@@ -53,7 +53,7 @@ export async function authenticateUser(login: string, password: string): Promise
   if (login.trim().toLowerCase() === "admin") return verifyCredentials(login, password);
   const { authenticateManaged } = await import("./accountsServer"); return authenticateManaged(login, password);
 }
-export async function resolveAccess(request: Request, now = Date.now()): Promise<AppUser | null> {
+export async function resolveAccess(request: Request, now = Date.now(), reportUnavailable = false): Promise<AppUser | null> {
   const signed = readAccess(request, now); if (!signed) return null;
   if (signed.login === "admin" && signed.role === "admin" && (!signed.id || signed.id === "primary-admin")) return { login: "admin", role: "admin", name: "Administrador principal" };
   try {
@@ -62,5 +62,5 @@ export async function resolveAccess(request: Request, now = Date.now()): Promise
     const user = accountUser(account);
     if (isMetaReviewer(user) && (process.env.VERCEL || process.env.AVVI_WHATSAPP_LOCAL_TEST !== "true")) return null;
     return user;
-  } catch { return null; }
+  } catch (error) { if (reportUnavailable) throw error; return null; }
 }

@@ -2,7 +2,10 @@ import { accessCookie, resolveAccess, sameOrigin, signAccess, authenticateUser }
 export const runtime = "nodejs";
 const attempts = new Map<string, { count: number; until: number }>();
 const headers = { "Cache-Control": "no-store" };
-export async function GET(request: Request) { return Response.json({ user: await resolveAccess(request) }, { headers }); }
+export async function GET(request: Request) {
+  try { return Response.json({ user: await resolveAccess(request, Date.now(), true) }, { headers }); }
+  catch { return Response.json({ error: "A validação do acesso está temporariamente indisponível. Tente novamente." }, { status: 503, headers }); }
+}
 export async function POST(request: Request) {
   if (!sameOrigin(request)) return Response.json({ error: "Origem não autorizada." }, { status: 403, headers });
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "local";

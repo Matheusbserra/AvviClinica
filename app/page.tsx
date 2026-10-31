@@ -95,7 +95,7 @@ import { importedCosts } from "@/lib/importedCosts";
 import { applyProcedureCostOverrides } from "@/lib/procedureCosts";
 import { calculateEntry, currency, excludeZeroAccounts, monthKey, percent, splitDiscountImpact, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { appDataTableMissing, selectEntityState, selectCloudState, syncEntityDiffs, setDatabaseAccess } from "@/lib/database";
+import { appDataTableMissing, selectInitialEntityStates, selectCloudState, syncEntityDiffs, setDatabaseAccess } from "@/lib/database";
 import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, AnamneseRecord, ProfessionalStrategy, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 import { hasSnapshotChanges, snapshotChanges, snapshotEntities } from "@/lib/persistence";
@@ -499,6 +499,7 @@ export default function Home() {
     professional_receipts: professionalReceipts, monthly_goals: monthlyGoals
   });
   const cloudLoaded = useRef(false);
+  const cloudRevision = useRef("");
   const [connectionRetry, setConnectionRetry] = useState(0);
   const [storageError, setStorageError] = useState("");
   const [isSavingLocal, setIsSavingLocal] = useState(false);
@@ -600,53 +601,31 @@ export default function Home() {
 
     async function hydrateFromSupabase() {
       try {
-        const [
-          dbPatientsState,
-          dbProfessionalsState,
-          dbProceduresState,
-          dbServicesState,
-          dbServicePackagesState,
-          dbInventoryState,
-          dbGiftsState,
-          dbStrategiesState,
-          dbAnamnesesState,
-          dbUltraformerState,
-          dbFollowUpRulesState,
-          dbFollowUpContactsState,
-          dbFollowUpLogsState,
-          dbPostProcedureContactsState,
-          dbPostProcedureMessagesState,
-          dbAppointmentsState,
-          dbEntriesState,
-          dbRevenuesState,
-          dbCostsState,
-          dbReceiptsState,
-          dbProfessionalReceiptsState,
-          dbGoalsState
-        ] = await Promise.all([
-          selectEntityState("patients"),
-          selectEntityState("professionals"),
-          selectEntityState("procedures"),
-          selectEntityState("services"),
-          selectEntityState("service_packages"),
-          selectEntityState("inventory"),
-          selectEntityState("gifts"),
-          selectEntityState("strategies"),
-          selectEntityState("anamneses"),
-          selectEntityState("ultraformer_tips"),
-          selectEntityState("followup_rules"),
-          selectEntityState("followup_contacts"),
-          selectEntityState("followup_logs"),
-          selectEntityState("post_procedure_contacts"),
-          selectEntityState("post_procedure_messages"),
-          selectEntityState("appointments"),
-          selectEntityState("financial_entries"),
-          selectEntityState("revenues"),
-          selectEntityState("fixed_costs"),
-          selectEntityState("receipts"),
-          selectEntityState("professional_receipts"),
-          selectEntityState("monthly_goals")
-        ]);
+        const initialCloud = await selectInitialEntityStates();
+        const {
+          patients: dbPatientsState,
+          professionals: dbProfessionalsState,
+          procedures: dbProceduresState,
+          services: dbServicesState,
+          service_packages: dbServicePackagesState,
+          inventory: dbInventoryState,
+          gifts: dbGiftsState,
+          strategies: dbStrategiesState,
+          anamneses: dbAnamnesesState,
+          ultraformer_tips: dbUltraformerState,
+          followup_rules: dbFollowUpRulesState,
+          followup_contacts: dbFollowUpContactsState,
+          followup_logs: dbFollowUpLogsState,
+          post_procedure_contacts: dbPostProcedureContactsState,
+          post_procedure_messages: dbPostProcedureMessagesState,
+          appointments: dbAppointmentsState,
+          financial_entries: dbEntriesState,
+          revenues: dbRevenuesState,
+          fixed_costs: dbCostsState,
+          receipts: dbReceiptsState,
+          professional_receipts: dbProfessionalReceiptsState,
+          monthly_goals: dbGoalsState
+        } = initialCloud.entities;
         if (cancelled) return;
 
         const dbPatients = dbPatientsState.records;
@@ -723,6 +702,7 @@ export default function Home() {
 
         isRemoteUpdate.current = true;
         cloudLoaded.current = true;
+        cloudRevision.current = initialCloud.revision;
         // Compare against actual stored rows, including genuinely empty categories.
         lastSyncedSnapshot.current = {
           patients: dbPatients, professionals: dbProfessionals, procedures: dbProceduresState.records,
@@ -848,7 +828,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!isAuthenticated || !isDataReady || !isSupabaseConfigured) return;
-    let cancelled = false, queued = false, revision = "";
+    let cancelled = false, queued = false;
     const refresh = () => {
       if (cancelled || queued || !cloudLoaded.current) return;
       queued = true;
@@ -857,7 +837,7 @@ export default function Home() {
       syncQueue.current = syncQueue.current.catch(() => undefined).then(async () => {
         if (cancelled || !cloudLoaded.current) return;
         try {
-          const update = await selectCloudState(revision);
+          const update = await selectCloudState(cloudRevision.current);
           if (cancelled) return;
           setRefreshError("");
           if (!update) return;
@@ -865,7 +845,7 @@ export default function Home() {
           if (!baseline || !draft) return;
           const remote = { ...baseline, ...update.data };
           const merged = recoverSharedSnapshot(remote, baseline, draft, currentUser);
-          revision = update.revision;
+          cloudRevision.current = update.revision;
           lastSyncedSnapshot.current = remote;
           latestDraft.current = merged;
           if (hasSnapshotChanges(draft, merged)) applyDataSnapshot(merged);
@@ -876,7 +856,7 @@ export default function Home() {
         }
       }).finally(() => { queued = false; });
     };
-    refresh();
+    // Initial hydration already fetched the full snapshot and its revision.
     const stopWatching = watchSharedUpdates(refresh);
     return () => {
       cancelled = true;
@@ -906,9 +886,10 @@ export default function Home() {
       if (cloudLoaded.current) setSyncRetry((current) => current + 1);
       else setConnectionRetry((current) => current + 1);
     };
-    const timer = window.setTimeout(retry, 15000);
+    // Keep the draft locally; never loop failed cloud writes or full hydration.
+    // Retry only on explicit request or when connectivity returns.
     window.addEventListener("online", retry);
-    return () => { window.clearTimeout(timer); window.removeEventListener("online", retry); };
+    return () => { window.removeEventListener("online", retry); };
   }, [syncError, hasPendingChanges, isSyncing, syncRetry, connectionRetry, agendaSyncConflicts.length]);
 
   useEffect(() => {
@@ -928,7 +909,7 @@ export default function Home() {
     setIsDataReady(false); setHasPendingChanges(false); setStorageError(""); setLastSavedAt("");
     setRefreshError("");
     setAgendaSyncConflicts([]);
-    lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
+    lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false; cloudRevision.current = "";
     setCheckoutDraft(null); setCheckoutConfirmation(null); setAccountSummary(null); setSelectedSlot(null); setSelectedAppointmentId(null);
     setAnamneses([]); setHistoryPatientId(null); setEditingPatientId(null);
     setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
@@ -982,7 +963,7 @@ export default function Home() {
     if (supabase) await supabase.auth.signOut();
     window.sessionStorage.removeItem("avvi.session");
     setIsAuthenticated(false); setIsDataReady(false); setUserRole("standard"); setCurrentUser({ login: "", role: "standard", tabs: [] }); setDatabaseAccess("standard");
-    lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false;
+    lastSyncedSnapshot.current = null; latestDraft.current = null; cloudLoaded.current = false; cloudRevision.current = "";
     setAnamneses([]); setHistoryPatientId(null); setEditingPatientId(null);
     setEntries([]); setRevenues([]); setReceipts([]); setProfessionalReceipts([]); setMonthlyGoals([]);
     setSelectedSlot(null); setSelectedAppointmentId(null); setCheckoutDraft(null); setAccountSummary(null);
@@ -993,6 +974,7 @@ export default function Home() {
     if (!isAuthenticated) return;
     let active = true;
     const check = async () => {
+      if (document.visibilityState === "hidden") return;
       try {
         const response = await fetch("/api/access", { cache: "no-store" });
         if (!response.ok) return;
@@ -1745,7 +1727,7 @@ export default function Home() {
           </div>}
           {refreshError && <div role="status" aria-label="Atualização da agenda" className="mb-2 shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{refreshError}</div>}
           <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
-            {!isDataReady ? "Carregando dados…" : activeTab === "Simulação" ? "Simulação temporária · nada é salvo." : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : syncError ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : agendaSyncConflicts.length ? "Há agendamentos aguardando revisão. As outras alterações são salvas automaticamente." : hasPendingChanges ? "Salvamento na nuvem pendente. As alterações serão tentadas novamente." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
+            {!isDataReady ? "Carregando dados…" : activeTab === "Simulação" ? "Simulação temporária · nada é salvo." : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : syncError ? "Salvamento na nuvem pendente. Use Tentar novamente quando a conexão estiver disponível." : agendaSyncConflicts.length ? "Há agendamentos aguardando revisão. As outras alterações são salvas automaticamente." : hasPendingChanges ? "Salvamento na nuvem pendente. Use Tentar novamente quando a conexão estiver disponível." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
           </div>
           {checkoutConfirmation && isSupabaseConfigured && appointments.some(appointment => appointment.id === checkoutConfirmation.appointmentId && appointment.accountClosed && appointment.closedAccount?.id === checkoutConfirmation.accountId) && <div role="status" aria-label="Confirmação do fechamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-2 text-sm font-semibold text-avvi-ink">
             {lastSyncedSnapshot.current?.appointments.some(appointment => appointment.id === checkoutConfirmation.appointmentId && appointment.accountClosed && appointment.closedAccount?.id === checkoutConfirmation.accountId && JSON.stringify(appointment.closedAccount) === JSON.stringify(appointments.find(item => item.id === checkoutConfirmation.appointmentId)?.closedAccount))

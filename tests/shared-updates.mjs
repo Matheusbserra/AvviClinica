@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import ts from 'typescript';
 const source = ts.transpileModule(fs.readFileSync('lib/sharedUpdates.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText;
 const { notifySharedSave, watchSharedUpdates } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
-const intervals = new Map(), channels = new Set(), oldChannel = globalThis.BroadcastChannel;
-globalThis.window = Object.assign(new EventTarget(), { setInterval(callback) { intervals.set(callback, callback); return callback; }, clearInterval(id) { intervals.delete(id); }, localStorage: { setItem() { throw new Error('Blocked browser storage'); } } });
+const intervals = new Map(), timeouts = new Map(), channels = new Set(), oldChannel = globalThis.BroadcastChannel;
+globalThis.window = Object.assign(new EventTarget(), { setInterval(callback) { intervals.set(callback, callback); return callback; }, clearInterval(id) { intervals.delete(id); }, setTimeout(callback) { timeouts.set(callback,callback); return callback; }, clearTimeout(id) { timeouts.delete(id); }, localStorage: { setItem() { throw new Error('Blocked browser storage'); } } });
+const flush=()=>{const pending=[...timeouts.values()];timeouts.clear();for(const callback of pending)callback();};
 globalThis.document = Object.assign(new EventTarget(), {visibilityState:'visible'});
 globalThis.BroadcastChannel = class {
  constructor(name) { this.name = name; channels.add(this); }
@@ -18,8 +19,10 @@ try {
  notifySharedSave(); assert.ok(first > 0 && second > 0, 'A confirmed save signals all tabs without page reload');
  const before = first; for(let tick=0;tick<9600;tick++)for (const callback of intervals.values()) callback(); assert.equal(first,before,'Eight idle hours must cause no recurring refreshes');
  document.visibilityState='hidden';document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'));assert.equal(first,before,'Background tabs do not download records');
- document.visibilityState='visible';document.dispatchEvent(new Event('visibilitychange'));assert.ok(first>before,'Returning to a device fetches updates without reload');window.dispatchEvent(new Event('focus'));
- stopFirst(); stopSecond(); assert.equal(intervals.size, 0); assert.equal(channels.size, 0);
+ document.visibilityState='visible';document.dispatchEvent(new Event('visibilitychange'));flush();assert.ok(first>before,'Returning to a device fetches updates without reload');window.dispatchEvent(new Event('focus'));
+ const afterFocus=first;for(let tick=0;tick<100;tick++){window.dispatchEvent(new Event('focus'));document.dispatchEvent(new Event('visibilitychange'));}assert.equal(first,afterFocus,'Repeated focus/visibility events wait for one shared refresh');flush();assert.equal(first,afterFocus+1,'A whole burst triggers one refresh and never drops the final event');
+ window.dispatchEvent(new Event('online'));assert.ok(first>afterFocus,'A returning connection bypasses focus throttling');const afterOnline=first;notifySharedSave();assert.ok(first>afterOnline,'Confirmed saves and manual refresh remain immediate');
+ stopFirst(); stopSecond(); assert.equal(intervals.size, 0); assert.equal(timeouts.size,0);assert.equal(channels.size, 0);
  const stopped = first; notifySharedSave(); assert.equal(first, stopped, 'Unsubscribed sessions must never receive subsequent events');
  globalThis.BroadcastChannel = undefined;
  const stopFallback = watchSharedUpdates(() => second++); assert.doesNotThrow(notifySharedSave); assert.equal(intervals.size, 0); stopFallback();

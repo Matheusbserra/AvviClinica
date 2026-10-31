@@ -119,6 +119,14 @@ export async function selectCloudState(revision = ""): Promise<{ revision: strin
   if (!response.ok) throw new Error(data.error ?? "Não foi possível atualizar a agenda compartilhada.");
   return data;
 }
+export async function selectInitialEntityStates() {
+  const cloud = await selectCloudState();
+  if (!cloud || typeof cloud.revision !== "string" || !cloud.data || entityNames.some(entity => canReadEntity(accessUser, entity) && !Array.isArray(cloud.data[entity]))) {
+    throw new Error("A resposta da nuvem está incompleta. Seus dados locais foram preservados.");
+  }
+  const entities = Object.fromEntries(entityNames.map(entity => [entity, { records: cloud.data[entity] ?? [], latestUpdatedAt: "" }])) as { [K in EntityName]: EntitySelectResult<K> };
+  return { revision: cloud.revision, entities };
+}
 
 export async function selectEntityState<T extends EntityName>(entity: T): Promise<EntitySelectResult<T>> {
   if (!supabase) return { records: [], latestUpdatedAt: "" };

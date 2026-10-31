@@ -61,13 +61,13 @@ try{
  browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
  const errors=[];
  async function session(login,secret){
-  const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage();page.on('pageerror',e=>{errors.push(e.message);console.error('Browser error:',e.message);});
+  const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage(),traffic=[];page.on('request',request=>{if(request.url().includes('/api/access/data'))traffic.push({url:request.url(),method:request.method()});});page.on('pageerror',e=>{errors.push(e.message);console.error('Browser error:',e.message);});
   const signedAdmin=login==='admin'&&process.env.AVVI_TEST_ADMIN_SESSION;
   if(signedAdmin)await context.addCookies([{name:'avvi_access',value:process.env.AVVI_TEST_ADMIN_SESSION,url:origin,httpOnly:true,sameSite:'Strict'}]);
   await Promise.all([page.waitForResponse(response=>response.url()===origin+'/api/access'&&response.request().method()==='GET',{timeout:60000}),page.goto(origin)]);
   if(!signedAdmin){await page.getByLabel('Login',{exact:true}).fill(login);await page.getByLabel('Senha',{exact:true}).fill(secret);await page.getByRole('button',{name:'Entrar',exact:true}).click();}
   try{await navigationButton(page,'Agenda').waitFor();}catch(error){console.error('LOGIN ALERT:',await page.getByRole('alert').allTextContents());console.error(logs);throw error;}
-  return {page,context,status:()=>page.getByRole('status',{name:'Status do salvamento',exact:true})};
+  return {page,context,traffic,status:()=>page.getByRole('status',{name:'Status do salvamento',exact:true})};
  }
  const saved=async s=>{try{await s.status().filter({hasText:'Dados salvos na nuvem'}).waitFor({timeout:30000});}catch(error){console.error('Saving alerts:',await s.page.getByRole('alert').allTextContents());throw error;}};
  const refresh=async s=>{await s.page.bringToFront();await s.page.evaluate(()=>window.dispatchEvent(new Event('focus')));};
@@ -87,7 +87,7 @@ try{
  assert.equal(writes.flat().some(row=>['fixed_costs','monthly_goals'].includes(row.entity)),false,'No seeded restricted data should block the booking');
  console.log('PASS: Agenda-only operator recovers a booking after initial cloud failure with no browser cache.');
  // Separate browser contexts represent two users already looking at the same agenda.
- const observer=await session('admin',process.env.AVVI_TEST_ADMIN_PASSWORD);await saved(observer);
+ const observer=await session('admin',process.env.AVVI_TEST_ADMIN_PASSWORD);await saved(observer);assert.equal(observer.traffic.filter(request=>request.method==='GET'&&request.url.includes('?entity=')).length,0,'Initial hydration uses one snapshot instead of 22 entity requests');assert.equal(observer.traffic.filter(request=>request.method==='GET'&&request.url.includes('?sync=1')).length,1,'Initial hydration must not be downloaded twice');
  let idleRequests=0;const countIdle=request=>{if(request.url().includes('/api/access/data'))idleRequests++;};observer.page.on('request',countIdle);
  await observer.page.waitForTimeout(1200);const settled=idleRequests;await observer.page.waitForTimeout(7000);assert.equal(idleRequests,settled,'An idle agenda must not keep querying the cloud every three seconds');observer.page.off('request',countIdle);
  const manualRefresh=observer.page.waitForResponse(response=>response.url().includes('/api/access/data?sync=1'));await observer.page.getByRole('button',{name:'Atualizar dados',exact:true}).click();await manualRefresh;
@@ -103,6 +103,7 @@ try{
  failWrites=true;await checkout.getByRole('button',{name:'Fechar Conta',exact:true}).click();await checkout.waitFor({state:'hidden'});await standard.status().filter({hasText:'pendente'}).waitFor();
  await standard.page.getByRole('status',{name:'Confirmação do fechamento',exact:true}).filter({hasText:'ainda não confirmado'}).waitFor();
  assert.equal(records.get('appointments:'+visit.id).data.accountClosed,undefined);
+ const failedAttempts=standard.traffic.filter(request=>request.method==='POST').length;await standard.page.waitForTimeout(16500);assert.equal(standard.traffic.filter(request=>request.method==='POST').length,failedAttempts,'Failed saves must not retry every 15 seconds and download the agenda again');
  await standard.page.reload();await standard.status().filter({hasText:'pendente'}).waitFor();failWrites=false;
  await standard.page.getByRole('button',{name:'Tentar novamente',exact:true}).click();await saved(standard);
  const closed=records.get('appointments:'+visit.id).data;assert.equal(closed.accountClosed,true);assert.equal(closed.closedAccount.payments[0].amount,300);assert.equal(records.get('inventory:stock').data.quantity,9);

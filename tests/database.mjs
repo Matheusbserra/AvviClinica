@@ -6,7 +6,7 @@ globalThis.__testDatabase=client;
 const accessCode=ts.transpileModule(fs.readFileSync("lib/access.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.ES2022}}).outputText;
 const accessUrl="data:text/javascript;base64,"+Buffer.from(accessCode).toString("base64");
 const code=ts.transpileModule(fs.readFileSync("lib/database.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText.replaceAll('"./access"',JSON.stringify(accessUrl)).replace(/import \{ supabase \} from [^;]+;/,"const supabase=globalThis.__testDatabase;");
-const {selectEntityState,selectCloudState,syncEntityDiffs,getRecordId,appDataTableMissing}=await import("data:text/javascript;base64,"+Buffer.from(code).toString("base64"));
+const {selectEntityState,selectCloudState,selectInitialEntityStates,entityNames,syncEntityDiffs,getRecordId,appDataTableMissing}=await import("data:text/javascript;base64,"+Buffer.from(code).toString("base64"));
 let loaded=await selectEntityState("patients");assert.equal(loaded.records.length,1201);assert.equal(new Set(loaded.records.map(record=>record.id)).size,1201);assert.equal(loaded.latestUpdatedAt,"2026-10-08T18:00:00Z");
 readFailure=true;await assert.rejects(()=>selectEntityState("patients"),error=>error.message==="failed second page");
 assert.throws(()=>getRecordId({}),/identificador/);assert.equal(getRecordId({month:"2026-10"}),"2026-10");
@@ -22,5 +22,7 @@ globalThis.fetch=async(url,init)=>{
 assert.deepEqual(await selectCloudState('"revision-qa"'),{revision:'"next-qa"',data:{appointments:[{id:'shared-qa'}]}});
 syncStatus=304;assert.equal(await selectCloudState('"revision-qa"'),null);
 syncStatus=503;await assert.rejects(()=>selectCloudState('"revision-qa"'),/Cloud read failed/);
+let initialRequests=0,incomplete=false;globalThis.fetch=async(url,init)=>{initialRequests++;assert.equal(url,'/api/access/data?sync=1');assert.equal(init.headers['If-None-Match'],undefined);return Response.json({revision:'"initial"',data:Object.fromEntries(entityNames.filter(entity=>!incomplete||entity!=='appointments').map(entity=>[entity,entity==='appointments'?[{id:'initial-qa'}]:[]]))});};
+const initial=await selectInitialEntityStates();assert.equal(initialRequests,1,'Opening the system loads the cloud once, not once per category followed by another full sync');assert.equal(initial.revision,'"initial"');assert.deepEqual(initial.entities.appointments.records,[{id:'initial-qa'}]);incomplete=true;await assert.rejects(()=>selectInitialEntityStates(),/incompleta/);
 console.log('PASS: authenticated refresh uses no-store conditional requests, accepts unchanged 304 without parsing an empty body, and reports a failed read instead of applying an empty agenda.');
 console.log("PASS: Reads all 1201 records, reports failed pagination without accepting a partial list, refuses missing IDs, retries partial upsert/deletion safely, and distinguishes missing tables from denied access.");

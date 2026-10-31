@@ -2,7 +2,7 @@ import { validServicePackage } from "@/lib/servicePackages";
 import { validPostProcedurePlan, validPostProcedureContact, validPostProcedureMessage, postProcedurePhoneOnlyUpdate, postProcedureTasks } from "@/lib/postProcedure";
 import { hasPackageSessionData, packageSessionError, validPackageSessionUses } from "@/lib/packageSessions";
 import { createClient } from "@supabase/supabase-js";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { AppUser } from "@/lib/access";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
 import { canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, isMetaReviewer, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
@@ -55,15 +55,36 @@ async function permittedRecords(user: AppUser, entity: string) {
 // All profiles share avvi_records. A private session only limits which categories
 // and fields may be returned; it never creates a separate agenda for that user.
 async function cloudRevision(user: AppUser, entities: EntityName[]) {
-  const db = database(), hash = createHash("sha256").update(JSON.stringify(user));
-  if (!entities.length) return `"${hash.digest("hex")}"`;
+  const db = database(), scope = createHash("sha256").update(JSON.stringify(user)).digest("hex");
+  const hashes = new Map(entities.map(entity => [entity, createHash("sha256")]));
   for (let offset = 0; ; offset += 500) {
     const { data, error } = await db.from("avvi_records").select("entity,record_id,updated_at")
       .in("entity", entities).order("entity").order("record_id").range(offset, offset + 499);
     if (error) throw error;
-    for (const row of data ?? []) hash.update(JSON.stringify([row.entity, row.record_id, row.updated_at]));
-    if (!data || data.length < 500) return `"${hash.digest("hex")}"`;
+    for (const row of data ?? []) hashes.get(row.entity)?.update(JSON.stringify([row.record_id, row.updated_at]));
+    if (!data || data.length < 500) {
+      const stamps = Object.fromEntries([...hashes].map(([entity, hash]) => [entity, hash.digest("hex")]));
+      const payload = Buffer.from(JSON.stringify({ scope, stamps })).toString("base64url");
+      const signature = createHmac("sha256", revisionSecret()).update("avvi-sync-v2\0").update(payload).digest("base64url");
+      return { revision: `"sync2.${payload}.${signature}"`, scope, stamps };
+    }
   }
+}
+function revisionSecret() {
+  const secret = process.env.AVVI_SESSION_SECRET;
+  if (!secret || secret.length < 32) throw new Error("Sessão de sincronização indisponível.");
+  return secret;
+}
+function previousEntityStamps(revision: string | null, scope: string): Record<string, string> | null {
+  if (!revision || revision.length > 12000) return null;
+  try {
+    const match = /^"sync2\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)"$/.exec(revision);
+    if (!match) return null;
+    const expected = createHmac("sha256", revisionSecret()).update("avvi-sync-v2\0").update(match[1]).digest(), signature = Buffer.from(match[2], "base64url");
+    if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
+    const parsed = JSON.parse(Buffer.from(match[1], "base64url").toString());
+    return parsed.scope === scope && parsed.stamps && typeof parsed.stamps === "object" && !Array.isArray(parsed.stamps) ? parsed.stamps : null;
+  } catch { return null; }
 }
 
 export async function GET(request: Request) {
@@ -72,10 +93,12 @@ export async function GET(request: Request) {
   try {
     if (query.get("sync") === "1") {
       const entities = entityNames.filter(entity => canReadEntity(user, entity));
-      const revision = await cloudRevision(user, entities);
+      const { revision, scope, stamps } = await cloudRevision(user, entities);
       const syncHeaders = { ...headers, ETag: revision, Vary: "Cookie" };
       if (request.headers.get("if-none-match") === revision) return new Response(null, { status: 304, headers: syncHeaders });
-      const data = Object.fromEntries(await Promise.all(entities.map(async entity => [entity, (await permittedRecords(user, entity)).records])));
+      const previous = previousEntityStamps(request.headers.get("if-none-match"), scope);
+      const changed = entities.filter(entity => previous?.[entity] !== stamps[entity]);
+      const data = Object.fromEntries(await Promise.all(changed.map(async entity => [entity, (await permittedRecords(user, entity)).records])));
       return Response.json({ revision, data }, { headers: syncHeaders });
     }
     const entity = query.get("entity") ?? "";

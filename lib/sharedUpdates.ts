@@ -20,16 +20,28 @@ export function notifySharedSave() {
 }
 
 export function watchSharedUpdates(refresh: () => void) {
-  const activeRefresh = () => { if (document.visibilityState !== "hidden") refresh(); };
+  let focusTimer: number | undefined;
+  const requestedRefresh = () => {
+    window.clearTimeout(focusTimer); focusTimer = undefined;
+    if (document.visibilityState !== "hidden") refresh();
+  };
+  const activeRefresh = () => {
+    if (document.visibilityState === "hidden") return;
+    window.clearTimeout(focusTimer);
+    focusTimer = window.setTimeout(requestedRefresh, 200);
+  };
   const channel = openChannel();
-  if (channel) channel.onmessage = event => { if (event.data === "saved") activeRefresh(); };
-  const storage = (event: StorageEvent) => { if (event.key === channelName) activeRefresh(); };
-  for (const event of ["focus", "online", localEvent]) window.addEventListener(event, activeRefresh);
+  if (channel) channel.onmessage = event => { if (event.data === "saved") requestedRefresh(); };
+  const storage = (event: StorageEvent) => { if (event.key === channelName) requestedRefresh(); };
+  window.addEventListener("focus", activeRefresh);
+  for (const event of ["online", localEvent]) window.addEventListener(event, requestedRefresh);
   window.addEventListener("storage", storage);
   document.addEventListener("visibilitychange", activeRefresh);
   return () => {
+    window.clearTimeout(focusTimer);
     channel?.close();
-    for (const event of ["focus", "online", localEvent]) window.removeEventListener(event, activeRefresh);
+    window.removeEventListener("focus", activeRefresh);
+    for (const event of ["online", localEvent]) window.removeEventListener(event, requestedRefresh);
     window.removeEventListener("storage", storage);
     document.removeEventListener("visibilitychange", activeRefresh);
   };
