@@ -317,6 +317,7 @@ export type UltraformerTip = { id: string; name: string; depth: string; kind: "l
 export type StrategyMetric = "revenue" | "patients" | "services" | "averageTicket" | "productivity" | "custom";
 export type ProfessionalStrategy = {
   id: string; professionalId: string; title: string; metric: StrategyMetric;
+  sortOrder?: number;
   start: string; end: string; target: number; manualProgress: number; notes: string;
   createdAt: string; updatedAt: string;
   createdBy: { login: string; name: string }; updatedBy: { login: string; name: string };

@@ -5,7 +5,7 @@ try{
  for(const name of [...modules,'gateway','progressRoute']){let source=fs.readFileSync(name==='gateway'?'app/api/access/data/route.ts':name==='progressRoute'?'app/api/strategies/progress/route.ts':`lib/${name}.ts`,'utf8');for(const dependency of modules)source=source.replaceAll(`"./${dependency}"`,`"./${dependency}.mjs"`).replaceAll(`"@/lib/${dependency}"`,`"./${dependency}.mjs"`);source=source.replaceAll('"@supabase/supabase-js"',JSON.stringify(pathToFileURL(require.resolve('@supabase/supabase-js')).href));fs.writeFileSync(path.join(dir,name+'.mjs'),ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText);}
  Object.assign(process.env,{AVVI_SESSION_SECRET:'isolated-strategies-session-secret-2026',NEXT_PUBLIC_SUPABASE_URL:'https://project.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'sb_secret_test'});
  const load=name=>import(pathToFileURL(path.join(dir,name+'.mjs')));
- const {strategyProgress}=await load('strategyProgress'),{validStrategy,strategyMetrics}=await load('strategyDefinitions'),access=await load('access'),auth=await load('accessServer'),gateway=await load('gateway'),progressRoute=await load('progressRoute'),persistence=await load('persistence');
+ const {strategyProgress}=await load('strategyProgress'),{validStrategy,strategyMetrics,compareStrategies,moveStrategy}=await load('strategyDefinitions'),access=await load('access'),auth=await load('accessServer'),gateway=await load('gateway'),progressRoute=await load('progressRoute'),persistence=await load('persistence');
  const base={id:'goal',professionalId:'a',title:'Meta QA',metric:'revenue',start:'2026-10-01',end:'2026-10-03',target:1000,manualProgress:4,notes:'Plano de ação QA',createdAt:'forged',updatedAt:'forged',createdBy:{login:'forged',name:'Forged'},updatedBy:{login:'forged',name:'Forged'}};
  const goals=strategyMetrics.map(metric=>({...base,id:metric.id,metric:metric.id}));
  const entry=(id,patientId,amount,quantity=1)=>({id,professionalId:'a',patientId,date:'2026-10-02',accountClosed:true,quantity:1,servicePrice:amount,productCost:0,machineFee:0,commercialDiscount:0,professionalPercent:70,discountSplit:'Empresa assume',payments:[{method:'Pix',amount}],procedureLines:[{serviceId:'s',quantity,servicePrice:amount/quantity,productCost:0,professionalPercent:70}]});
@@ -14,6 +14,19 @@ try{
  assert.equal(map.get('revenue'),700);assert.equal(map.get('patients'),2);assert.equal(map.get('services'),6);assert.equal(map.get('averageTicket'),350);assert.equal(map.get('productivity'),2/6*100);assert.equal(map.get('custom'),4);assert.equal(JSON.stringify(data),before);
  assert.equal(strategyProgress([{...base,metric:'productivity',start:'2026-10-04',end:'2026-10-04'}],data)[0].value,0,'Sunday-only capacity is zero');assert.equal(strategyProgress([{...base,professionalId:'missing'}],data)[0].value,0);
  assert.ok(goals.every(validStrategy));for(const changed of [{...base,target:0},{...base,target:-1},{...base,target:NaN},{...base,manualProgress:-1},{...base,metric:'profit'},{...base,start:'2026-02-30'},{...base,end:'2026-09-30'},{...base,notes:'x'.repeat(5001)},{...base,rawLedger:'PRIVATE'}])assert.equal(validStrategy(changed),false);
+ // Reordering legacy goals must survive storage sorted by record ID, not array order.
+ const legacy=[{...base,id:'c',title:'C'},{...base,id:'a',title:'A'},{...base,id:'b',title:'B'},{...base,id:'hidden',title:'Hidden',end:'2026-11-01'},{...base,id:'other',professionalId:'b',title:'Other'}];
+ const original=JSON.stringify(legacy),author={login:'qa',name:'QA'};
+ assert.deepEqual(legacy.filter(item=>item.professionalId==='a').sort(compareStrategies).map(item=>item.id),['a','b','c','hidden']);
+ const moved=moveStrategy(legacy,'c',-1,['a','b','c'],author,'2026-11-03T12:00:00Z');
+ assert.equal(JSON.stringify(legacy),original);assert.deepEqual(moved.filter(item=>item.professionalId==='a').sort(compareStrategies).map(item=>item.id),['a','c','b','hidden']);
+ assert.equal(moved.find(item=>item.id==='other'),legacy.find(item=>item.id==='other'));
+ const shuffled=JSON.parse(JSON.stringify(moved)).sort((a,b)=>b.id.localeCompare(a.id));
+ assert.deepEqual(shuffled.filter(item=>item.professionalId==='a').sort(compareStrategies).map(item=>item.id),['a','c','b','hidden']);
+ assert.deepEqual(moveStrategy(moved,'a',-1,['a','c','b'],author),moved);assert.deepEqual(moveStrategy(moved,'b',1,['a','c','b'],author),moved);
+ assert.equal(moveStrategy(moved,'missing',1,[],author),moved);
+ assert.deepEqual(moveStrategy(moved,'c',1,['a','c','b'],author).filter(item=>item.professionalId==='a').sort(compareStrategies).map(item=>item.id),['a','b','c','hidden']);
+ assert.ok(validStrategy({...base,sortOrder:0}));for(const sortOrder of [-1,0.5,NaN,Infinity,'1',Number.MAX_SAFE_INTEGER+1])assert.equal(validStrategy({...base,sortOrder}),false);
  const account={id:'operator',login:'operator',name:'Operadora QA',role:'standard',tabs:['Estratégias'],professional_report:{professionalIds:['a']},version:1},user={...account,revision:1},admin={login:'admin',role:'admin'};
  assert.equal(access.canReadEntity(user,'strategies'),true);assert.equal(access.canWriteEntity(user,'strategies'),true);assert.equal(access.hasFinancialAccess(user),false);for(const entity of ['financial_entries','revenues','fixed_costs','monthly_goals'])assert.equal(access.canReadEntity(user,entity),false);
  const records=new Map();for(const entity of ['professionals','services','appointments'])for(const value of data[entity])records.set(entity+':'+value.id,{entity,record_id:value.id,data:value});
@@ -24,7 +37,9 @@ try{
  const upsert=value=>({upserts:[{entity:'strategies',record_id:value.id,data:value}],removed:[]});
  assert.equal((await gateway.POST(request('/api/access/data',user,upsert(base)))).status,200);const saved=structuredClone(records.get('strategies:goal').data);assert.deepEqual(saved.createdBy,{login:'operator',name:'Operadora QA'});assert.match(saved.createdAt,/^2026-/);
  assert.equal((await gateway.POST(request('/api/access/data',admin,upsert({...saved,notes:'Editado'})))).status,200);assert.deepEqual(records.get('strategies:goal').data.createdBy,saved.createdBy);assert.equal(records.get('strategies:goal').data.createdAt,saved.createdAt);assert.equal(records.get('strategies:goal').data.updatedBy.login,'admin');
- let response=await gateway.GET(request('/api/access/data?entity=strategies'));assert.equal(response.status,200);assert.equal((await response.json()).records[0].notes,'Editado');
+ assert.equal((await gateway.POST(request('/api/access/data',user,upsert({...saved,notes:'Editado',sortOrder:2})))).status,200);
+ assert.equal(records.get('strategies:goal').data.sortOrder,2);
+ let response=await gateway.GET(request('/api/access/data?entity=strategies'));assert.equal(response.status,200);const reloaded=(await response.json()).records[0];assert.equal(reloaded.notes,'Editado');assert.equal(reloaded.sortOrder,2);
  for(const bad of [{...base,target:0},{...base,professionalId:'missing'}])assert.equal((await gateway.POST(request('/api/access/data',user,upsert(bad)))).status,400);
  // One account scope protects strategy lists, writes, deletion, cached data and aggregate requests.
  const foreign={...base,id:'foreign',professionalId:'b'};
