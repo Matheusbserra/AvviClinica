@@ -5,7 +5,11 @@ import { themeBootScript } from "@/lib/theme";
 
 export const metadata: Metadata = {
   title: "AVVI Clínica",
-  description: "Gestão de agenda, financeiro e performance para clínica estética."
+  description: "Gestão de agenda, financeiro e performance para clínica estética.",
+  icons: {
+    icon: { url: "/logo-avvi.png?v=1", type: "image/png" },
+    shortcut: "/logo-avvi.png?v=1"
+  }
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
