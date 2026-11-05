@@ -1,4 +1,7 @@
 import fs from "node:fs";import assert from "node:assert/strict";import ts from "typescript";
+// Retain the permission regressions for the feature's enabled configuration.
+// The production-disabled configuration has its own follow-up-disabled test.
+process.env.NEXT_PUBLIC_AVVI_FOLLOW_UP_ENABLED='true';
 function uri(file){let code=ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;if(file==='lib/accessServer.ts')code=code.replaceAll('"./access"',JSON.stringify(uri('lib/access.ts')));return "data:text/javascript;base64,"+Buffer.from(code).toString("base64");}
 async function load(file){return import(uri(file));}
 const {canAccessTab,standardTabs,canReadEntity,canWriteEntity,tabLabel}=await load("lib/access.ts");

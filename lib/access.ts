@@ -1,4 +1,6 @@
 export type AppRole = "admin" | "standard";
+// Temporarily disabled by the clinic. Keep stored permissions/data for reactivation.
+export const followUpEnabled = process.env.NEXT_PUBLIC_AVVI_FOLLOW_UP_ENABLED === "true";
 export const appTabs = ["Agenda", "Pós-procedimento", "Simulação", "Estoque", "Follow Up", "Estratégias", "Anamnese", "Ultraformer MPT", "Relatórios", "Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Relatório Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes", "Metas", "Contas"] as const;
 export type AppTab = typeof appTabs[number];
 // Stored in the existing account permissions array; it is not a navigation tab.
@@ -28,6 +30,7 @@ export function canAccessProfessional(user: AppUser, professionalId: string) {
 export const standardTabs: string[] = ["Agenda", "Estoque", "Follow Up", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes"];
 type Access = AppRole | AppUser;
 export function canAccessTab(access: Access, tab: string) {
+  if (tab === "Follow Up" && !followUpEnabled) return false;
   if (isMetaReviewer(access)) return tab === "Follow Up";
   const role = typeof access === "string" ? access : access.role;
   if (!appTabs.includes(tab as AppTab)) return false;
@@ -67,6 +70,7 @@ const writeTabs: Record<string, string[]> = {
 export const standardEntities = Object.keys(writeTabs).filter(entity => writeTabs[entity].some(tab => standardTabs.includes(tab)));
 export function canReadEntity(access: Access, entity: string) { return (readTabs[entity] ?? []).some(tab => canAccessTab(access, tab) && (tab !== "Relatório Profissional" || !hasLimitedProfessionalReport(access))); }
 export function canWriteEntity(access: Access, entity: string) {
+  if (!followUpEnabled && entity.startsWith("followup_")) return false;
   if (isMetaReviewer(access)) return ["followup_rules", "followup_contacts", "followup_logs"].includes(entity);
   if (["inventory", "gifts"].includes(entity)) return canMoveStock(access) || canAccessTab(access, "Agenda");
   return (writeTabs[entity] ?? []).some(tab => canAccessTab(access, tab));

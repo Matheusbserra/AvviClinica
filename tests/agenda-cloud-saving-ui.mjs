@@ -104,7 +104,11 @@ try{
  assert.ok(observer.traffic.filter(request=>request.url.includes('?sync=1')).at(-1).revision,'Reload sends its saved revision');
  // Normal restricted create + patient + paid closure, failed writes/reload/retry, then cloud readback.
  await standard.page.reload();await saved(standard);
+ await standard.page.waitForTimeout(300);
+ const ownReadsBefore=standard.traffic.filter(request=>request.method==='GET'&&request.url.includes('?sync=1')).length;
  await book(standard,'ana',10,'Paciente pago QA');await saved(standard);
+ await standard.page.waitForTimeout(500);
+ assert.equal(standard.traffic.filter(request=>request.method==='GET'&&request.url.includes('?sync=1')).length,ownReadsBefore,'A confirmed save must not immediately download its own changed appointment category again');
  const visit=appointmentFor('Paciente pago QA');assert.ok(visit);
  await refresh(observer);await observer.page.getByTestId('appointment-'+visit.id).waitFor({timeout:20000});
  assert.equal(await observer.page.getByTestId('appointment-'+visit.id).count(),1,'One shared booking, without reloading the other user');

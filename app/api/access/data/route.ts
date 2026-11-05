@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { AppUser } from "@/lib/access";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
-import { canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, isMetaReviewer, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
+import { followUpEnabled, canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, isMetaReviewer, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { checkoutStockUpdates } from "@/lib/stockAccess";
 import { stockHistoryEntry, followUpEntityRows, postProcedureOnly, postProcedureEntityRows } from "@/lib/accessSnapshot";
 import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAvailability";
@@ -160,6 +160,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const retryRequest = request.clone();
     const { upserts = [], removed = [] } = await request.json();
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
+    if (!followUpEnabled && [...upserts, ...removed].some(row => typeof row?.entity === "string" && row.entity.startsWith("followup_"))) return Response.json({ disabled:true,error:"Follow Up temporariamente desativado. Atualize a página para continuar usando as outras áreas." }, { status:503,headers });
     if (isMetaReviewer(user) && [...upserts, ...removed].some(row => !canWriteEntity(user, row.entity))) return Response.json({ error: "Acesso restrito ao Follow Up." }, { status: 403, headers });
     if (canAccessTab(user, "Simulação") && !entityNames.some(entity => canWriteEntity(user, entity))) return Response.json({ error: "Esta conta tem acesso somente à simulação, sem gravação de dados." }, { status: 403, headers });
     const db = database();

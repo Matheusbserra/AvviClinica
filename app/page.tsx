@@ -858,7 +858,9 @@ export default function Home() {
       }).finally(() => { queued = false; });
     };
     // Initial hydration already fetched the full snapshot and its revision.
-    const stopWatching = watchSharedUpdates(refresh);
+    // Our confirmed write already updated the local baseline. Other tabs and
+    // explicit refresh/focus still read changes, without downloading our own save again.
+    const stopWatching = watchSharedUpdates(refresh, true);
     return () => {
       cancelled = true;
       stopWatching();
@@ -1762,7 +1764,7 @@ export default function Home() {
           )}
 
           {canAccessTab(currentUser, "Pós-procedimento") && activeTab === "Pós-procedimento" && <PostProcedureView appointments={appointments} services={services} patients={patients} onPhoneChange={(patientId, phone) => setPatients(current => current.map(patient => patient.id === patientId ? { ...patient, phone } : patient))} professionals={professionals} contacts={postProcedureContacts} setContacts={setPostProcedureContacts} messages={postProcedureMessages} setMessages={setPostProcedureMessages} user={currentUser} />}
-          {activeTab === "Follow Up" && <FollowUpView restrictedLab={isMetaReviewer(currentUser)} tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={accounting.appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
+          {canAccessTab(currentUser,"Follow Up") && activeTab === "Follow Up" && <FollowUpView restrictedLab={isMetaReviewer(currentUser)} tab={followUpTab} changeTab={setFollowUpTab} patients={patients} appointments={accounting.appointments} services={services} professionals={professionals} rules={followUpRules} setRules={setFollowUpRules} contacts={followUpContacts} setContacts={setFollowUpContacts} logs={followUpLogs} setLogs={setFollowUpLogs} />}
 
           {canAccessTab(currentUser, "Contas") && activeTab === "Contas" && (userRole === "admin" ? <AccountsView professionals={professionals} /> : <MyAccountView professionals={professionals} onPasswordChanged={handleOwnPasswordChanged} />)}
           {canAccessTab(currentUser, "Relatórios") && activeTab === "Relatórios" && <ReportsView appointments={accounting.appointments} entries={accounting.entries} professionals={professionals} procedures={procedures} services={services} revenues={accountingRevenues} />}

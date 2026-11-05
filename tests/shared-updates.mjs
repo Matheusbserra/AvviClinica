@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import ts from 'typescript';
 const source = ts.transpileModule(fs.readFileSync('lib/sharedUpdates.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText;
-const { notifySharedSave, watchSharedUpdates } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { notifySharedSave, requestSharedRefresh, watchSharedUpdates } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const intervals = new Map(), timeouts = new Map(), channels = new Set(), oldChannel = globalThis.BroadcastChannel;
 globalThis.window = Object.assign(new EventTarget(), { setInterval(callback) { intervals.set(callback, callback); return callback; }, clearInterval(id) { intervals.delete(id); }, setTimeout(callback) { timeouts.set(callback,callback); return callback; }, clearTimeout(id) { timeouts.delete(id); }, localStorage: { setItem() { throw new Error('Blocked browser storage'); } } });
 const flush=()=>{const pending=[...timeouts.values()];timeouts.clear();for(const callback of pending)callback();};
 globalThis.document = Object.assign(new EventTarget(), {visibilityState:'visible'});
 globalThis.BroadcastChannel = class {
  constructor(name) { this.name = name; channels.add(this); }
- postMessage(data) { assert.equal(data, 'saved', 'Signals must never contain clinical records or credentials'); for (const channel of channels) if (channel !== this && channel.name === this.name) channel.onmessage?.({ data }); }
+ postMessage(data) { assert.deepEqual(Object.keys(data).sort(), ['source','type'], 'Signals must never contain clinical records or credentials'); assert.equal(data.type,'saved');assert.equal(typeof data.source,'string');assert.ok(data.source.length>0);for (const channel of channels) if (channel !== this && channel.name === this.name) channel.onmessage?.({ data }); }
  close() { channels.delete(this); }
 };
 try {
@@ -23,6 +23,14 @@ try {
  const afterFocus=first;for(let tick=0;tick<100;tick++){window.dispatchEvent(new Event('focus'));document.dispatchEvent(new Event('visibilitychange'));}assert.equal(first,afterFocus,'Repeated focus/visibility events wait for one shared refresh');flush();assert.equal(first,afterFocus+1,'A whole burst triggers one refresh and never drops the final event');
  window.dispatchEvent(new Event('online'));assert.ok(first>afterFocus,'A returning connection bypasses focus throttling');const afterOnline=first;notifySharedSave();assert.ok(first>afterOnline,'Confirmed saves and manual refresh remain immediate');
  stopFirst(); stopSecond(); assert.equal(intervals.size, 0); assert.equal(timeouts.size,0);assert.equal(channels.size, 0);
+ let acknowledged=0;const stopAcknowledged=watchSharedUpdates(()=>acknowledged++,true);
+ notifySharedSave();assert.equal(acknowledged,0,'The page that already acknowledged its save must not download its changed categories again, including through its own BroadcastChannel');
+ for(const channel of channels)channel.onmessage?.({data:{type:'saved',source:'another-browser-tab'}});
+ assert.equal(acknowledged,1,'Another tab still refreshes shared data after a save');
+ requestSharedRefresh();assert.equal(acknowledged,2,'Manual refresh must always run');
+ for(const channel of channels)channel.onmessage?.({data:'saved'});
+ assert.equal(acknowledged,3,'Legacy clients can still notify a new client');
+ window.dispatchEvent(new Event('focus'));flush();assert.equal(acknowledged,4,'Focus still checks for changes from other devices');stopAcknowledged();
  const stopped = first; notifySharedSave(); assert.equal(first, stopped, 'Unsubscribed sessions must never receive subsequent events');
  globalThis.BroadcastChannel = undefined;
  const stopFallback = watchSharedUpdates(() => second++); assert.doesNotThrow(notifySharedSave); assert.equal(intervals.size, 0); stopFallback();
