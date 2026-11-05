@@ -3,7 +3,7 @@ import {selectSearchOption} from './search-select-helper.mjs';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import {spawn,spawnSync} from 'node:child_process';
-import {scryptSync} from 'node:crypto';
+import {scryptSync,createHash} from 'node:crypto';
 import {navigationButton} from './navigation-helper.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE??'playwright');
 if(!process.env.AVVI_TEST_ADMIN_PASSWORD&&!process.env.AVVI_TEST_ADMIN_SESSION)throw new Error('Configure AVVI_TEST_ADMIN_PASSWORD ou AVVI_TEST_ADMIN_SESSION para o servidor isolado.');
@@ -19,13 +19,18 @@ put('services',{id:'service',name:'Serviço QA',price:300,durationMinutes:60,pri
 put('services',{id:'evaluation',name:'Avaliação QA',price:0,durationMinutes:30,priceType:'fixed',active:true});
 put('inventory',{id:'stock',procedureId:'product',quantity:10});
 put('gifts',{id:'gift',name:'Brinde QA',quantity:4});
-let failReads=false,failWrites=false,dropAcknowledgement=false;
+let failReads=false,failWrites=false,dropAcknowledgement=false,payloadReads=0;
 const mock=http.createServer(async(req,res)=>{
  try{
   const url=new URL(req.url,cloud),method=req.method??'GET';let body='';for await(const chunk of req)body+=chunk;
   res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Headers','*');res.setHeader('Access-Control-Allow-Methods','*');res.setHeader('Content-Type','application/json');
   if(method==='OPTIONS'){res.end();return;}
   if(url.pathname==='/rest/v1/avvi_user_accounts'){res.end(JSON.stringify([operator]));return;}
+  if(url.pathname==='/rest/v1/rpc/avvi_sync_revisions'){
+   if(failReads){res.statusCode=503;res.end(JSON.stringify({code:'QA503',message:'Isolated read failure'}));return;}
+   const entities=JSON.parse(body).requested_entities;
+   res.end(JSON.stringify(entities.map(entity=>({entity,fingerprint:createHash('sha256').update(JSON.stringify([...records.values()].filter(row=>row.entity===entity).map(row=>[row.record_id,row.updated_at]).sort())).digest('hex')}))));return;
+  }
   if(url.pathname!=='/rest/v1/avvi_records'){res.end('{}');return;}
   if(method==='GET'&&failReads||method!=='GET'&&failWrites){res.statusCode=503;res.end(JSON.stringify({code:'QA503',message:'Isolated network failure'}));return;}
   const matches=row=>{
@@ -37,6 +42,7 @@ const mock=http.createServer(async(req,res)=>{
    }return true;
   };
   if(method==='GET'){
+   payloadReads++;
    const result=[...records.values()].filter(matches),offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500);
    res.end(JSON.stringify(req.headers.accept?.includes('vnd.pgrst.object')?(result[0]??null):result.slice(offset,offset+limit)));return;
   }
@@ -61,7 +67,7 @@ try{
  browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
  const errors=[];
  async function session(login,secret){
-  const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage(),traffic=[];page.on('request',request=>{if(request.url().includes('/api/access/data'))traffic.push({url:request.url(),method:request.method()});});page.on('pageerror',e=>{errors.push(e.message);console.error('Browser error:',e.message);});
+  const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage(),traffic=[];page.on('request',request=>{if(request.url().includes('/api/access/data'))traffic.push({url:request.url(),method:request.method(),revision:request.headers()['if-none-match']});});page.on('pageerror',e=>{errors.push(e.message);console.error('Browser error:',e.message);});
   const signedAdmin=login==='admin'&&process.env.AVVI_TEST_ADMIN_SESSION;
   if(signedAdmin)await context.addCookies([{name:'avvi_access',value:process.env.AVVI_TEST_ADMIN_SESSION,url:origin,httpOnly:true,sameSite:'Strict'}]);
   await Promise.all([page.waitForResponse(response=>response.url()===origin+'/api/access'&&response.request().method()==='GET',{timeout:60000}),page.goto(origin)]);
@@ -91,6 +97,11 @@ try{
  let idleRequests=0;const countIdle=request=>{if(request.url().includes('/api/access/data'))idleRequests++;};observer.page.on('request',countIdle);
  await observer.page.waitForTimeout(1200);const settled=idleRequests;await observer.page.waitForTimeout(7000);assert.equal(idleRequests,settled,'An idle agenda must not keep querying the cloud every three seconds');observer.page.off('request',countIdle);
  const manualRefresh=observer.page.waitForResponse(response=>response.url().includes('/api/access/data?sync=1'));await observer.page.getByRole('button',{name:'Atualizar dados',exact:true}).click();await manualRefresh;
+ // An unchanged page reload validates compact summaries and reuses its acknowledged cache.
+ const beforeReloadReads=payloadReads;
+ await observer.page.reload();await saved(observer);
+ assert.equal(payloadReads,beforeReloadReads,'Reload must not download all categories when nothing changed');
+ assert.ok(observer.traffic.filter(request=>request.url.includes('?sync=1')).at(-1).revision,'Reload sends its saved revision');
  // Normal restricted create + patient + paid closure, failed writes/reload/retry, then cloud readback.
  await standard.page.reload();await saved(standard);
  await book(standard,'ana',10,'Paciente pago QA');await saved(standard);

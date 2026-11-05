@@ -5,20 +5,21 @@ import { ConversationInbox } from "./ConversationInbox";
 import { supabase } from "@/lib/supabase";
 import { leadAge, leadStages, patientForLead, stageForLead } from "@/lib/leadFunnel";
 import { followUpDate } from "@/lib/followUp";
+import { watchVisiblePolling } from "@/lib/sharedUpdates";
 import type { Appointment, Patient, FollowUpLead, LeadStage } from "@/lib/types";
 export function LeadFunnel({ patients, appointments, now, connect }: { patients: Patient[]; appointments: Appointment[]; now: Date; connect: () => void }) {
   const [leads, setLeads] = useState<FollowUpLead[]>([]); const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [saving, setSaving] = useState("");
   const [selected, setSelected] = useState<string | null>(null); const [dropStage, setDropStage] = useState<LeadStage | null>(null);
-  const revision = useRef(0); const moving = useRef(false);
+  const revision = useRef(0); const moving = useRef(false); const reading=useRef(false);
   const load = useCallback(async () => {
-    if (!supabase || moving.current) return; const version = revision.current;
-    const session = await supabase.auth.getSession();
+    if (!supabase || moving.current || reading.current || document.visibilityState === "hidden") return; const version = revision.current;
+    reading.current=true;
     setBusy(true);
-    try { const response = await fetch("/api/follow-up/leads", { headers: { ...(session?.data.session ? { Authorization: `Bearer ${session.data.session.access_token}` } : {}) } }); const data = await response.json(); if (!response.ok) throw new Error(data.error); if (version === revision.current) { setLeads(data.leads); setError(""); } }
-    catch (failure) { setError((failure as Error).message); } finally { setBusy(false); }
+    try { const session = await supabase.auth.getSession(); const response = await fetch("/api/follow-up/leads", { headers: { ...(session?.data.session ? { Authorization: `Bearer ${session.data.session.access_token}` } : {}) } }); const data = await response.json(); if (!response.ok) throw new Error(data.error); if (version === revision.current) { setLeads(data.leads); setError(""); } }
+    catch (failure) { setError((failure as Error).message); } finally { reading.current=false;setBusy(false); }
   }, []);
-  useEffect(() => { const initial = setTimeout(() => { void load(); }, 0); const timer = setInterval(() => { void load(); }, 30000); return () => { clearTimeout(initial); clearInterval(timer); }; }, [load]);
+  useEffect(() => watchVisiblePolling(load,30000), [load]);
   async function move(lead: FollowUpLead, stage: LeadStage | null) {
     if (moving.current) return; moving.current = true; const session = await supabase?.auth.getSession();
     moving.current = true; revision.current++; setSaving(lead.id); setError("");

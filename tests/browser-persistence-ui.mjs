@@ -2,7 +2,7 @@ import {chromium} from "file:///C:/Users/mathe/.cache/codex-runtimes/codex-prima
 import assert from "node:assert/strict";
 const browser=await chromium.launch({headless:true,executablePath:"C:/Program Files/Google/Chrome/Application/chrome.exe"}),page=await browser.newPage({viewport:{width:1440,height:950}}),errors=[];
 page.on("pageerror",error=>errors.push(error.message));
-const user={id:"qa-cache",login:"qa-cache",name:"Usuário QA",role:"standard",revision:1,tabs:["Estoque"]};
+const user={id:"qa-cache",login:"qa-cache",name:"Usuário QA",role:"standard",revision:1,tabs:["Estoque","Estoque: movimentação"]};
 try {
  await page.route("**/api/access",route=>route.fulfill({json:{user}}));
  await page.addInitScript(()=>{

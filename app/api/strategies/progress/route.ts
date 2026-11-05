@@ -20,6 +20,7 @@ export async function POST(request: Request) {
   if (strategies.some(item => !canAccessProfessional(user, item.professionalId))) return Response.json({error:"Progresso deste profissional não autorizado."},{status:403,headers});
   try {
     if (!strategies.length) return Response.json({progress:[]},{headers});
+    if (strategies.every(item=>item.metric === "custom")) return Response.json({progress:strategies.map(item=>({id:item.id,value:item.manualProgress}))},{headers});
     if (accountStorageMode() === "local") {
       const seed = await import("@/lib/seed"), { importedServices } = await import("@/lib/importedServices");
       return Response.json({progress:strategyProgress(strategies,{professionals:seed.professionals,entries:seed.financialEntries,appointments:seed.appointments,services:importedServices,patients:[],monthlyGoals:[]})},{headers});

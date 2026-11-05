@@ -9,6 +9,7 @@ import type { AppUser } from "@/lib/access";
 import { reportMonthPeriod } from "@/lib/reports";
 import { strategyMetrics, validStrategy, compareStrategies, moveStrategy } from "@/lib/strategyDefinitions";
 import { strategyProgress } from "@/lib/strategyProgress";
+import { watchSharedUpdates } from "@/lib/sharedUpdates";
 import type { Appointment, FinancialEntry, Professional, ProfessionalStrategy, Service, StrategyMetric } from "@/lib/types";
 import { ClinicalDialog } from "./ClinicalDialog";
 
@@ -26,11 +27,16 @@ export function StrategiesView({ user, professionals: allProfessionals, records:
   useEffect(() => {
     if (local || query === "[]") return;
     const controller = new AbortController();
-    const load = () => fetch("/api/strategies/progress",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({strategies:JSON.parse(query)}),cache:"no-store",signal:controller.signal}).then(async response => {
+    let sequence = 0;
+    const load = () => {
+      if (document.visibilityState === "hidden") return;
+      const current = ++sequence;
+      return fetch("/api/strategies/progress",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({strategies:JSON.parse(query)}),cache:"no-store",signal:controller.signal}).then(async response => {
       const data = await response.json();if(!response.ok)throw new Error(data.error ?? "Não foi possível atualizar o progresso.");
-      if(!controller.signal.aborted)setRemote({key:query,values:data.progress});
-    }).catch(error => {if(!controller.signal.aborted)setRemote({key:query,values:[],error:error.message});});
-    void load();const interval=setInterval(load,30000);return()=>{controller.abort();clearInterval(interval);};
+      if(!controller.signal.aborted && current === sequence)setRemote({key:query,values:data.progress});
+    }).catch(error => {if(!controller.signal.aborted && current === sequence)setRemote({key:query,values:[],error:error.message});});
+    };
+    void load();const stop=watchSharedUpdates(()=>{void load();});return()=>{controller.abort();stop();};
   }, [local,query,retry]);
   const currentError = !local && remote?.key === query ? remote.error : undefined;
   const values = new Map((local ? calculated : remote?.key === query && !remote.error ? remote.values : []).map(item => [item.id,item.value]));

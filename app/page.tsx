@@ -532,7 +532,7 @@ export default function Home() {
     const sequence = ++localWriteSequence.current;
     setIsSavingLocal(true);
     try {
-      await writeBrowserSnapshot(data, lastSyncedSnapshot.current, userSnapshotKey(currentUser));
+      await writeBrowserSnapshot(data, lastSyncedSnapshot.current, userSnapshotKey(currentUser), cloudRevision.current);
       if (sequence === localWriteSequence.current) setStorageError("");
     } catch {
       if (sequence === localWriteSequence.current) setStorageError("Não foi possível guardar a cópia neste navegador. Libere espaço ou permita o armazenamento local. Confira a confirmação na nuvem antes de sair.");
@@ -602,7 +602,7 @@ export default function Home() {
 
     async function hydrateFromSupabase() {
       try {
-        const initialCloud = await selectInitialEntityStates();
+        const initialCloud = await selectInitialEntityStates(await readLocalSnapshot(currentUser));
         const {
           patients: dbPatientsState,
           professionals: dbProfessionalsState,
@@ -949,7 +949,7 @@ export default function Home() {
     // Password rotation preserves this browser's current draft under the new
     // session revision before hydration switches its cache key.
     if (latestDraft.current) {
-      try { await writeBrowserSnapshot(latestDraft.current, lastSyncedSnapshot.current, userSnapshotKey(user)); }
+      try { await writeBrowserSnapshot(latestDraft.current, lastSyncedSnapshot.current, userSnapshotKey(user), cloudRevision.current); }
       catch { throw new Error("Senha alterada, mas não foi possível guardar a cópia neste navegador. Mantenha esta janela aberta e confira o salvamento na nuvem."); }
     }
     const saved = readSavedLogin();

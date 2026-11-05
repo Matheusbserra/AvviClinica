@@ -46,3 +46,24 @@ export function watchSharedUpdates(refresh: () => void) {
     document.removeEventListener("visibilitychange", activeRefresh);
   };
 }
+
+// Live inboxes still refresh while viewed. Hidden tabs stop all timers and
+// returning focus refreshes immediately; a slow request never starts a second.
+export function watchVisiblePolling(refresh: () => void | Promise<void>, interval: number) {
+  let timer: number | undefined, running=false, stopped=false;
+  const clear=()=>{window.clearTimeout(timer);timer=undefined;};
+  const run=()=>{
+    clear();
+    if(stopped || running || document.visibilityState === "hidden")return;
+    running=true;
+    void Promise.resolve().then(()=>{if(!stopped && document.visibilityState !== "hidden")return refresh();}).catch(()=>undefined).finally(()=>{
+      running=false;
+      if(!stopped && document.visibilityState !== "hidden")timer=window.setTimeout(run,interval);
+    });
+  };
+  const visibility=()=>{if(document.visibilityState === "hidden")clear();};
+  const stop=watchSharedUpdates(run);
+  document.addEventListener("visibilitychange",visibility);
+  run();
+  return ()=>{stopped=true;clear();stop();document.removeEventListener("visibilitychange",visibility);};
+}

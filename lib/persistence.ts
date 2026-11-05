@@ -1,9 +1,14 @@
 import type { EntityName, EntityPayloadMap } from "./database";
 
 export type DataSnapshot = { [K in EntityName]: EntityPayloadMap[K][] };
-export type LocalSnapshot = { savedAt: string; data: DataSnapshot; syncedData?: DataSnapshot };
+export type LocalSnapshot = { savedAt: string; data: DataSnapshot; syncedData?: DataSnapshot; revision?: string };
 export const snapshotKey = "avvi.data.snapshot.v1";
 export const snapshotEntities: EntityName[] = ["patients", "professionals", "procedures", "services", "service_packages", "inventory", "gifts", "anamneses", "strategies", "ultraformer_tips", "followup_rules", "followup_contacts", "followup_logs", "post_procedure_contacts", "post_procedure_messages", "appointments", "financial_entries", "revenues", "fixed_costs", "receipts", "professional_receipts", "monthly_goals"];
+export function savedSnapshotRevision(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const copy=value as LocalSnapshot;
+  return typeof copy.revision === "string" && copy.revision.length > 0 && copy.revision.length <= 12000 && snapshotEntities.every(entity=>Array.isArray(copy.syncedData?.[entity])) ? copy.revision : undefined;
+}
 const recordId = (item: { id?: string; month?: string }) => item.id || item.month || "";
 const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
@@ -40,7 +45,7 @@ export function readSnapshot(storage: Pick<Storage, "getItem">, key = snapshotKe
   if (!raw) return null;
   const parsed = JSON.parse(raw);
   if (!parsed?.data || typeof parsed.data !== "object" || Array.isArray(parsed.data)) throw new Error("A cópia local está inválida.");
-  return { savedAt: String(parsed.savedAt ?? ""), data: normalizeSnapshot(parsed.data), ...(parsed.syncedData ? { syncedData: normalizeSnapshot(parsed.syncedData) } : {}) };
+  return { savedAt: String(parsed.savedAt ?? ""), data: normalizeSnapshot(parsed.data), ...(parsed.syncedData ? { syncedData: normalizeSnapshot(parsed.syncedData) } : {}), ...(savedSnapshotRevision(parsed)?{revision:savedSnapshotRevision(parsed)}:{}) };
 }
 export function writeSnapshot(storage: Pick<Storage, "setItem">, data: DataSnapshot, syncedData: DataSnapshot | null, key = snapshotKey) {
   storage.setItem(key, JSON.stringify({ savedAt: new Date().toISOString(), data, ...(syncedData ? { syncedData } : {}) }));

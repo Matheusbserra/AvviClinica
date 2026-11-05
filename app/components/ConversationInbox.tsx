@@ -4,6 +4,7 @@ import { CheckCheck, GripVertical, Inbox, MessageCircle, RefreshCw, Search } fro
 import { supabase } from "@/lib/supabase";
 import { leadStages, patientForLead, stageForLead } from "@/lib/leadFunnel";
 import { followUpDate } from "@/lib/followUp";
+import { watchVisiblePolling } from "@/lib/sharedUpdates";
 import type { Appointment, FollowUpLead, FollowUpMessage, Patient } from "@/lib/types";
 const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("");
 function MessageHistory({ lead }: { lead: FollowUpLead }) {
@@ -25,9 +26,9 @@ function MessageHistory({ lead }: { lead: FollowUpLead }) {
         if (!initialized.current || older) setHasMore(data.hasMore); initialized.current = true; setError("");
       } catch (failure) { if (active) setError((failure as Error).message); } finally { if (active) setBusy(false); }
     }
-    const initial = setTimeout(() => { void load(Boolean(before)); }, 0);
-    const timer = setInterval(() => { void load(); }, 15000);
-    return () => { active = false; abort.abort(); clearTimeout(initial); if (timer) clearInterval(timer); };
+    let first=true;
+    const stop=watchVisiblePolling(()=>{const older=first && Boolean(before);first=false;return load(older);},15000);
+    return () => { active = false; abort.abort(); stop(); };
   }, [lead.id, refresh, before]);
   useEffect(() => {
     const element = list.current; if (!element) return;

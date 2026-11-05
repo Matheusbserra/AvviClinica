@@ -56,6 +56,14 @@ async function permittedRecords(user: AppUser, entity: string) {
 // and fields may be returned; it never creates a separate agenda for that user.
 async function cloudRevision(user: AppUser, entities: EntityName[]) {
   const db = database(), scope = createHash("sha256").update(JSON.stringify(user)).digest("hex");
+  const compact = await db.rpc("avvi_sync_revisions", { requested_entities: entities });
+  if (!compact.error) {
+    if (!Array.isArray(compact.data) || compact.data.length !== entities.length || new Set(compact.data.map(row=>row.entity)).size !== entities.length || compact.data.some(row=>!entities.includes(row.entity) || !/^[a-f0-9]{64}$/.test(row.fingerprint))) throw new Error("Resposta de sincronização inválida.");
+    return {...signedRevision(scope, Object.fromEntries(compact.data.map(row=>[row.entity,row.fingerprint]))), mode: "compact"};
+  }
+  // Preserve operation while the optional, service-only SQL function is installed.
+  // Provider/network/permission errors must never be mistaken for empty data.
+  if (!["PGRST202", "42883"].includes(compact.error.code) && compact.status !== 404) throw compact.error;
   const hashes = new Map(entities.map(entity => [entity, createHash("sha256")]));
   for (let offset = 0; ; offset += 500) {
     const { data, error } = await db.from("avvi_records").select("entity,record_id,updated_at")
@@ -64,11 +72,15 @@ async function cloudRevision(user: AppUser, entities: EntityName[]) {
     for (const row of data ?? []) hashes.get(row.entity)?.update(JSON.stringify([row.record_id, row.updated_at]));
     if (!data || data.length < 500) {
       const stamps = Object.fromEntries([...hashes].map(([entity, hash]) => [entity, hash.digest("hex")]));
-      const payload = Buffer.from(JSON.stringify({ scope, stamps })).toString("base64url");
-      const signature = createHmac("sha256", revisionSecret()).update("avvi-sync-v2\0").update(payload).digest("base64url");
-      return { revision: `"sync2.${payload}.${signature}"`, scope, stamps };
+      return {...signedRevision(scope, stamps), mode: "metadata"};
     }
   }
+}
+function signedRevision(scope: string, stamps: Record<string,string>) {
+  stamps = Object.fromEntries(Object.entries(stamps).sort(([a],[b])=>a.localeCompare(b)));
+  const payload = Buffer.from(JSON.stringify({ scope, stamps })).toString("base64url");
+  const signature = createHmac("sha256", revisionSecret()).update("avvi-sync-v2\0").update(payload).digest("base64url");
+  return { revision: `"sync2.${payload}.${signature}"`, scope, stamps };
 }
 function revisionSecret() {
   const secret = process.env.AVVI_SESSION_SECRET;
@@ -93,8 +105,8 @@ export async function GET(request: Request) {
   try {
     if (query.get("sync") === "1") {
       const entities = entityNames.filter(entity => canReadEntity(user, entity));
-      const { revision, scope, stamps } = await cloudRevision(user, entities);
-      const syncHeaders = { ...headers, ETag: revision, Vary: "Cookie" };
+      const { revision, scope, stamps, mode } = await cloudRevision(user, entities);
+      const syncHeaders = { ...headers, ETag: revision, Vary: "Cookie", "X-AVVI-Sync-Mode": mode };
       if (request.headers.get("if-none-match") === revision) return new Response(null, { status: 304, headers: syncHeaders });
       const previous = previousEntityStamps(request.headers.get("if-none-match"), scope);
       const changed = entities.filter(entity => previous?.[entity] !== stamps[entity]);

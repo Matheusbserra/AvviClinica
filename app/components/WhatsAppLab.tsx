@@ -1,4 +1,5 @@
 "use client";
+import { watchVisiblePolling } from "@/lib/sharedUpdates";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, CheckCheck, FlaskConical, Send, Settings, UserRound } from "lucide-react";
 import type { LabSnapshot, LabTransport } from "@/lib/whatsappLab";
@@ -15,7 +16,7 @@ export function WhatsAppLab({ review = false }: { review?: boolean }) {
   const outgoingRequest = useRef<{ key: string; id: string } | null>(null), refreshVersion = useRef(0);
   const initialized = useRef(false), pending = useRef(false), list = useRef<HTMLDivElement>(null);
   const refresh = useCallback(async () => { const version = refreshVersion.current; try { const response = await fetch(endpoint, { cache: "no-store" }); const result = await response.json(); if (!response.ok) throw new Error(result.error); if (pending.current || version !== refreshVersion.current) return; setData(result); if (!initialized.current) { setConfig({ ...result.config, token: "", appSecret: "", aiKey: "" }); setAppointment({ service: result.appointment.service, date: result.appointment.date, time: result.appointment.time }); initialized.current = true; } } catch (error) { setError(error instanceof Error ? error.message : "Não foi possível abrir o laboratório."); } }, []);
-  useEffect(() => { const start = setTimeout(() => void refresh(), 0), timer = setInterval(() => { if (!pending.current) void refresh(); }, 3000); return () => { clearTimeout(start); clearInterval(timer); }; }, [refresh]);
+  useEffect(() => watchVisiblePolling(()=>{if(!pending.current)return refresh();},3000), [refresh]);
   useEffect(() => { list.current?.scrollTo({ top: list.current.scrollHeight, behavior: "smooth" }); }, [data?.messages.length, transport]);
   async function run(body: Record<string, unknown>, success = "") { if (pending.current) return; pending.current = true; refreshVersion.current++; setBusy(true); setError(""); setNotice(""); try { const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const result = await response.json(); if (!response.ok) throw new Error(result.error); setData(result); setNotice(success); if (body.action === "config") setConfig({ ...result.config, token: "", appSecret: "", aiKey: "" }); return true; } catch (error) { setError(error instanceof Error ? error.message : "Não foi possível executar o teste."); return false; } finally { pending.current = false; setBusy(false); } }
   async function sendManual(useTemplate = false) {

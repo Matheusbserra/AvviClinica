@@ -119,13 +119,17 @@ export async function selectCloudState(revision = ""): Promise<{ revision: strin
   if (!response.ok) throw new Error(data.error ?? "Não foi possível atualizar a agenda compartilhada.");
   return data;
 }
-export async function selectInitialEntityStates() {
-  const cloud = await selectCloudState();
-  if (!cloud || typeof cloud.revision !== "string" || !cloud.data || entityNames.some(entity => canReadEntity(accessUser, entity) && !Array.isArray(cloud.data[entity]))) {
+export async function selectInitialEntityStates(cached?: { revision?: string; syncedData?: DataSnapshot } | null) {
+  const reusable = !!cached?.revision && entityNames.every(entity=>Array.isArray(cached.syncedData?.[entity]));
+  const cloud = await selectCloudState(reusable ? cached!.revision : "");
+  if (cloud && (typeof cloud.revision !== "string" || !cloud.data || typeof cloud.data !== "object" || Array.isArray(cloud.data))) throw new Error("A resposta da nuvem está incompleta. Seus dados locais foram preservados.");
+  const revision = cloud?.revision ?? (reusable ? cached!.revision : undefined);
+  const data = cloud ? (reusable ? {...cached!.syncedData,...cloud.data} : cloud.data) : (reusable ? cached!.syncedData : undefined);
+  if (typeof revision !== "string" || !data || entityNames.some(entity => canReadEntity(accessUser, entity) && !Array.isArray(data[entity]))) {
     throw new Error("A resposta da nuvem está incompleta. Seus dados locais foram preservados.");
   }
-  const entities = Object.fromEntries(entityNames.map(entity => [entity, { records: cloud.data[entity] ?? [], latestUpdatedAt: "" }])) as { [K in EntityName]: EntitySelectResult<K> };
-  return { revision: cloud.revision, entities };
+  const entities = Object.fromEntries(entityNames.map(entity => [entity, { records: canReadEntity(accessUser,entity) ? data[entity] ?? [] : [], latestUpdatedAt: "" }])) as { [K in EntityName]: EntitySelectResult<K> };
+  return { revision, entities };
 }
 
 export async function selectEntityState<T extends EntityName>(entity: T): Promise<EntitySelectResult<T>> {

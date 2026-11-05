@@ -1,4 +1,4 @@
-import { normalizeSnapshot, readSnapshot } from "./persistence";
+import { normalizeSnapshot, readSnapshot, savedSnapshotRevision } from "./persistence";
 import type { DataSnapshot, LocalSnapshot } from "./persistence";
 const databaseName = "avvi-browser-copies-v1", storeName = "snapshots";
 const indexedKeys = new Set<string>();
@@ -29,7 +29,7 @@ async function indexedCopy(key: string): Promise<LocalSnapshot | null> {
     transaction.oncomplete = () => {
       const parsed = request.result;
       if (!parsed?.data || typeof parsed.data !== "object" || Array.isArray(parsed.data)) { resolve(null); return; }
-      resolve({ savedAt: String(parsed.savedAt ?? ""), data: normalizeSnapshot(parsed.data), ...(parsed.syncedData ? { syncedData: normalizeSnapshot(parsed.syncedData) } : {}) });
+      resolve({ savedAt: String(parsed.savedAt ?? ""), data: normalizeSnapshot(parsed.data), ...(parsed.syncedData ? { syncedData: normalizeSnapshot(parsed.syncedData) } : {}), ...(savedSnapshotRevision(parsed)?{revision:savedSnapshotRevision(parsed)}:{}) });
     };
   });
 }
@@ -52,8 +52,8 @@ export async function readBrowserSnapshot(key: string): Promise<LocalSnapshot | 
   return local;
 }
 // Queue writes per account so an old transaction cannot replace a newer draft.
-export function writeBrowserSnapshot(data: DataSnapshot, syncedData: DataSnapshot | null, key: string): Promise<void> {
-  const copy: LocalSnapshot = { savedAt: new Date().toISOString(), data, ...(syncedData ? { syncedData } : {}) };
+export function writeBrowserSnapshot(data: DataSnapshot, syncedData: DataSnapshot | null, key: string, revision = ""): Promise<void> {
+  const copy: LocalSnapshot = { savedAt: new Date().toISOString(), data, ...(syncedData ? { syncedData } : {}), ...(syncedData && revision ? { revision } : {}) };
   // Capture both draft and acknowledged baseline before asynchronous work starts.
   const serialized = JSON.stringify(copy);
   const task = (queues.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {

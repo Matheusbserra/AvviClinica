@@ -41,10 +41,12 @@ export async function requireFollowUpUser(request: Request) {
   if (!followUpConfig().staffIds.includes(data.user.id)) throw new Error("Acesso restrito à equipe autorizada da clínica.");
   return data.user;
 }
-export async function readRuntime<T>(entity: string): Promise<T[]> {
+export async function readRuntime<T>(entity: string, filter?: { field: "record_id" | "leadId" | "phone"; value: string }): Promise<T[]> {
   const records: T[] = [], db = serverDatabase();
   for (let offset = 0; ; offset += 1000) {
-    const { data, error } = await db.from("avvi_followup_runtime").select("data").eq("entity", entity).order("record_id").range(offset, offset + 999);
+    let query = db.from("avvi_followup_runtime").select("data").eq("entity", entity);
+    if(filter)query=query.eq(filter.field === "record_id" ? "record_id" : `data->>${filter.field}`,filter.value);
+    const { data, error } = await query.order("record_id").range(offset, offset + 999);
     if (error) throw new Error("Prepare as tabelas protegidas do Follow Up no Supabase.");
     records.push(...(data ?? []).map((row) => row.data as T));
     if ((data?.length ?? 0) < 1000) return records;
@@ -285,9 +287,9 @@ export async function listFollowUpLeads(): Promise<FollowUpLead[]> {
 }
 
 export async function listFollowUpMessages(leadId: string): Promise<FollowUpMessage[]> {
-  const lead = (await listFollowUpLeads()).find((item) => item.id === leadId);
+  const lead = (await readRuntime<FollowUpLead>("leads",{field:"record_id",value:leadId})).find((item) => item.id === leadId);
   if (!lead) throw new Error("Conversa não encontrada.");
-  const [received, jobs] = await Promise.all([readRuntime<FollowUpMessage>("messages"), readRuntime<FollowUpLog>("jobs")]);
+  const [received, jobs] = await Promise.all([readRuntime<FollowUpMessage>("messages",{field:"leadId",value:leadId}), readRuntime<FollowUpLog>("jobs",{field:"phone",value:lead.phone})]);
   const messages = received.filter((item) => item.leadId === leadId);
   if (!messages.length && lead.lastMessageId) messages.push({ id: lead.lastMessageId, leadId, direction: "incoming", text: lead.lastMessage, at: lead.lastContactAt });
   const outbound: FollowUpMessage[] = jobs.filter((job) => job.phone === lead.phone && ["sent", "delivered", "read"].includes(job.status)).map((job) => ({ id: `outgoing-${job.id}`, leadId, direction: "outgoing", text: job.message, at: job.sentAt ?? job.scheduledFor ?? job.createdAt, status: job.status }));
