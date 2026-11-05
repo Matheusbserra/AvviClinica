@@ -2,6 +2,7 @@ export type UserRole = "admin" | "recepcao" | "profissional";
 
 export type AppointmentStatus =
   | "Agendado"
+  | "Aguardando confirmação"
   | "Confirmado"
   | "Compareceu"
   | "Faltou"
@@ -46,6 +47,7 @@ export type Professional = {
 
 export type Patient = {
   photos?: PatientPhoto[];
+  importedPackages?: ImportedPatientPackage[];
   id: string;
   email?: string;
   name: string;
@@ -59,6 +61,12 @@ export type Patient = {
   registrationDate?: string;
   loyaltyPoints?: number;
   notes: string;
+};
+
+export type ImportedPatientPackage = {
+  id: string; name: string; purchasedOn: string; expiresOn: string;
+  remainingSessions: number; saleValue: number; professionalName: string;
+  source: "legacy-csv";
 };
 
 export type PatientPhoto = { id: string; name: string; date: string; uploadedBy: string; path?: string; localImage?: string };

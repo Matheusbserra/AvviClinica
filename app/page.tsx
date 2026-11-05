@@ -64,6 +64,7 @@ import { PatientPhotos } from "@/app/components/PatientPhotos";
 import { AnamneseView } from "@/app/components/AnamneseView";
 import { PatientHistory } from "@/app/components/PatientHistory";
 import { PatientRegistrationEditor } from "@/app/components/PatientRegistrationEditor";
+import { PatientPackagesView } from "@/app/components/PatientPackagesView";
 import { ClinicalDialog } from "@/app/components/ClinicalDialog";
 import { PackagesView } from "@/app/components/PackagesView";
 import type { ServicePackage } from "@/lib/servicePackages";
@@ -160,7 +161,7 @@ const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Custos", icon: Settings },
 ];
 
-const statuses: AppointmentStatus[] = ["Agendado", "Confirmado", "Compareceu", "Faltou", "Cancelado", "Reagendado", "Finalizado"];
+const statuses: AppointmentStatus[] = ["Agendado", "Aguardando confirmação", "Confirmado", "Compareceu", "Faltou", "Cancelado", "Reagendado", "Finalizado"];
 const paymentMethods: PaymentMethod[] = ["Pix", "Débito", "Crédito", "Dinheiro"];
 const discountSplits: DiscountSplit[] = ["Empresa assume", "Profissional assume", "Empresa e profissional dividem"];
 const eventOptions = ["Novo Agendamento", "Registrar Ausência", "Registrar Liberação de Horário", "Venda de Produto", "Pré-venda de Produto", "Venda e Consumo de Pacote", "Registro de Crédito de Cliente"];
@@ -1163,9 +1164,9 @@ export default function Home() {
       change: appointment.closedAccount?.change ?? 0 });
   }
 
-  function updateAgendaStatus(appointmentId: string, status: "Confirmado" | "Cancelado") {
+  function updateAgendaStatus(appointmentId: string, status: "Confirmado" | "Cancelado" | "Aguardando confirmação") {
     const appointment = appointments.find(item => item.id === appointmentId);
-    if (appointment?.status === "Cancelado" && status === "Confirmado") {
+    if (appointment?.status === "Cancelado" && status !== "Cancelado") {
       const error = appointmentAvailabilityError(professionals.find(item => item.id === appointment.professionalId), appointments, appointment.startsAt, appointment.endsAt, appointmentId, appointment.eventType);
       if (error) return error;
     }
@@ -2972,6 +2973,7 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
 
 function PatientsView({ patientForm, setPatientForm, patients, setPatients, professionals, appointments }: { patientForm: Patient; setPatientForm: (form: Patient) => void; patients: Patient[]; setPatients: (patients: Patient[]) => void; professionals: Professional[]; appointments: Appointment[] }) {
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [patientSection, setPatientSection] = useState<"details" | "packages">("details");
   const [showScheduleInfo, setShowScheduleInfo] = useState(false);
   const [photoPatientId, setPhotoPatientId] = useState<string | null>(null);
 
@@ -2984,12 +2986,14 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
 
   function openNewPatient() {
     setPatientForm(makePatientForm());
+    setPatientSection("details");
     setShowScheduleInfo(false);
     setIsFormOpen(true);
   }
 
   function openEditPatient(patient: Patient) {
     setPatientForm({ ...makePatientForm(), ...patient });
+    setPatientSection("details");
     setShowScheduleInfo(false);
     setIsFormOpen(true);
   }
@@ -3020,6 +3024,9 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
               <X size={18} />
             </button>
           </div>
+          {patientForm.id && <div role="tablist" aria-label="Informações do paciente" className="mb-4 flex flex-wrap gap-2"><button type="button" role="tab" aria-selected={patientSection === "details"} onClick={()=>setPatientSection("details")} className={`rounded-lg border px-4 py-2 text-sm font-bold ${patientSection === "details"?"border-avvi-blue bg-avvi-blue text-white":"border-avvi-line text-avvi-blue"}`}>Dados cadastrais</button><button type="button" role="tab" aria-selected={patientSection === "packages"} onClick={()=>setPatientSection("packages")} className={`rounded-lg border px-4 py-2 text-sm font-bold ${patientSection === "packages"?"border-avvi-blue bg-avvi-blue text-white":"border-avvi-line text-avvi-blue"}`}>Pacotes ativos</button></div>}
+          {patientSection === "packages" && <PatientPackagesView patient={patients.find(item=>item.id===patientForm.id) ?? patientForm} appointments={appointments} today={todayKey()}/>}
+          <div hidden={patientSection !== "details"}>
           <div className="grid gap-3 md:grid-cols-3">
             <FormField label="Nome"><input className="input" value={patientForm.name} onChange={(event) => setPatientForm({ ...patientForm, name: event.target.value })} /></FormField>
             <FormField label="Gênero">
@@ -3054,6 +3061,7 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
             </div>
           )}
           <button onClick={savePatient} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white">Salvar paciente</button>
+          </div>
         </Panel>
       )}
 

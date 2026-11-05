@@ -1,6 +1,6 @@
 import { validServicePackage } from "@/lib/servicePackages";
 import { validPostProcedurePlan, validPostProcedureContact, validPostProcedureMessage, postProcedurePhoneOnlyUpdate, postProcedureTasks } from "@/lib/postProcedure";
-import { hasPackageSessionData, packageSessionError, validPackageSessionUses } from "@/lib/packageSessions";
+import { hasPackageSessionData, packageSessionError, validPackageSessionUses, preserveImportedPatientPackages } from "@/lib/packageSessions";
 import { createClient } from "@supabase/supabase-js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { AppUser } from "@/lib/access";
@@ -288,6 +288,16 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const acknowledgedRows = new Set<(typeof upserts)[number]>();
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
+      if (row.entity === "patients" && canWriteEntity(user,"patients")) {
+        const previous = await db.from("avvi_records").select("data").eq("entity","patients").eq("record_id",row.record_id).maybeSingle();
+        if (previous.error) throw previous.error;
+        // Administrative import may append balances without resending registration
+        // fields, preserving any edits made by the clinic during the import.
+        const packagesOnly = user.role === "admin" && previous.data && Object.keys(row.data).every(key=>key === "id" || key === "importedPackages") && row.data.importedPackages !== undefined;
+        const candidate = packagesOnly ? {...previous.data!.data,importedPackages:row.data.importedPackages} : row.data;
+        try { row.data = preserveImportedPatientPackages(previous.data?.data, candidate, user.role === "admin"); }
+        catch (error) { return Response.json({error:error instanceof Error?error.message:"Pacotes inválidos."},{status:400,headers}); }
+      }
       if (row.entity === "services" && row.data.postProcedure !== undefined && !validPostProcedurePlan(row.data.postProcedure)) return Response.json({ error: "Prazos de pós-procedimento inválidos." }, { status: 400, headers });
       if (row.entity === "post_procedure_messages" && !validPostProcedureMessage(row.data)) return Response.json({ error: "Mensagem de pós-procedimento inválida. Confira o texto e as variáveis." }, { status: 400, headers });
       if (row.entity === "service_packages" && !validServicePackage(row.data)) return Response.json({ error: "Dados do pacote inválidos." }, { status: 400, headers });

@@ -1,4 +1,4 @@
-import type { Appointment, ClosedAccount } from "./types";
+import type { Appointment, ClosedAccount, ImportedPatientPackage, Patient } from "./types";
 
 export type PackageSessionUse = {
   id: string; sourceAppointmentId: string; sourceAccountId: string; purchaseKey: string;
@@ -77,4 +77,45 @@ export function hasPackageSessionData(appointment?: Appointment) {
 }
 export function isPackageSessionTreatment(account?: ClosedAccount) {
   return !!account?.packageSessionUses?.some(use => use.quantity > 0);
+}
+
+export function validImportedPatientPackages(value: unknown): value is ImportedPatientPackage[] {
+  const date = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value + "T12:00:00Z")) && new Date(value + "T12:00:00Z").toISOString().slice(0,10) === value;
+  return Array.isArray(value) && value.length <= 500 && new Set(value.map(item => item?.id)).size === value.length && value.every(item => item && item.source === "legacy-csv"
+    && ["id", "name"].every(key => typeof item[key] === "string" && item[key].trim() && item[key].length <= 300)
+    && date(item.purchasedOn) && date(item.expiresOn) && item.expiresOn >= item.purchasedOn
+    && Number.isSafeInteger(item.remainingSessions) && item.remainingSessions >= 0 && item.remainingSessions <= 10000
+    && Number.isFinite(item.saleValue) && item.saleValue >= 0 && item.saleValue <= 1e9 && Math.abs(round(item.saleValue) - item.saleValue) < 1e-7
+    && typeof item.professionalName === "string" && item.professionalName.length <= 200
+    && Object.keys(item).every(key => ["id","name","purchasedOn","expiresOn","remainingSessions","saleValue","professionalName","source"].includes(key)));
+}
+
+// Imported balances are read-only in patient forms. Old open tabs must not erase
+// them when saving registration fields; new imported entries require an admin.
+export function preserveImportedPatientPackages(previous: Patient | undefined, next: Patient, admin: boolean) {
+  if (next.importedPackages !== undefined && !validImportedPatientPackages(next.importedPackages)) throw new Error("Pacotes importados inválidos.");
+  const stored = previous?.importedPackages ?? [], incoming = next.importedPackages ?? [];
+  const existing = new Map(stored.map(item => [item.id, item]));
+  for (const item of incoming) {
+    const old = existing.get(item.id);
+    if (!old && !admin) throw new Error("Somente o administrador pode importar pacotes.");
+    if (old && Object.keys(old).some(key => old[key as keyof ImportedPatientPackage] !== item[key as keyof ImportedPatientPackage])) throw new Error("Os saldos importados não podem ser alterados no cadastro.");
+    if (!old) existing.set(item.id,item);
+  }
+  if (existing.size > 500) throw new Error("Limite de pacotes importados por paciente excedido.");
+  if (!existing.size && next.importedPackages === undefined && previous?.importedPackages === undefined) return next;
+  return { ...next, importedPackages: [...existing.values()] };
+}
+
+export type PatientActivePackage = { id: string; name: string; purchasedOn: string; expiresOn?: string; imported: boolean; professionalName?: string; items: {name:string;remaining:number}[] };
+export function patientActivePackages(patient: Patient, appointments: Appointment[], today: string): PatientActivePackage[] {
+  const result: PatientActivePackage[] = (patient.importedPackages ?? []).filter(item => item.remainingSessions > 0 && item.purchasedOn <= today && item.expiresOn >= today).map(item => ({id:item.id,name:item.name,purchasedOn:item.purchasedOn,expiresOn:item.expiresOn,imported:true,professionalName:item.professionalName,items:[{name:"Sessões restantes",remaining:item.remainingSessions}]}));
+  const groups = new Map<string, PatientActivePackage>();
+  for (const balance of patientPackageBalances(appointments,patient.id)) {
+    if (balance.remaining <= 0 || balance.purchasedOn > today || balance.expiresOn && balance.expiresOn < today) continue;
+    const id = JSON.stringify([balance.sourceAppointmentId,balance.sourceAccountId,balance.purchaseKey,balance.packageId]);
+    const group = groups.get(id) ?? {id,name:balance.packageName,purchasedOn:balance.purchasedOn,expiresOn:balance.expiresOn,imported:false,items:[]};
+    group.items.push({name:balance.serviceName,remaining:balance.remaining}); groups.set(id,group);
+  }
+  return [...result,...groups.values()].sort((a,b) => (a.expiresOn ?? "9999").localeCompare(b.expiresOn ?? "9999") || a.name.localeCompare(b.name,"pt-BR"));
 }

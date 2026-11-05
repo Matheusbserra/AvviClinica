@@ -48,6 +48,17 @@ try{
  const read=async(entity,id)=>(await db.query('select data from avvi_records where entity=$1 and record_id=$2',[entity,id])).rows[0]?.data;
  const pro={id:'pro',name:'Profissional QA',active:true,closedShifts:[]},patient={id:'p',name:'Paciente QA',futureCredit:0};
  await save([row('professionals',pro),row('patients',patient),row('inventory',{id:'stock',procedureId:'product',quantity:10}),row('procedures',{id:'product',name:'Produto QA',active:true,price:100,averageCost:20})]);
+ // Import only package balances; preserve registration and stale-client saves.
+ const imported={id:'legacy-pack',name:'Imported QA',purchasedOn:'2026-08-01',expiresOn:'2027-08-01',remainingSessions:3,saleValue:1000,professionalName:'QA',source:'legacy-csv'};
+ const legacyPatient={id:'legacy-patient',name:'Patient QA',phone:'old',notes:'Preserve',futureCredit:75};
+ assert.equal((await save([row('patients',legacyPatient)])).status,200);
+ assert.equal((await save([row('patients',{id:legacyPatient.id,importedPackages:[imported]})])).status,200);
+ assert.deepEqual(await read('patients',legacyPatient.id),{...legacyPatient,importedPackages:[imported]});
+ assert.equal((await save([row('patients',{...legacyPatient,phone:'new'})],{...operator,revision:1})).status,200);
+ assert.deepEqual((await read('patients',legacyPatient.id)).importedPackages,[imported]);
+ assert.equal((await save([row('patients',{...legacyPatient,importedPackages:[{...imported,id:'forged'}]})],{...operator,revision:1})).status,400);
+ assert.equal((await save([row('patients',{id:legacyPatient.id,importedPackages:[{...imported,remainingSessions:9}]})])).status,400);
+ assert.deepEqual((await read('patients',legacyPatient.id)).importedPackages,[imported]);
  const pack={id:'pack',name:'Pacote QA',description:'',active:true,salePrice:300,validityEnabled:false,validityMonths:0,commissionPercent:70,items:[{id:'item',serviceId:'s',name:'Serviço QA',quantity:3,unitPrice:100}]};
  const sale={id:'sale',professionalId:'pro',patientId:'p',startsAt:'2026-10-10T08:00:00',endsAt:'2026-10-10T09:00:00',status:'Finalizado',eventType:'Novo Agendamento',accountClosed:true,closedAccount:{id:'sale-account',appointmentId:'sale',patientId:'p',professionalId:'pro',accountClosed:true,date:'2026-10-10',procedureLines:packages.packageCheckoutLines(pack,1),products:[],payments:[{method:'Pix',amount:300}],commercialDiscount:0}};
  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
