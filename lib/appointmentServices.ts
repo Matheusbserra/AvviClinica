@@ -33,3 +33,17 @@ export function preferredPreviewServiceNames(names: string[]) {
   const treatments=unique.filter(name=>!normalize(name).includes("avaliacao"));
   return treatments.length?treatments:unique;
 }
+
+// Keep every treatment in the details; the calendar card shows only the first
+// and the remaining number of distinct services in Roman numerals.
+export function appointmentPreviewServiceLabel(names: string[]) {
+  const services = preferredPreviewServiceNames(names);
+  if (!services.length) return "Sem serviço";
+  let remaining = services.length - 1;
+  if (!remaining) return services[0];
+  let roman = "";
+  for (const [value, symbol] of [[1000,"M"],[900,"CM"],[500,"D"],[400,"CD"],[100,"C"],[90,"XC"],[50,"L"],[40,"XL"],[10,"X"],[9,"IX"],[5,"V"],[4,"IV"],[1,"I"]] as const) {
+    while (remaining >= value) { roman += symbol; remaining -= value; }
+  }
+  return `${services[0]} + ${roman}`;
+}

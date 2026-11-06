@@ -10,7 +10,7 @@ import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Plus, X, Eye, Ci
 import { agendaHours, agendaSlots, slotTime, bookingDuration, isAbsence, overlappingAppointments, rectangleSlots, shiftClosed, slotAvailable, resizedAgendaEnd, appointmentAvailabilityError } from "@/lib/agendaAvailability";
 import type { AgendaSlot } from "@/lib/agendaAvailability";
 import { positionedAgendaGroups } from "@/lib/agendaGroups";
-import { appointmentPreviewServiceNames, preferredPreviewServiceNames } from "@/lib/appointmentServices";
+import { appointmentPreviewServiceNames, preferredPreviewServiceNames, appointmentPreviewServiceLabel } from "@/lib/appointmentServices";
 import type { Appointment, AppointmentStatus, FinancialEntry, Patient, Procedure, Professional, Service, ViewMode } from "@/lib/types";
 
 const hours = agendaHours;
@@ -274,7 +274,8 @@ export function AgendaView(props: Props) {
                 const appointment = group.appointments[0];
                 const resizeTarget = !isAbsence(appointment) ? group.appointments.slice().sort((a, b) => a.endsAt.localeCompare(b.endsAt) || a.startsAt.localeCompare(b.startsAt)).at(-1) : undefined;
                 const fullHeight = group.slotCount > 1;
-                const names = preferredPreviewServiceNames(group.appointments.flatMap(serviceNames)).join(" · ") || "Sem serviço";
+                const allNames = preferredPreviewServiceNames(group.appointments.flatMap(serviceNames));
+                const names = appointmentPreviewServiceLabel(allNames);
                 const statuses = [...new Set(group.appointments.map(item => item.status))].join(" · ");
                 const otherPatients = new Set(group.overlaps.filter(item => !group.appointments.some(own => own.id === item.id)).map(item => item.patientId ?? item.id)).size;
                 return <div key={appointment.id} data-testid="appointment-group" data-appointment-ids={group.appointments.map(item => item.id).join(",")} data-slot-count={group.slotCount} className="absolute top-0 z-10 p-0.5" style={{ left: `${group.lane * 100 / group.columns}%`, width: `${100 / group.columns}%`, height: `calc(${group.slotCount * 100}% + ${group.slotCount - 1}px)` }}>

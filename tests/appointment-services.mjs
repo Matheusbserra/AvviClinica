@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import assert from 'node:assert/strict';
 const code=ts.transpileModule(fs.readFileSync('lib/appointmentServices.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
-const {appointmentServices,totalServiceMinutes,appointmentPreviewServiceNames}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
+const {appointmentServices,totalServiceMinutes,appointmentPreviewServiceNames,appointmentPreviewServiceLabel}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
 const catalog=[{id:'one',name:'Consulta',price:300,priceType:'fixed',durationMinutes:60},{id:'two',name:'Retorno',price:150,priceType:'from',durationMinutes:30}];
 const legacy={id:'a',serviceId:'one',servicePrice:200,servicePriceType:'from'};
 assert.equal(appointmentServices(legacy,catalog)[0].price,200);assert.equal(appointmentServices(legacy,catalog)[0].priceType,'from');
@@ -26,3 +26,15 @@ assert.deepEqual(appointmentPreviewServiceNames({...done,accountClosed:false},[]
 assert.deepEqual(appointmentPreviewServiceNames(evaluation,[],[{id:'entry',appointmentId:'visit',accountClosed:true,procedureLines:[{manualProcedure:'Laser'}]}]),['Laser']);
 assert.deepEqual(appointmentPreviewServiceNames(evaluation,[],[{id:'other',appointmentId:'unrelated',accountClosed:true,manualProcedure:'Must not leak'}]),['Avaliação HOF']);
 console.log('PASS: agenda preview shows all actual checkout treatments once, suppresses evaluation only when another treatment exists, retains evaluation-only and legacy linked billing, without changing booked duration or including unrelated entries.');
+assert.equal(appointmentPreviewServiceLabel([]),'Sem serviço');
+assert.equal(appointmentPreviewServiceLabel(['Avaliação HOF']),'Avaliação HOF');
+assert.equal(appointmentPreviewServiceLabel(['Avaliação HOF','Preenchimento de mandíbula']),'Preenchimento de mandíbula');
+const four=['Preenchimento de mandíbula','Preenchimento de queixo','Preenchimento malar','Preenchimento de olheiras'];
+assert.equal(appointmentPreviewServiceLabel(four),'Preenchimento de mandíbula + III');
+assert.equal(appointmentPreviewServiceLabel(['Avaliação HOF',...four,four[0]]),'Preenchimento de mandíbula + III');
+for(const [remaining,roman] of [[1,'I'],[2,'II'],[3,'III'],[4,'IV'],[5,'V'],[9,'IX'],[10,'X'],[14,'XIV'],[19,'XIX'],[40,'XL'],[49,'XLIX'],[90,'XC'],[100,'C']]){
+ const names=['Primeiro procedimento',...Array.from({length:remaining},(_,i)=>`Procedimento ${i}`)];
+ assert.equal(appointmentPreviewServiceLabel(names),'Primeiro procedimento + '+roman);
+}
+assert.deepEqual(four,['Preenchimento de mandíbula','Preenchimento de queixo','Preenchimento malar','Preenchimento de olheiras'],'Display formatting must not change the saved service list');
+console.log('PASS: one visible treatment plus the remaining distinct count in Roman numerals, including III/IV/IX/XL; evaluation priority, duplicates, empty/single services and original order/data preserved.');
