@@ -7,8 +7,8 @@ export const metadata: Metadata = {
   title: "AVVI Clínica",
   description: "Gestão de agenda, financeiro e performance para clínica estética.",
   icons: {
-    icon: { url: "/icon-avvi.svg?v=3", type: "image/svg+xml" },
-    shortcut: "/icon-avvi.svg?v=3"
+    icon: { url: "/icon-avvi-glow.png?v=4", type: "image/png" },
+    shortcut: "/icon-avvi-glow.png?v=4"
   }
 };
 
