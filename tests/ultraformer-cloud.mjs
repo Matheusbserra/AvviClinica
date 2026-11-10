@@ -1,3 +1,4 @@
+import {matchesPostgrestFilters} from './postgrest-filters-helper.mjs';
 import fs from "node:fs";import os from "node:os";import path from "node:path";import {pathToFileURL} from "node:url";import {createRequire} from "node:module";import assert from "node:assert/strict";import ts from "typescript";
 const require=createRequire(import.meta.url),dir=fs.mkdtempSync(path.join(os.tmpdir(),"avvi-ultraformer-cloud-"));
 try {
@@ -9,7 +10,7 @@ try {
   if(url.pathname==="/rest/v1/avvi_user_accounts")return new Response(JSON.stringify([account]),{headers:{"Content-Type":"application/json"}});
   assert.equal(url.pathname,"/rest/v1/avvi_records");
   if(method==="POST"){if(failWrites)return new Response(JSON.stringify({code:"test",message:"Unavailable"}),{status:503,headers:{"Content-Type":"application/json"}});for(const row of JSON.parse(init.body))records.set(row.entity+":"+row.record_id,structuredClone(row));return new Response(null,{status:201});}
-  const entity=url.searchParams.get("entity")?.replace(/^eq\./,"");return new Response(JSON.stringify([...records.values()].filter(row=>row.entity===entity && (!url.searchParams.has("record_id") || row.record_id===url.searchParams.get("record_id").replace(/^eq\./,"")))),{headers:{"Content-Type":"application/json"}});
+  const entity=url.searchParams.get("entity")?.replace(/^eq\./,"");return new Response(JSON.stringify([...records.values()].filter(row=>matchesPostgrestFilters(row,url))),{headers:{"Content-Type":"application/json"}});
  };
  const auth=await import(pathToFileURL(path.join(dir,"accessServer.mjs"))),route=await import(pathToFileURL(path.join(dir,"route.mjs"))),module=await import(pathToFileURL(path.join(dir,"ultraformer.mjs")));
  const operator={...account,revision:1},admin={login:"admin",role:"admin"};

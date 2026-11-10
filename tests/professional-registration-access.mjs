@@ -1,4 +1,5 @@
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import {pathToFileURL} from "node:url"; import {createRequire} from "node:module"; import assert from "node:assert/strict"; import ts from "typescript";
+import {matchesPostgrestFilters} from './postgrest-filters-helper.mjs';
 const require=createRequire(import.meta.url),dir=fs.mkdtempSync(path.join(os.tmpdir(),"avvi-registration-test-"));
 try{
  const names=['postProcedure','packageSessions','stockAccess','inventory','gifts','servicePackages',"anamnese", "bodyAnamnese", "strategyDefinitions","access","accessServer","accountsServer","accessSnapshot","agendaAvailability","ultraformer","database","invoices","checkout","calculations","appointmentServices"];
@@ -17,8 +18,9 @@ try{
  process.env.NEXT_PUBLIC_SUPABASE_URL='https://registration-test.supabase.co';process.env.SUPABASE_SERVICE_ROLE_KEY='sb_secret_qa';
  globalThis.fetch=async(raw,init={})=>{const url=new URL(raw),headers={'Content-Type':'application/json'},method=init.method??'GET';
  if(url.pathname==='/rest/v1/avvi_user_accounts')return new Response(JSON.stringify(stored),{status:200,headers});
+ if(url.pathname==='/rest/v1/rpc/avvi_sync_revisions')return Response.json({code:'PGRST202'},{status:404});
  assert.equal(url.pathname,'/rest/v1/avvi_records');const filter=url.searchParams.get('entity');const matches=row=>filter?.startsWith('eq.')?row.entity===filter.slice(3):filter?.startsWith('in.')?filter.slice(4,-1).split(',').map(value=>value.replaceAll('"','')).includes(row.entity):true;
- if(method==='GET'){const id=url.searchParams.get('record_id')?.slice(3);const offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500);const data=[...records.values()].filter(row=>matches(row)&&(!id||row.record_id===id));return new Response(JSON.stringify(new Headers(init.headers).get('accept')?.includes('vnd.pgrst.object')?(data[0]??null):data.slice(offset,offset+limit)),{status:200,headers});}
+ if(method==='GET'){const offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500);const data=[...records.values()].filter(row=>matches(row)&&matchesPostgrestFilters(row,url));return new Response(JSON.stringify(new Headers(init.headers).get('accept')?.includes('vnd.pgrst.object')?(data[0]??null):data.slice(offset,offset+limit)),{status:200,headers});}
  if(method==='POST'){writes++;for(const row of JSON.parse(init.body))records.set(row.record_id,structuredClone(row));return new Response('[]',{status:201,headers});}
  if(method==='DELETE'){writes++;return new Response(null,{status:204,headers});}throw Error('Unexpected request');};
  const req=(who=kept,payload)=>new Request('http://test/api/access/data?entity=professionals',{method:payload?'POST':'GET',headers:{origin:'http://test',cookie:auth.accessCookie+'='+auth.signAccess(who),'Content-Type':'application/json'},...(payload?{body:JSON.stringify(payload)}:{})});

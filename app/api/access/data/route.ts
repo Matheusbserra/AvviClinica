@@ -8,7 +8,7 @@ import { resolveAccess, sameOrigin } from "@/lib/accessServer";
 import { followUpEnabled, canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, isMetaReviewer, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { checkoutStockUpdates } from "@/lib/stockAccess";
 import { stockHistoryEntry, followUpEntityRows, postProcedureOnly, postProcedureEntityRows } from "@/lib/accessSnapshot";
-import { appointmentAvailabilityError, validClosedShifts } from "@/lib/agendaAvailability";
+import { appointmentAvailabilityError, reservedInterval, validClosedShifts } from "@/lib/agendaAvailability";
 import { applyCheckoutUltraformer, isUltraformerTip, usageOnlyTipUpdate, validCheckoutShots } from "@/lib/ultraformer";
 import { validStrategy } from "@/lib/strategyDefinitions";
 import { validAnamnese } from "@/lib/anamnese";
@@ -24,13 +24,25 @@ function database() {
   if (!url || !key?.trim()) throw new Error("Conexão com a nuvem não configurada.");
   return createClient(url, key.trim(), { auth: { persistSession: false }, global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(25000) }) } });
 }
-async function rows(entity: string) {
+type ReadFilter = { field: string; op: "in"; values: string[] } | { field: string; op: "lt" | "gt"; value: string };
+async function rows(entity: string, filters: ReadFilter[] = [], projection = "record_id,data,updated_at") {
   const db = database(); const result: { record_id: string; data: Record<string, unknown>; updated_at?: string }[] = [];
   for (let offset = 0; ; offset += 500) {
-    const { data, error } = await db.from("avvi_records").select("record_id,data,updated_at").eq("entity", entity).order("record_id").range(offset, offset + 499);
+    let query = db.from("avvi_records").select(projection).eq("entity", entity);
+    for (const filter of filters) {
+      if (filter.op === "in") query = query.in(filter.field, filter.values);
+      else if (filter.op === "lt") query = query.lt(filter.field, filter.value);
+      else query = query.gt(filter.field, filter.value);
+    }
+    const { data, error } = await query.order("record_id").range(offset, offset + 499);
     if (error) throw error;
-    result.push(...data); if (data.length < 500) return result;
+    result.push(...data as unknown as typeof result); if (data.length < 500) return result;
   }
+}
+async function rowsByIds(entity: string, ids: string[], field = "record_id", projection = "record_id,data,updated_at") {
+  const unique = [...new Set(ids.filter(id => typeof id === "string" && id))], result: Awaited<ReturnType<typeof rows>> = [];
+  for (let offset = 0; offset < unique.length; offset += 100) result.push(...await rows(entity, [{field,op:"in",values:unique.slice(offset,offset+100)}], projection));
+  return result;
 }
 async function permittedRecords(user: AppUser, entity: string) {
     const records = await rows(entity);
@@ -187,21 +199,21 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     }
     const selectedStockProducts = upserts.filter(row => row.entity === "inventory" && row.data?.visibleInStock === true);
     if (selectedStockProducts.length) {
-      const productIds = new Set((await rows("procedures")).map(row => row.record_id));
+      const productIds = new Set((await rowsByIds("procedures", selectedStockProducts.map(row => row.data.procedureId), "record_id", "record_id")).map(row => row.record_id));
       for (const row of upserts) if (row.entity === "procedures" && canWriteEntity(user, "procedures")) productIds.add(row.record_id);
       if (selectedStockProducts.some(row => !productIds.has(row.data.procedureId))) return Response.json({ error: "Selecione um produto do Cadastro de Produtos." }, { status: 400, headers });
     }
     const packageUpdates = upserts.filter(row => row.entity === "service_packages");
     if (packageUpdates.length) {
       if (!canWriteEntity(user, "service_packages")) return Response.json({ error: "Cadastro de pacotes não autorizado." }, { status: 403, headers });
-      const serviceIds = new Set((await rows("services")).map(row => row.record_id));
+      const serviceIds = new Set((await rowsByIds("services", packageUpdates.flatMap(row => Array.isArray(row.data?.items) ? row.data.items.map((item: {serviceId:string}) => item.serviceId) : []), "record_id", "record_id")).map(row => row.record_id));
       for (const row of upserts) if (row.entity === "services" && canWriteEntity(user, "services")) serviceIds.add(row.record_id);
       for (const row of packageUpdates) if (!validServicePackage(row.data) || row.data.items.some((item: { serviceId: string }) => !serviceIds.has(item.serviceId))) return Response.json({ error: "Confira os serviços e os dados do pacote." }, { status: 400, headers });
     }
     const strategyUpdates = upserts.filter(row => row.entity === "strategies");
     if (strategyUpdates.length) {
       if (!canWriteEntity(user,"strategies")) return Response.json({error:"Acesso às estratégias não autorizado."},{status:403,headers});
-      const [existing,professionals]=await Promise.all([rows("strategies"),rows("professionals")]);
+      const [existing,professionals]=await Promise.all([rowsByIds("strategies", strategyUpdates.map(row => row.record_id)),rowsByIds("professionals", strategyUpdates.map(row => row.data?.professionalId), "record_id", "record_id")]);
       const professionalIds=new Set(professionals.map(row=>row.record_id));
       for(const row of upserts)if(row.entity==="professionals"&&canWriteEntity(user,"professionals")&&canManageProfessional(user,row.record_id))professionalIds.add(row.record_id);
       for (const row of strategyUpdates) {
@@ -215,7 +227,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const clinicalUpdates = upserts.filter(row => row.entity === "anamneses");
     if (clinicalUpdates.length) {
       if (!canWriteEntity(user, "anamneses")) return Response.json({ error: "Acesso à anamnese não autorizado." }, { status: 403, headers });
-      const [existing, patients, professionals] = await Promise.all([rows("anamneses"), rows("patients"), rows("professionals")]);
+      const [existing, patients, professionals] = await Promise.all([rowsByIds("anamneses", clinicalUpdates.map(row => row.record_id)), rowsByIds("patients", clinicalUpdates.map(row => row.data?.patientId), "record_id", "record_id"), rowsByIds("professionals", clinicalUpdates.map(row => row.data?.professionalId), "record_id", "record_id")]);
       const patientIds = new Set(patients.map(row => row.record_id)); const professionalIds = new Set(professionals.map(row => row.record_id));
       for (const row of upserts) {
         if (row.entity === "patients" && canWriteEntity(user, "patients")) patientIds.add(row.record_id);
@@ -235,9 +247,26 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const stockUpdates = upserts.filter(row => ["inventory", "gifts"].includes(row.entity));
     const stockRestricted = user.role === "standard" && !canMoveStock(user);
     const deletedAppointments = removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids);
-    const stored = appointmentUpdates.length || deletedAppointments.length || stockRestricted && stockUpdates.length ? (await rows("appointments")).map((row) => row.data as unknown as Appointment) : [];
+    let stored = (await rowsByIds("appointments", [...appointmentUpdates.map(item => item.id), ...deletedAppointments])).map(row => row.data as unknown as Appointment);
     for (const appointment of appointmentUpdates) Object.assign(appointment, preserveCloudInvoice(stored.find(item => item.id === appointment.id), appointment));
     const packageSensitive = [...appointmentUpdates, ...stored.filter(item => deletedAppointments.includes(item.id) || appointmentUpdates.some(next => next.id === item.id))].some(hasPackageSessionData);
+    const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt && old.eventType === item.eventType && !(old.status === "Cancelado" && item.status !== "Cancelado")));
+    if (packageSensitive || appointmentUpdates.length > 20) {
+      // Package sales/consumption still validate the complete shared history under
+      // the existing lease. Large imports use the original single-history path.
+      stored = (await rows("appointments")).map(row => row.data as unknown as Appointment);
+    } else {
+      // Ordinary saves only need their old records, overlapping slots (all
+      // professionals, for the three-room limit), and any duplicate account ID.
+      const overlaps = new Map<string, Appointment>(stored.map(item => [item.id,item]));
+      const intervals = new Map(moved.map(item => { const range=reservedInterval(item.startsAt,item.endsAt);return [JSON.stringify(range),range]; }));
+      for (const interval of intervals.values()) if (interval) {
+        const matches = await rows("appointments", [{field:"data->>startsAt",op:"lt",value:interval.end},{field:"data->>endsAt",op:"gt",value:interval.start}]);
+        for (const row of matches) overlaps.set(row.record_id,row.data as unknown as Appointment);
+      }
+      if (user.role === "standard") for (const row of await rowsByIds("appointments", appointmentUpdates.flatMap(item => item.closedAccount?.id ? [item.closedAccount.id] : []), "data->closedAccount->>id")) overlaps.set(row.record_id,row.data as unknown as Appointment);
+      stored = [...overlaps.values()];
+    }
     if (packageSensitive) {
       const effective = [...stored.filter(item => !deletedAppointments.includes(item.id) && !appointmentUpdates.some(next => next.id === item.id)), ...appointmentUpdates];
       const packageError = packageSessionError(effective);
@@ -257,7 +286,8 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     if (appointmentUpdates.some(next => next.closedAccount?.ultraformerShots !== undefined && !validCheckoutShots(next.closedAccount.ultraformerShots))) return Response.json({ error: "Confira as ponteiras e os disparos do Ultraformer." }, { status: 400, headers });
     const checkoutTipIds = new Set<string>();
     if (shotAppointments.length || deletedShotAppointments.length) {
-      const [tipRows, patientRows, professionalRows] = await Promise.all([rows("ultraformer_tips"), rows("patients"), rows("professionals")]);
+      const shotVisits = [...shotAppointments, ...deletedShotAppointments];
+      const [tipRows, patientRows, professionalRows] = await Promise.all([rows("ultraformer_tips"), rowsByIds("patients", shotVisits.flatMap(item=>item.patientId ? [item.patientId] : [])), rowsByIds("professionals", shotVisits.map(item=>item.professionalId))]);
       const tips = tipRows.map(row => row.data as unknown as import("@/lib/types").UltraformerTip);
       let expected = tips;
       try {
@@ -276,9 +306,8 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
         if (update && stable(update.data) !== stable(after) || !update && stable(before) !== stable(after)) return Response.json({ error: "Os disparos devem corresponder ao fechamento da conta. Atualize a página e tente novamente." }, { status: 409, headers });
       }
     }
-    const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt && old.eventType === item.eventType && !(old.status === "Cancelado" && item.status !== "Cancelado")));
     if (moved.length) {
-      const professionals = (await rows("professionals")).map(row => row.data as unknown as import("@/lib/types").Professional);
+      const professionals = (await rowsByIds("professionals", moved.map(item=>item.professionalId))).map(row => row.data as unknown as import("@/lib/types").Professional);
       const deleted = new Set(removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids));
       const effectiveAppointments = [...stored.filter(item => !deleted.has(item.id) && !appointmentUpdates.some(next => next.id === item.id)), ...appointmentUpdates];
       for (const appointment of moved) {
@@ -396,7 +425,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
       if (!entityNames.includes(item.entity) || !Array.isArray(item.ids) || item.ids.some((id: unknown) => typeof id !== "string")) return Response.json({ error: "Exclusão inválida." }, { status: 400, headers });
       if (user.role === "standard" && item.entity === "ultraformer_tips" && item.ids.length) return Response.json({ error: "Somente o administrador pode excluir ponteiras ou utilizações." }, { status: 403, headers });
       if (item.entity === "strategies" && user.role === "standard" && item.ids.length) {
-        const existing = await rows("strategies");
+        const existing = await rowsByIds("strategies", item.ids);
         if (existing.some(row => item.ids.includes(row.record_id) && !canAccessProfessional(user, String(row.data.professionalId)))) return Response.json({ error: "Exclusão de estratégia deste profissional não autorizada." }, { status: 403, headers });
       }
       if (item.entity === "professionals" && item.ids.some((id: string) => !canManageProfessional(user, id))) return Response.json({ error: "Exclusão deste profissional não autorizada." }, { status: 403, headers });

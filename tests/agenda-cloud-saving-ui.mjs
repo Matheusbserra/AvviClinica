@@ -1,4 +1,5 @@
 import {selectSearchOption} from './search-select-helper.mjs';
+import {matchesPostgrestFilters} from './postgrest-filters-helper.mjs';
 // Isolated Next server + real data gateway/Supabase SDK; no production credentials or records.
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -33,14 +34,7 @@ const mock=http.createServer(async(req,res)=>{
   }
   if(url.pathname!=='/rest/v1/avvi_records'){res.end('{}');return;}
   if(method==='GET'&&failReads||method!=='GET'&&failWrites){res.statusCode=503;res.end(JSON.stringify({code:'QA503',message:'Isolated network failure'}));return;}
-  const matches=row=>{
-   for(const [field,value]of url.searchParams){
-    const actual=field==='entity'?row.entity:field==='record_id'?row.record_id:field.startsWith('data->>')?row.data[field.slice(7)]:undefined;
-    if(actual===undefined)continue;
-    if(value.startsWith('eq.')&&String(actual)!==value.slice(3))return false;
-    if(value.startsWith('in.')&&!value.slice(4,-1).split(',').map(s=>s.replaceAll('"','')).includes(String(actual)))return false;
-   }return true;
-  };
+  const matches=row=>matchesPostgrestFilters(row,url);
   if(method==='GET'){
    payloadReads++;
    const result=[...records.values()].filter(matches),offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500);
