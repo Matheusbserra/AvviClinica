@@ -30,6 +30,7 @@ export function canAccessProfessional(user: AppUser, professionalId: string) {
 export const standardTabs: string[] = ["Agenda", "Estoque", "Follow Up", "Custos", "Cadastro de Procedimentos", "Cadastro de Serviços", "Cadastro de Profissionais", "Cadastro de Pacientes"];
 type Access = AppRole | AppUser;
 export function canAccessTab(access: Access, tab: string) {
+  if (tab === "Consulta de Agendamentos") return canAccessTab(access, "Agenda");
   if (tab === "Follow Up" && !followUpEnabled) return false;
   if (isMetaReviewer(access)) return tab === "Follow Up";
   const role = typeof access === "string" ? access : access.role;

@@ -23,6 +23,7 @@ import {
   BarChart3,
   Building2,
   CalendarDays,
+  CalendarSearch,
   Calculator,
   CheckCircle2,
   ChevronDown,
@@ -60,6 +61,7 @@ import { ProfessionalShifts } from "@/app/components/ProfessionalShifts";
 import { appointmentAvailabilityError, isAbsence, newAbsences, slotTime } from "@/lib/agendaAvailability";
 import type { AgendaSlot } from "@/lib/agendaAvailability";
 import { AgendaView } from "@/app/components/AgendaView";
+import { AppointmentConsultationView } from "@/app/components/AppointmentConsultationView";
 import { PatientPhotos } from "@/app/components/PatientPhotos";
 import { AnamneseView } from "@/app/components/AnamneseView";
 import { PatientHistory } from "@/app/components/PatientHistory";
@@ -125,10 +127,10 @@ import { ProfessionalReportView } from "@/app/components/ProfessionalReportView"
 import { createPatientReceiptPdf, receiptServiceNames, receiptPayments, receiptPaymentTotal } from "@/lib/patientReceiptPdf";
 import type { AppRole, AppUser } from "@/lib/access";
 
-type Tab = "Pós-procedimento" | "Simulação" | "Estratégias" | "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
+type Tab = "Pós-procedimento" | "Simulação" | "Estratégias" | "Anamnese" | "Nota Fiscal" | "Ultraformer MPT" | "Contas" | "Relatórios" | "Agenda" | "Consulta de Agendamentos" | "Estoque" | "Follow Up" | "Dashboard" | "Receitas" | "Lançamento de Procedimentos" | "Pagamento Profissional" | "Relatório Profissional" | "Recibos de Pagamento" | "Cadastro de Procedimentos" | "Cadastro de Serviços" | "Cadastro de Profissionais" | "Cadastro de Pacientes" | "Metas" | "Custos";
 type MonthlyGoals = StoredMonthlyGoals;
 const sidebarGroups: { label: string; icon: ElementType; tabs: Tab[] }[] = [
-  { label: "Operação", icon: CalendarDays, tabs: ["Agenda", "Pós-procedimento", "Follow Up", "Anamnese", "Simulação"] },
+  { label: "Operação", icon: CalendarDays, tabs: ["Agenda", "Consulta de Agendamentos", "Pós-procedimento", "Follow Up", "Anamnese", "Simulação"] },
   { label: "Meu estabelecimento", icon: Building2, tabs: ["Estoque", "Ultraformer MPT"] },
   { label: "Profissional", icon: Users, tabs: ["Relatórios", "Relatório Profissional", "Estratégias"] },
   { label: "Financeiro", icon: CircleDollarSign, tabs: ["Dashboard", "Receitas", "Lançamento de Procedimentos", "Pagamento Profissional", "Recibos de Pagamento", "Nota Fiscal", "Custos"] },
@@ -138,6 +140,7 @@ const savedLoginKey = "avvi.saved.login.v1";
 
 const tabs: { id: Tab; icon: ElementType }[] = [
   { id: "Agenda", icon: CalendarDays },
+  { id: "Consulta de Agendamentos", icon: CalendarSearch },
   { id: "Pós-procedimento", icon: MessageCircle },
   { id: "Simulação", icon: Calculator },
   { id: "Estoque", icon: WalletCards },
@@ -994,6 +997,7 @@ export default function Home() {
     return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", check); };
   }, [isAuthenticated]);
   const availableTabs = tabs.filter((tab) => canAccessTab(currentUser, tab.id));
+  const isAppointmentConsultation = activeTab === "Consulta de Agendamentos";
   function changeTab(tab: Tab) { if (canAccessTab(currentUser, tab)) setActiveTab(tab); }
 
   function openSlot(hour: number, professionalId: string, durationMinutes = 30) {
@@ -1707,8 +1711,13 @@ export default function Home() {
           </div>
         </aside>
 
-        <section className={`min-w-0 flex-1 transition-[margin-left] duration-150 motion-reduce:transition-none ${openSidebarGroup ? "lg:ml-64" : "lg:ml-[4.5rem]"} ${["Agenda", "Ultraformer MPT"].includes(activeTab) ? "flex h-dvh min-h-0 flex-col overflow-hidden px-2 py-2 lg:px-4" : "px-4 py-5 lg:px-7"}`}>
-          <Header activeTab={activeTab} compact={["Agenda", "Ultraformer MPT"].includes(activeTab)} />
+        <section className={`min-w-0 flex-1 transition-[margin-left] duration-150 motion-reduce:transition-none ${openSidebarGroup ? "lg:ml-64" : "lg:ml-[4.5rem]"} ${isAppointmentConsultation ? "min-h-dvh bg-white px-3 pt-4" : ["Agenda", "Ultraformer MPT"].includes(activeTab) ? "flex h-dvh min-h-0 flex-col overflow-hidden px-2 py-2 lg:px-4" : "px-4 py-5 lg:px-7"}`}>
+          {isAppointmentConsultation ? (
+            <header className="mb-[18px] flex items-center justify-between border-b border-dashed border-avvi-line pb-1">
+              <h2 className="text-sm font-bold text-avvi-blue">Consulta de Agendamentos</h2>
+              <div className="w-9 lg:hidden"><ThemeToggle compact /></div>
+            </header>
+          ) : <Header activeTab={activeTab} compact={["Agenda", "Ultraformer MPT"].includes(activeTab)} />}
           {!availableTabs.length && <Panel><p className="text-sm text-slate-600">Nenhuma aba foi autorizada para esta conta. Solicite o acesso ao administrador.</p></Panel>}
           {canAccessTab(currentUser, "Follow Up") && activeTab === "Follow Up" && <FollowUpNavigation tab={followUpTab} change={setFollowUpTab} />}
           {syncError && !((activeTab === "Simulação" || activeTab === "Follow Up" && (followUpTab === "Testes WhatsApp" || isMetaReviewer(currentUser))) && !isSupabaseConfigured && syncError.startsWith("Supabase não configurado.")) && (
@@ -1730,9 +1739,9 @@ export default function Home() {
             })}</div>
           </div>}
           {refreshError && <div role="status" aria-label="Atualização da agenda" className="mb-2 shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{refreshError}</div>}
-          <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
+          {(!isAppointmentConsultation || !isDataReady || hasPendingChanges || storageError) && <div role="status" aria-label="Status do salvamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
             {!isDataReady ? "Carregando dados…" : activeTab === "Simulação" ? "Simulação temporária · nada é salvo." : storageError && !isSupabaseConfigured ? "Falha ao salvar neste navegador. Mantenha a página aberta." : !isSupabaseConfigured ? isSavingLocal ? "Salvando cópia neste navegador…" : "Prévia local: alterações salvas apenas neste navegador." : isSyncing ? "Salvando alterações na nuvem…" : syncError ? "Salvamento na nuvem pendente. Use Tentar novamente quando a conexão estiver disponível." : agendaSyncConflicts.length ? "Há agendamentos aguardando revisão. As outras alterações são salvas automaticamente." : hasPendingChanges ? "Salvamento na nuvem pendente. Use Tentar novamente quando a conexão estiver disponível." : `Dados salvos na nuvem${lastSavedAt ? ` às ${format(parseISO(lastSavedAt), "HH:mm:ss")}` : ""}.`}
-          </div>
+          </div>}
           {checkoutConfirmation && isSupabaseConfigured && appointments.some(appointment => appointment.id === checkoutConfirmation.appointmentId && appointment.accountClosed && appointment.closedAccount?.id === checkoutConfirmation.accountId) && <div role="status" aria-label="Confirmação do fechamento" className="mb-2 shrink-0 rounded-lg border border-avvi-line bg-white px-3 py-2 text-sm font-semibold text-avvi-ink">
             {lastSyncedSnapshot.current?.appointments.some(appointment => appointment.id === checkoutConfirmation.appointmentId && appointment.accountClosed && appointment.closedAccount?.id === checkoutConfirmation.accountId && JSON.stringify(appointment.closedAccount) === JSON.stringify(appointments.find(item => item.id === checkoutConfirmation.appointmentId)?.closedAccount))
               ? "Fechamento confirmado na nuvem."
@@ -1761,6 +1770,19 @@ export default function Home() {
               resizeAppointment={resizeAgendaAppointment}
               openAccount={openAccountFromAgenda}
               viewAccount={viewClosedAccount}
+            />
+          )}
+
+          {isAppointmentConsultation && isDataReady && canAccessTab(currentUser, "Consulta de Agendamentos") && (
+            <AppointmentConsultationView
+              appointments={appointments}
+              patients={patients}
+              professionals={professionals}
+              services={services}
+              procedures={procedures}
+              entries={entries}
+              statuses={statuses}
+              onOpenAppointment={openAppointment}
             />
           )}
 
