@@ -6,6 +6,7 @@ export type LimitedRanking = { id: string; name: string; value?: number };
 export type LimitedProfessionalReport = {
   professional: { id: string; name: string; avatarDataUrl?: string };
   goal: number; totalPaid: number; count: number; serviceCount: number; averageTicket: number; closedPatientCount: number;
+  futureCreditBalance: number; patientsWithFutureCredit: number;
   services: LimitedRanking[]; patientRevenue: LimitedRanking[];
   products: LimitedRanking[]; patientServices: LimitedRanking[];
   monthlyInsights?: MonthlyProfessionalInsights;
@@ -19,6 +20,7 @@ export function limitedProfessionalReports(user: AppUser, input: Parameters<type
   return { valid: result.valid, reports: result.reports.map((item): LimitedProfessionalReport => ({
     professional: { id: item.professional.id, name: item.professional.name, ...(item.professional.avatarDataUrl ? { avatarDataUrl: item.professional.avatarDataUrl } : {}) },
     goal: item.goal, totalPaid: item.totalPaid, count: item.count, serviceCount: item.serviceCount, averageTicket: item.averageTicket, closedPatientCount: item.closedPatientCount,
+    futureCreditBalance: item.futureCreditBalance, patientsWithFutureCredit: item.patientsWithFutureCredit,
     monthlyInsights: item.monthlyInsights,
     services: item.services.map(({ id, name, value }) => ({ id, name, value })),
     patientServices: item.patientServices.map(({ id, name, value }) => ({ id, name, value })),

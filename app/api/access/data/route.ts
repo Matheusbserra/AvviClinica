@@ -15,7 +15,8 @@ import { validAnamnese } from "@/lib/anamnese";
 import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice, preserveCloudInvoice } from "@/lib/invoices";
 import { entityNames } from "@/lib/database";
 import type { EntityName } from "@/lib/database";
-import type { Appointment, FinancialEntry, GiftStockItem, InventoryItem } from "@/lib/types";
+import type { Appointment, FinancialEntry, GiftStockItem, InventoryItem, Patient, PatientCreditDeposit } from "@/lib/types";
+import { patientCreditFeeCost, validPatientCreditDeposit } from "@/lib/patientCredit";
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "no-store" };
 function database() {
@@ -151,7 +152,7 @@ async function packageLockedSave(request: Request, db: ReturnType<typeof databas
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  if (!acquired) return Response.json({ error: "Outro fechamento de pacote está sendo salvo. Tente novamente em instantes; suas alterações continuam pendentes." }, { status: 409, headers });
+  if (!acquired) return Response.json({ error: "Outro lançamento está sendo salvo. Tente novamente em instantes. Suas alterações continuam pendentes." }, { status: 409, headers });
   const ownsLease = async () => {
     const result = await db.from("avvi_records").select("data").eq("entity", packageLockEntity).eq("record_id", "checkout").eq("data->>owner", owner).maybeSingle();
     if (result.error) throw result.error;
@@ -169,8 +170,9 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
   if (!sameOrigin(request)) return Response.json({ error: "Origem não autorizada." }, { status: 403, headers });
   try {
     const retryRequest = request.clone();
-    const { upserts = [], removed = [] } = await request.json();
+    const { upserts = [], removed = [], patientCreditBases = {} } = await request.json();
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
+    if (!patientCreditBases || typeof patientCreditBases !== "object" || Array.isArray(patientCreditBases) || Object.values(patientCreditBases).some(value => !Number.isFinite(value))) return Response.json({ error: "Saldo de referência inválido." }, { status: 400, headers });
     if (!followUpEnabled && [...upserts, ...removed].some(row => typeof row?.entity === "string" && row.entity.startsWith("followup_"))) return Response.json({ disabled:true,error:"Follow Up temporariamente desativado. Atualize a página para continuar usando as outras áreas." }, { status:503,headers });
     if (isMetaReviewer(user) && [...upserts, ...removed].some(row => !canWriteEntity(user, row.entity))) return Response.json({ error: "Acesso restrito ao Follow Up." }, { status: 403, headers });
     if (canAccessTab(user, "Simulação") && !entityNames.some(entity => canWriteEntity(user, entity))) return Response.json({ error: "Esta conta tem acesso somente à simulação, sem gravação de dados." }, { status: 403, headers });
@@ -349,20 +351,55 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const ledgerSources = new Set<string>(canWriteEntity(user, "financial_entries") ? upserts.filter(row => row.entity === "financial_entries").map(row => row.record_id) : []);
     const receiptSources = new Set<string>(canWriteEntity(user, "professional_receipts") ? upserts.filter(row => row.entity === "professional_receipts").map(row => row.record_id) : []);
     const acknowledgedRows = new Set<(typeof upserts)[number]>();
+    const creditDeposits = new Set<string>();
+    const depositCosts: { entity: "fixed_costs"; record_id: string; data: NonNullable<ReturnType<typeof patientCreditFeeCost>>; updated_at: string }[] = [];
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
       if (row.entity === "patients" && canWriteEntity(user,"patients")) {
         const packagesOnly = user.role === "admin" && row.data.importedPackages !== undefined && Object.keys(row.data).every(key => key === "id" || key === "importedPackages");
         const previous = await db.from("avvi_records")
-          .select(packagesOnly ? "data" : "importedPackages:data->importedPackages")
+          .select(packagesOnly ? "data" : "importedPackages:data->importedPackages,futureCreditDeposits:data->futureCreditDeposits,futureCredit:data->futureCredit")
           .eq("entity", "patients").eq("record_id", row.record_id).maybeSingle();
         if (previous.error) throw previous.error;
         // Regular saves only need the previously imported balances. A balances
         // import also needs the registration fields it does not send itself.
-        const storedPatient = packagesOnly ? previous.data?.data : previous.data;
+        const previousPatient = previous.data as unknown as (Partial<Patient> & { data?: Patient }) | null;
+        const storedPatient = packagesOnly ? previousPatient?.data : previousPatient as Patient | null;
         const candidate = packagesOnly && storedPatient ? { ...storedPatient, importedPackages: row.data.importedPackages } : row.data;
-        try { row.data = preserveImportedPatientPackages(storedPatient, candidate, user.role === "admin"); }
+        try { row.data = preserveImportedPatientPackages(storedPatient ?? undefined, candidate, user.role === "admin"); }
         catch (error) { return Response.json({error:error instanceof Error?error.message:"Pacotes inválidos."},{status:400,headers}); }
+        const storedDeposits: PatientCreditDeposit[] = storedPatient?.futureCreditDeposits ?? [];
+        const incoming = row.data.futureCreditDeposits ?? [];
+        if (!Array.isArray(incoming)) return Response.json({ error: "Recargas de crédito inválidas." }, { status: 400, headers });
+        const existing = new Map(storedDeposits.map(item => [item.id, item]));
+        const added: PatientCreditDeposit[] = [];
+        for (const deposit of incoming) {
+          if (!validPatientCreditDeposit(deposit)) return Response.json({ error: "Confira o valor e a forma de pagamento do crédito." }, { status: 400, headers });
+          const original = existing.get(deposit.id);
+          if (original) {
+            if (original.amount !== deposit.amount || original.date !== deposit.date || original.method !== deposit.method || original.cardBrand !== deposit.cardBrand || original.installments !== deposit.installments) return Response.json({ error: "Uma recarga registrada não pode ser alterada." }, { status: 409, headers });
+            continue;
+          }
+          if (!canAccessTab(user, "Cadastro de Pacientes") || creditDeposits.has(deposit.id)) return Response.json({ error: "Recarga não autorizada." }, { status: 403, headers });
+          creditDeposits.add(deposit.id);
+          const { id, date, amount, method, cardBrand, installments } = deposit;
+          added.push({ id, date, amount, method, ...(method === "Crédito" ? { cardBrand, installments } : {}) });
+        }
+        const cents = (value: unknown) => Math.round((Number(value) || 0) * 100);
+        const currentBalance = cents(storedPatient?.futureCredit);
+        const clientBalance = cents(row.data.futureCredit);
+        const hasBase = Object.hasOwn(patientCreditBases, row.record_id);
+        if ((added.length || storedDeposits.length && !packagesOnly) && !ownsPackageLease) return await packageLockedSave(retryRequest, db);
+        if (added.length) {
+          const expected = currentBalance + added.reduce((sum, deposit) => sum + cents(deposit.amount), 0);
+          if (cents(row.data.futureCredit) !== expected) return Response.json({ error: "O saldo mudou desde a abertura do cadastro. Atualize os dados antes de salvar." }, { status: 409, headers });
+          for (const deposit of added) {
+            const fee = patientCreditFeeCost(deposit, row.data);
+            if (fee) depositCosts.push({ entity: "fixed_costs", record_id: fee.id, data: fee, updated_at: new Date().toISOString() });
+          }
+        }
+        if (!added.length && storedDeposits.length && !packagesOnly && clientBalance !== currentBalance && (!hasBase || cents(patientCreditBases[row.record_id]) !== currentBalance)) return Response.json({ error: "O saldo mudou. Atualize os dados antes de salvar." }, { status: 409, headers });
+        if (storedDeposits.length || added.length) row.data.futureCreditDeposits = [...storedDeposits, ...added];
       }
       if (row.entity === "services" && row.data.postProcedure !== undefined && !validPostProcedurePlan(row.data.postProcedure)) return Response.json({ error: "Prazos de pós-procedimento inválidos." }, { status: 400, headers });
       if (row.entity === "post_procedure_messages" && !validPostProcedureMessage(row.data)) return Response.json({ error: "Mensagem de pós-procedimento inválida. Confira o texto e as variáveis." }, { status: 400, headers });
@@ -463,7 +500,8 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
         if (!permitted) return Response.json({ error: "Exclusão financeira restrita ao administrador." }, { status: 403, headers });
       }
     }
-    const pendingUpserts = upserts.filter(row => !acknowledgedRows.has(row));
+    const pendingUpserts = [...upserts.filter(row => !acknowledgedRows.has(row)), ...depositCosts];
+    const savedResponse = { saved: true, ...(depositCosts.length && canReadEntity(user, "fixed_costs") ? { creditDepositCosts: depositCosts.map(row => row.data) } : {}) };
     if (packageSensitive) {
       if (!process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) return Response.json({ error: "Configure SUPABASE_SERVICE_ROLE_KEY no servidor para salvar sessões de pacotes." }, { status: 503, headers });
       // Re-run validation after taking the shared lease, using current cloud rows.
@@ -473,7 +511,7 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
       // Older installed functions do not support consuming the sale being closed.
       if (!consumesCurrentSale) {
         const { error } = await db.rpc("avvi_save_package_checkout", { p_upserts: pendingUpserts, p_removed: removed });
-        if (!error) return Response.json({ saved: true }, { headers });
+        if (!error) return Response.json(savedResponse, { headers });
         if (error.code !== "PGRST202" && error.code !== "42883") {
           if (error.code === "P0001") return Response.json({ error: error.message }, { status: 409, headers });
           throw error;
@@ -503,6 +541,6 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     }
     // Write the account/stock state last: retries retain the stored account links until all reversals finish.
     if (pendingUpserts.length) { await checkPackageLease(); const { error } = await db.from("avvi_records").upsert(pendingUpserts, { onConflict: "entity,record_id" }); if (error) throw error; }
-    return Response.json({ saved: true }, { headers });
+    return Response.json(savedResponse, { headers });
   } catch { return Response.json({ error: "Não foi possível salvar. Suas alterações continuam pendentes." }, { status: 503, headers }); }
 }

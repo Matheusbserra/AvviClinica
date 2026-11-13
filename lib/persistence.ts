@@ -1,4 +1,5 @@
 import type { EntityName, EntityPayloadMap } from "./database";
+import type { Patient } from "./types";
 
 export type DataSnapshot = { [K in EntityName]: EntityPayloadMap[K][] };
 export type LocalSnapshot = { savedAt: string; data: DataSnapshot; syncedData?: DataSnapshot; revision?: string };
@@ -35,7 +36,25 @@ export function recoverPendingChanges(remote: DataSnapshot, baseline: DataSnapsh
     const after = new Map(draft[entity].map((record) => [recordId(record), record]));
     const recovered = new Map(remote[entity].map((record) => [recordId(record), record]));
     for (const id of before.keys()) if (!after.has(id)) recovered.delete(id);
-    for (const [id, record] of after) if (!equal(before.get(id), record)) recovered.set(id, record);
+    for (const [id, record] of after) {
+      if (equal(before.get(id), record)) continue;
+      if (entity === "patients") {
+        const patient = record as Patient;
+        const prior = before.get(id) as Patient | undefined;
+        const cloud = recovered.get(id) as Patient | undefined;
+        const priorDeposits = new Set(prior?.futureCreditDeposits?.map(deposit => deposit.id));
+        const localDeposits = patient.futureCreditDeposits?.filter(deposit => !priorDeposits.has(deposit.id)) ?? [];
+        if (cloud && localDeposits.length) {
+          const cloudIds = new Set(cloud.futureCreditDeposits?.map(deposit => deposit.id));
+          const missing = localDeposits.filter(deposit => !cloudIds.has(deposit.id));
+          const balance = (Number(cloud.futureCredit) || 0) + missing.reduce((sum, deposit) => sum + deposit.amount, 0);
+          const changes = Object.fromEntries(Object.entries(patient).filter(([key, value]) => !equal(prior?.[key as keyof Patient], value)));
+          recovered.set(id, { ...cloud, ...changes, futureCredit: Math.round(balance * 100) / 100, futureCreditDeposits: [...(cloud.futureCreditDeposits ?? []), ...missing] });
+          continue;
+        }
+      }
+      recovered.set(id, record);
+    }
     Object.assign(result, { [entity]: [...recovered.values()] });
   }
   return result;

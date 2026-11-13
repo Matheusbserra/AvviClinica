@@ -225,6 +225,7 @@ export async function syncEntityDiffs(changes: EntityChange[]) {
   if (!supabase) return;
   const upserts: { entity: EntityName; record_id: string; data: EntityPayloadMap[EntityName]; updated_at: string }[] = [];
   const removed: { entity: EntityName; ids: string[] }[] = [];
+  const patientCreditBases: Record<string, number> = {};
   const updatedAt = new Date().toISOString();
   for (const { entity, previous, next } of changes) {
     const previousById = new Map(previous.map((record) => [getRecordId(record), record]));
@@ -234,12 +235,20 @@ export async function syncEntityDiffs(changes: EntityChange[]) {
     for (const record of next) {
       const recordId = getRecordId(record);
       if (JSON.stringify(previousById.get(recordId)) !== JSON.stringify(record)) {
+        if (entity === "patients") {
+          const patient = record as Patient;
+          const previousPatient = previousById.get(recordId) as Patient | undefined;
+          if (patient.futureCreditDeposits?.length || previousPatient?.futureCreditDeposits?.length) patientCreditBases[recordId] = Number(previousPatient?.futureCredit) || 0;
+        }
         upserts.push({ entity, record_id: recordId, data: record, updated_at: updatedAt });
       }
     }
   }
   if (usesGateway()) {
-    if (upserts.length || removed.length) await accessRequest("/api/access/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ upserts, removed }) });
+    if (upserts.length || removed.length) {
+      const response = await accessRequest("/api/access/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ upserts, removed, ...(Object.keys(patientCreditBases).length ? { patientCreditBases } : {}) }) });
+      return response.creditDepositCosts as FixedCost[] | undefined;
+    }
     return;
   }
   // Upserts share one request. Deletions are separate, and a failed batch remains pending for idempotent retry.

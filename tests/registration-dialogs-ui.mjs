@@ -80,9 +80,25 @@ try {
   assert.equal(await dialog.getByLabel('Nome', {exact: true}).inputValue(), '');
   await dialog.getByLabel('Nome', {exact: true}).fill('Paciente nova QA');
   await dialog.getByRole('combobox', {name: /Profissional vinculada/}).selectOption('pro');
-  await dialog.getByLabel(/Crédito futuro/).fill('55');
+  await dialog.getByRole('button', {name: 'Adicionar crédito futuro'}).click();
+  const creditDialog = page.getByRole('dialog', {name: 'Adicionar crédito futuro', exact: true});
+  await creditDialog.getByLabel('Valor do crédito').fill('55');
+  await creditDialog.getByLabel('Forma de pagamento').selectOption('Crédito');
+  await creditDialog.getByLabel('Bandeira').selectOption('Elo');
+  await creditDialog.getByLabel('Parcelas').selectOption('2');
+  assert.match(await creditDialog.getByText('Taxa de maquininha estimada').innerText(), /2,55/);
+  await creditDialog.getByRole('button', {name: 'Adicionar crédito', exact: true}).click();
   await dialog.getByRole('button', {name: 'Salvar paciente', exact: true}).click();
   assert.match(await row('Paciente nova QA').innerText(), /55,00/);
+  await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).data.fixed_costs.some(cost => cost.costType === 'Taxa maquininha' && cost.value === 2.55), key);
+  await navigationButton(page, 'Relatório Profissional').click();
+  const professionalReport = page.getByRole('region', {name: 'Relatório de Profissional QA', exact: true});
+  for (const month of ['2026-08', '2026-11']) {
+    await page.getByLabel('Mês do relatório profissional').fill(month);
+    assert.match(await professionalReport.getByText('Crédito futuro disponível', {exact: true}).locator('..').innerText(), /180,50/);
+    assert.equal(await professionalReport.getByText('2 pacientes vinculados com saldo atual').count(), 1);
+    assert.match(await professionalReport.getByTestId('professional-total-paid-pro').innerText(), /0,00/);
+  }
   await navigationButton(page, 'Cadastro de Produtos').click();
   await row('Produto QA').getByTitle('Editar', {exact: true}).click();
   dialog = page.getByRole('dialog', {name: 'Editar produto', exact: true});

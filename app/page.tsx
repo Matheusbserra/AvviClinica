@@ -120,6 +120,8 @@ import { servicePostProcedurePlan, validPostProcedurePlan } from "@/lib/postProc
 import type { PostProcedureContact, PostProcedureMessage } from "@/lib/types";
 import { SimulationView } from "@/app/components/SimulationView";
 import { calculateCardFee, calculateDebitFee } from "@/lib/paymentFees";
+import { patientCreditFee, patientCreditFeeCost, validPatientCreditDeposit } from "@/lib/patientCredit";
+import type { PatientCreditDeposit } from "@/lib/types";
 import { StrategiesView } from "@/app/components/StrategiesView";
 import { MovementsView } from "@/app/components/MovementsView";
 import { ReportsView } from "@/app/components/ReportsView";
@@ -188,7 +190,7 @@ function savePatientRecord(form: Patient, patients: Patient[]) {
     loyaltyPoints: Number(form.loyaltyPoints) || 0,
     registrationDate: form.registrationDate || todayKey()
   };
-  return form.id ? patients.map((patient) => patient.id === form.id ? saved : patient) : [saved, ...patients];
+  return patients.some(patient => patient.id === saved.id) ? patients.map(patient => patient.id === saved.id ? saved : patient) : [saved, ...patients];
 }
 
 function todayKey() {
@@ -812,8 +814,13 @@ export default function Home() {
         if (projection) setAgendaSyncConflicts(projection.conflicts);
         if (!baseline || !draft) return;
         if (hasSnapshotChanges(baseline, draft)) {
-          await syncEntityDiffs(snapshotChanges(baseline, draft));
-          lastSyncedSnapshot.current = draft;
+          const fees = await syncEntityDiffs(snapshotChanges(baseline, draft));
+          if (fees?.length) {
+            const includeFees = (current: FixedCost[]) => [...fees.filter(fee => !current.some(item => item.id === fee.id)), ...current];
+            lastSyncedSnapshot.current = { ...draft, fixed_costs: includeFees(draft.fixed_costs) };
+            if (latestDraft.current) latestDraft.current = { ...latestDraft.current, fixed_costs: includeFees(latestDraft.current.fixed_costs) };
+            setCosts(includeFees);
+          } else lastSyncedSnapshot.current = draft;
           setLastSavedAt(new Date().toISOString());
           notifySharedSave();
         }
@@ -1911,6 +1918,11 @@ export default function Home() {
               setPatients={setPatients}
               professionals={professionals}
               appointments={appointments}
+              onCreditDeposit={(patient, deposit) => {
+                if (isSupabaseConfigured) return;
+                const fee = patientCreditFeeCost(deposit, patient);
+                if (fee) setCosts(current => current.some(item => item.id === fee.id) ? current : [fee, ...current]);
+              }}
             />
           )}
 
@@ -3011,7 +3023,7 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
   );
 }
 
-function PatientsView({ patientForm, setPatientForm, patients, setPatients, professionals, appointments }: { patientForm: Patient; setPatientForm: (form: Patient) => void; patients: Patient[]; setPatients: Dispatch<SetStateAction<Patient[]>>; professionals: Professional[]; appointments: Appointment[] }) {
+function PatientsView({ patientForm, setPatientForm, patients, setPatients, professionals, appointments, onCreditDeposit }: { patientForm: Patient; setPatientForm: (form: Patient) => void; patients: Patient[]; setPatients: Dispatch<SetStateAction<Patient[]>>; professionals: Professional[]; appointments: Appointment[]; onCreditDeposit: (patient: Patient, deposit: PatientCreditDeposit) => void }) {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const originalPatientForm = useRef<Patient | null>(null);
   const [patientSection, setPatientSection] = useState<"details" | "packages">("details");
@@ -3019,6 +3031,8 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
   const [photoPatientId, setPhotoPatientId] = useState<string | null>(null);
   const [patientList, setPatientList] = useState<"all" | "credit">("all");
   const [patientQuery, setPatientQuery] = useState("");
+  const [creditDialogOpen, setCreditDialogOpen] = useState(false);
+  const [pendingDeposits, setPendingDeposits] = useState<PatientCreditDeposit[]>([]);
   const [birthdayStart, setBirthdayStart] = useState("");
   const [birthdayEnd, setBirthdayEnd] = useState("");
   const invalidBirthdayRange = Boolean(birthdayStart && birthdayEnd && birthdayStart > birthdayEnd);
@@ -3037,15 +3051,25 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
     setIsFormOpen(false);
     setPatientForm(makePatientForm());
     setShowScheduleInfo(false);
+    setPendingDeposits([]);
+    setCreditDialogOpen(false);
   }
 
   function savePatient() {
     const original = originalPatientForm.current;
     const changes = original && Object.fromEntries(Object.entries(patientForm).filter(([key, value]) => value !== original[key as keyof Patient]));
+    const stableForm = { ...patientForm, id: patientForm.id || id("patient") };
     setPatients(current => {
       const latest = current.find(patient => patient.id === patientForm.id);
-      return savePatientRecord(latest && changes ? { ...latest, ...changes } : patientForm, current);
+      const next = latest && changes ? { ...latest, ...changes } : stableForm;
+      const balance = Number(next.futureCredit) || 0;
+      if (pendingDeposits.length) {
+        next.futureCredit = Math.round((balance + pendingDeposits.reduce((sum, deposit) => sum + deposit.amount, 0)) * 100) / 100;
+        next.futureCreditDeposits = [...(next.futureCreditDeposits ?? []), ...pendingDeposits];
+      }
+      return savePatientRecord(next, current);
     });
+    for (const deposit of pendingDeposits) onCreditDeposit(stableForm, deposit);
     closePatient();
   }
 
@@ -3107,7 +3131,11 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
                 {professionals.map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}
               </select>
             </FormField>
-            <FormField label="Crédito futuro"><MoneyInput value={Number(patientForm.futureCredit) || 0} onChange={(value) => setPatientForm({ ...patientForm, futureCredit: value })} /></FormField>
+            <div className="space-y-1.5 text-xs text-slate-600">
+              <p className="font-semibold">Crédito futuro <strong className="ml-1 text-avvi-ink">{currency((Number(patients.find(patient => patient.id === patientForm.id)?.futureCredit) || 0) + pendingDeposits.reduce((sum, deposit) => sum + deposit.amount, 0))}</strong></p>
+              <button type="button" onClick={() => setCreditDialogOpen(true)} className="rounded-lg border border-avvi-line px-3 py-2 font-bold text-avvi-blue">Adicionar crédito futuro</button>
+              {pendingDeposits.length > 0 && <p>Os créditos serão registrados ao salvar o paciente.</p>}
+            </div>
             <FormField label="Observações"><textarea className="input min-h-20" value={patientForm.notes} onChange={(event) => setPatientForm({ ...patientForm, notes: event.target.value })} /></FormField>
           </div>
           {patientForm.id && (
@@ -3125,6 +3153,10 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
           </div>
         </ClinicalDialog>
       )}
+      {creditDialogOpen && <PatientCreditDialog onClose={() => setCreditDialogOpen(false)} onAdd={deposit => {
+        setPendingDeposits(current => [...current, deposit]);
+        setCreditDialogOpen(false);
+      }} />}
 
       <Panel>
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -3178,6 +3210,39 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
       {photoPatientId && patients.find(patient => patient.id === photoPatientId) && <PatientPhotos patient={patients.find(patient => patient.id === photoPatientId)!} onChange={patient => setPatients(patients.map(item => item.id === patient.id ? {...item, photos: patient.photos} : item))} onClose={() => setPhotoPatientId(null)} />}
     </div>
   );
+}
+
+function PatientCreditDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (deposit: PatientCreditDeposit) => void }) {
+  const [amount, setAmount] = useState(0);
+  const [method, setMethod] = useState<PatientCreditDeposit["method"]>("Pix");
+  const [cardBrand, setCardBrand] = useState<NonNullable<PatientCreditDeposit["cardBrand"]>>("Mastercard");
+  const [installments, setInstallments] = useState(1);
+  const [error, setError] = useState("");
+  const card = method === "Crédito" ? { cardBrand, installments } : {};
+
+  return <ClinicalDialog title="Adicionar crédito futuro" onClose={onClose}>
+    <form onSubmit={event => {
+      event.preventDefault();
+      const deposit = { id: `patient-credit-${crypto.randomUUID()}`, date: todayKey(), amount, method, ...card };
+      if (validPatientCreditDeposit(deposit)) onAdd(deposit);
+      else setError("Informe um valor válido a partir de R$ 0,01.");
+    }}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <FormField label="Valor do crédito"><MoneyInput value={amount} onChange={setAmount} /></FormField>
+        <FormField label="Forma de pagamento"><select className="input" value={method} onChange={event => setMethod(event.target.value as PatientCreditDeposit["method"])}>{paymentMethods.map(item => <option key={item}>{item}</option>)}</select></FormField>
+        {method === "Crédito" && <>
+          <FormField label="Bandeira"><select className="input" value={cardBrand} onChange={event => setCardBrand(event.target.value as typeof cardBrand)}>{cardBrands.map(item => <option key={item}>{item}</option>)}</select></FormField>
+          <FormField label="Parcelas"><select className="input" value={installments} onChange={event => setInstallments(Number(event.target.value))}>{paymentTerms.map(term => <option key={term} value={term}>{term}x</option>)}</select></FormField>
+        </>}
+      </div>
+      <p className="mt-3 text-sm text-slate-600">Taxa de maquininha estimada <strong>{currency(patientCreditFee({ method, amount, ...card }))}</strong></p>
+      {error && <p role="alert" className="mt-2 text-sm text-avvi-red">{error}</p>}
+      <div className="mt-4 flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="rounded-md border border-avvi-line px-4 py-2 text-sm">Cancelar</button>
+        <button type="submit" className="rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white">Adicionar crédito</button>
+      </div>
+    </form>
+  </ClinicalDialog>;
 }
 
 function PatientScheduleInfo({ patientId, appointments }: { patientId: string; appointments: Appointment[] }) {

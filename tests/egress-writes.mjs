@@ -2,7 +2,7 @@ import fs from 'node:fs';import os from 'node:os';import path from 'node:path';i
 import {matchesPostgrestFilters,projectPostgrestRow} from './postgrest-filters-helper.mjs';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'avvi-write-egress-')),require=createRequire(import.meta.url),originalFetch=globalThis.fetch;
 try{
- const modules=['postProcedure','packageSessions','stockAccess','inventory','gifts','servicePackages','anamnese','bodyAnamnese','strategyDefinitions','access','accessServer','accountsServer','accessSnapshot','database','supabase','persistence','ultraformer','agendaAvailability','invoices','appointmentServices','checkout','calculations'];
+ const modules=['patientCredit','paymentFees','postProcedure','packageSessions','stockAccess','inventory','gifts','servicePackages','anamnese','bodyAnamnese','strategyDefinitions','access','accessServer','accountsServer','accessSnapshot','database','supabase','persistence','ultraformer','agendaAvailability','invoices','appointmentServices','checkout','calculations'];
  for(const name of [...modules,'route']){
   let source=fs.readFileSync(name==='route'?'app/api/access/data/route.ts':`lib/${name}.ts`,'utf8');
   for(const dep of modules)source=source.replaceAll(`"./${dep}"`,`"./${dep}.mjs"`).replaceAll(`"@/lib/${dep}"`,`"./${dep}.mjs"`);
@@ -25,7 +25,11 @@ try{
   const url=new URL(input),method=init.method??'GET';
   if(url.pathname==='/rest/v1/avvi_user_accounts')return Response.json([{...user,version:1}]);
   assert.equal(url.pathname,'/rest/v1/avvi_records','This test never contacts a real service or sends messages');
-  if(method==='POST'){for(const row of JSON.parse(init.body))records.set(row.entity+':'+row.record_id,structuredClone(row));return new Response(null,{status:201});}
+  if(method==='POST'){
+   const payload=JSON.parse(init.body),rows=Array.isArray(payload)?payload:[payload];
+   for(const row of rows)records.set(row.entity+':'+row.record_id,structuredClone(row));
+   return new Response(null,{status:201});
+  }
   if(method==='DELETE'){for(const [key,row]of records)if(matchesPostgrestFilters(row,url))records.delete(key);return new Response(null,{status:204});}
   assert.equal(method,'GET');if(failReads)return Response.json({message:'isolated unavailable'},{status:503});
   const offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500),selection=url.searchParams.get('select');
@@ -62,6 +66,22 @@ try{
  assert.equal(result.status,200);const patientBytes=bytes;
  assert.ok(bytes<1000,'Editing a patient only reads the stored imported balances');
  assert.deepEqual(records.get('patients:patient').data.importedPackages,importedPackages);
+ const creditRow=(balance,deposits)=>({entity:'patients',record_id:'patient',data:{id:'patient',name:'Paciente QA',futureCredit:balance,futureCreditDeposits:deposits}});
+ const cardDeposit={id:'patient-credit-7871ed11-3fc4-4f96-9da5-b9089bdb362f',date:'2026-11-13',amount:100,method:'Crédito',cardBrand:'Elo',installments:2};
+ result=await save([creditRow(100,[cardDeposit])]);assert.equal(result.status,403,'Agenda alone cannot record a registration deposit');
+ user.tabs.push('Cadastro de Pacientes');
+ result=await save([creditRow(100,[cardDeposit])]);assert.equal(result.status,200,await result.text());
+ assert.equal(records.get('patients:patient').data.futureCredit,100);
+ const feeId=`fixed_costs:taxa-maquininha-patient-${cardDeposit.id}`;
+ assert.equal(records.get(feeId).data.value,4.64);assert.equal(records.get(feeId).data.dueDate,cardDeposit.date);
+ const savedFee=structuredClone(records.get(feeId));
+ result=await save([creditRow(100,[cardDeposit])]);assert.equal(result.status,200);assert.deepEqual(records.get(feeId),savedFee,'An acknowledged retry keeps a single fee');
+ assert.equal((await save([creditRow(200,[{...cardDeposit,amount:200}])])).status,409);
+ const pix={id:'patient-credit-eebcbd45-5dd5-4031-9fb2-b84a4cfc1ffa',date:'2026-11-13',amount:50,method:'Pix'};
+ assert.equal((await save([creditRow(50,[pix])])).status,409,'A stale balance cannot erase a prior deposit');
+ result=await save([creditRow(150,[cardDeposit,pix])]);assert.equal(result.status,200);
+ assert.equal(records.get('patients:patient').data.futureCredit,150);
+ assert.ok(!records.has(`fixed_costs:taxa-maquininha-patient-${pix.id}`));
  const stock={id:'stock-row',procedureId:'used-product',quantity:8};
  const gift={id:'used-gift',name:'Brinde QA',quantity:5};
  put('inventory',stock);put('gifts',gift);

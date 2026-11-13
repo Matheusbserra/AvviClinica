@@ -48,6 +48,22 @@ try {
   assert.equal(report.reports[0].products.length,5);assert.equal(report.reports[0].products[0].value,8);assert.equal(report.reports[0].products[4].value,4);
   assert.equal(professionalReports({...input,start:"2026-10-09",end:"2026-10-09"}).reports[0].products.length,0);
   assert.equal(professionalReports({...input,start:"2026-10-31",end:"2026-10-01"}).reports[0].products.length,0);
+  const creditInput = { ...input, appointments: [], entries: [], patients: [
+    { id: "credit", name: "Clara", professionalId: "a", futureCredit: 150.10 },
+    { id: "extra", name: "Daniela", professionalId: "a", futureCredit: 24.75 },
+    { id: "zero", professionalId: "a", futureCredit: 0 },
+    { id: "negative", professionalId: "a", futureCredit: -5 },
+    { id: "other", professionalId: "b", futureCredit: 25 },
+    { id: "unlinked", futureCredit: 999 },
+  ] };
+  for (const month of ["2026-09", "2026-10"]) {
+    const reports = professionalReports({ ...creditInput, start: month + "-01", end: month + "-30" }).reports;
+    assert.deepEqual(reports.map(item => [item.professional.id, item.futureCreditBalance, item.patientsWithFutureCredit, item.totalPaid]), [["a", 174.85, 2, 0], ["b", 25, 1, 0]]);
+  }
+  const creditUsed = entry({ id: "credit-used", accountClosed: true, patientId: "credit", payments: [{ method: "Crédito Futuro", amount: 40, fee: 0, discount: 0 }] });
+  report = professionalReports({ ...creditInput, entries: [creditUsed], patients: creditInput.patients.map(patient => patient.id === "credit" ? { ...patient, futureCredit: 110.10 } : patient) });
+  assert.equal(report.reports[0].totalPaid, 40);
+  assert.equal(report.reports[0].futureCreditBalance, 134.85);
   const restricted = { role: "standard", login: "reports-only", tabs: ["Relatório Profissional"] };
   for (const entity of ["patients", "services", "appointments", "financial_entries", "professionals", "monthly_goals"]) { assert.equal(canReadEntity(restricted, entity), true); assert.equal(canWriteEntity(restricted, entity), false); }
   console.log("PASS: Existing financial calculations unchanged, individual Top 5 services, products and patient rankings, separate service/product quantities, generated and legacy service deduplication, patients grouped by ID, discounts/costs/commissions, inactive/empty professionals, periods/goals, no data mutation and read-only permissions.");

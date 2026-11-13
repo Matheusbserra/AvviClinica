@@ -72,6 +72,10 @@ export function ProfessionalReportView(props: {
           </button>
           <div className="px-5 pb-5">
             <div className="rounded-xl bg-avvi-soft/50 p-3"><div className="flex flex-wrap justify-between gap-2 text-sm"><span className="text-slate-600">Total pago pelos clientes</span><strong data-testid={`professional-total-paid-${id}`}>{currency(item.totalPaid)}</strong></div><div className="mt-3 flex justify-between gap-2 text-xs text-slate-500"><span>Meta: {currency(item.goal)}</span><strong>{percent(progress)}</strong></div><div aria-hidden className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-avvi-blue" style={{ width: `${progress}%` }}/></div></div>
+            <div className="mt-3 rounded-xl border border-avvi-line p-3 text-sm">
+              <FinancialLine label="Crédito futuro disponível" value={item.futureCreditBalance} tone="gold" />
+              <p className="mt-1 text-xs text-slate-500">{item.patientsWithFutureCredit} {item.patientsWithFutureCredit === 1 ? "paciente vinculado" : "pacientes vinculados"} com saldo atual</p>
+            </div>
             {item.monthlyInsights && <MonthlyInsights name={name} values={item.monthlyInsights}/>}
             {limited && <div className="mt-3 rounded-xl border border-avvi-line p-3 text-sm"><FinancialLine label="Ticket médio" value={item.averageTicket ?? 0} tone="slate"/><p className="mt-2 text-[11px] text-slate-500">Total pago ÷ {item.closedPatientCount} {item.closedPatientCount === 1 ? "paciente com conta fechada" : "pacientes com conta fechada"} no período. Cada paciente conta uma vez.</p></div>}
             {!limited && <button type="button" className="mt-3 flex items-center gap-2 text-sm font-semibold text-avvi-blue disabled:opacity-70" disabled={showAllFinancials} aria-expanded={showValues} aria-controls={`professional-financials-${id}`} onClick={() => setVisibleFinancials(toggle(visibleFinancials, id))}>{showValues ? <EyeOff size={16}/> : <Eye size={16}/>} {showValues ? "Ocultar valores financeiros" : "Ver valores financeiros"}</button>}

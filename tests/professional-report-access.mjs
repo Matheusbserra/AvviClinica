@@ -16,6 +16,14 @@ try {
  const ledger=(id,prof,patient,amount)=>({id,professionalId:prof,patientId:patient,date:"2026-10-09",quantity:1,servicePrice:amount,productCost:100,machineFee:0,commercialDiscount:0,accountClosed:true,professionalPercent:30,discountSplit:"Empresa assume",payments:[{amount,fee:0,discount:0}],products:[{procedureId:"product",quantity:3}],procedureLines:[{serviceId:"s",quantity:2,servicePrice:amount/2,productCost:50,professionalPercent:30}]});
  const input={start:"2026-10-01",end:"2026-10-31",professionals:[{id:"a",name:"Ana",monthlyGoal:5000,commissionPercent:30,notes:"PRIVATE",avatarDataUrl:"data:image/png;base64,dGVzdA=="},{id:"b",name:"Bia secreta",monthlyGoal:999999}],patients:[{id:"p1",name:"Camila"},{id:"p2",name:"Daniela"},{id:"private",name:"Paciente secreto"}],procedures:[{id:"product",name:"Produto QA",averageCost:999,professionalPercent:30}],services:[{id:"s",name:"Avaliação"}],appointments:[],monthlyGoals:[],entries:[ledger("e1","a","p1",900),ledger("e2","a","p2",300),ledger("private-entry","b","private",99999)]};
  const result=limitedProfessionalReports(user,input);assert.equal(result.reports.length,1);const ana=result.reports[0];
+  const scopedCredit = limitedProfessionalReports(user, { ...input, patients: [...input.patients,
+    { id: "balance-owner", name: "Somente saldo", professionalId: "a", futureCredit: 55 },
+    { id: "other-balance", name: "Saldo fora do escopo", professionalId: "b", futureCredit: 777 },
+  ] });
+  assert.equal(scopedCredit.reports[0].futureCreditBalance, 55);
+  assert.equal(scopedCredit.reports[0].patientsWithFutureCredit, 1);
+  assert.equal(scopedCredit.reports[0].totalPaid, 1200);
+  assert.ok(!JSON.stringify(scopedCredit).includes("balance-owner") && !JSON.stringify(scopedCredit).includes("777"));
  assert.equal(ana.averageTicket,600);assert.equal(ana.closedPatientCount,2);assert.equal(ana.totalPaid,1200);assert.equal(ana.goal,5000);assert.equal(ana.services[0].value,4);assert.equal(ana.patientServices[0].value,2);
  assert.deepEqual(ana.patientRevenue,[{id:"p1",name:"Camila",value:900},{id:"p2",name:"Daniela",value:300}]);assert.deepEqual(Object.keys(ana.professional).sort(),["avatarDataUrl","id","name"]);
  for(const forbidden of ["patientProfit","averageCost","totalProfit","companyRevenue","professionalValue","commissionPercent","productCost","PRIVATE","Bia secreta","Paciente secreto","99999"]) assert.equal(JSON.stringify(result).includes(forbidden),false,forbidden);

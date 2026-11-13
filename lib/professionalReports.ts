@@ -14,6 +14,7 @@ export type MonthlyProfessionalInsights = {
 };
 export type ProfessionalReport = {
   professional: Professional; goal: number; totalPaid: number; totalProfit: number;
+  futureCreditBalance: number; patientsWithFutureCredit: number;
   companyRevenue: number; professionalValue: number; count: number; serviceCount: number; closedPatientCount: number; averageTicket: number;
   services: IndividualRanking[]; patientRevenue: IndividualRanking[];
   products: IndividualRanking[]; patientServices: IndividualRanking[];
@@ -37,7 +38,7 @@ function periodProfessionalReports(input: {
   const top = (rows: Map<string, IndividualRanking>) => [...rows.values()].sort((a, b) => b.value - a.value || a.name.localeCompare(b.name, "pt-BR") || a.id.localeCompare(b.id)).slice(0, 5);
   const number = (value: number) => Number.isFinite(value) ? value : 0;
   const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
-  const reports: ProfessionalReport[] = input.professionals.map(professional => {
+  const reports = input.professionals.map(professional => {
     const revenue = new Map<string, IndividualRanking>();
     const serviceUsage = new Map<string, IndividualRanking>(), patientUsage = new Map<string, IndividualRanking>();
     const add = (map: Map<string, IndividualRanking>, id: string | undefined, name: string, value: number) => {
@@ -107,7 +108,23 @@ function periodProfessionalReports(input: {
 }
 
 export function professionalReports(input: Parameters<typeof periodProfessionalReports>[0]) {
-  const result = periodProfessionalReports(input);
+  const periodResult = periodProfessionalReports(input);
+  const creditByProfessional = new Map<string, { cents: number; patients: number }>();
+  for (const patient of input.patients) {
+    const balance = Number(patient.futureCredit);
+    if (!patient.professionalId || !Number.isFinite(balance) || balance <= 0) continue;
+    const credit = creditByProfessional.get(patient.professionalId) ?? { cents: 0, patients: 0 };
+    credit.cents += Math.round((balance + Number.EPSILON) * 100);
+    credit.patients++;
+    creditByProfessional.set(patient.professionalId, credit);
+  }
+  const result: { valid: boolean; reports: ProfessionalReport[] } = {
+    valid: periodResult.valid,
+    reports: periodResult.reports.map(item => {
+      const credit = creditByProfessional.get(item.professional.id);
+      return { ...item, futureCreditBalance: (credit?.cents ?? 0) / 100, patientsWithFutureCredit: credit?.patients ?? 0 };
+    }),
+  };
   if (!result.valid) return result;
   // In date-range mode the indicators explicitly identify the last calendar
   // month in the range. Range totals and rankings retain their original period.

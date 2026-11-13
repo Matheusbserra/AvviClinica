@@ -45,7 +45,13 @@ export type Professional = {
   monthlyGoal: number;
 };
 
+export type PatientCreditDeposit = {
+  id: string; date: string; amount: number; method: "Pix" | "Crédito" | "Débito" | "Dinheiro";
+  cardBrand?: "Mastercard" | "Visa" | "Elo"; installments?: number;
+};
+
 export type Patient = {
+  futureCreditDeposits?: PatientCreditDeposit[];
   photos?: PatientPhoto[];
   importedPackages?: ImportedPatientPackage[];
   id: string;
