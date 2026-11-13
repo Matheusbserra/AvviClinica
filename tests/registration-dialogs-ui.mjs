@@ -17,8 +17,9 @@ try {
     for (const entity of Object.keys(snapshot.data)) snapshot.data[entity] = [];
     snapshot.data.professionals = [{id: 'pro', name: 'Profissional QA', active: true, closedShifts: []}];
     snapshot.data.patients = [
-      {id: 'credit', name: 'Márcia Costa QA', phone: '98900000000', cpf: '', birthDate: '', notes: '', professionalId: 'pro', futureCredit: 125.50},
-      {id: 'zero', name: 'Outra pessoa QA', phone: '', cpf: '', birthDate: '', notes: '', futureCredit: 0},
+      {id: 'credit', name: 'Márcia Costa QA', phone: '98900000000', cpf: '', birthDate: '1989-12-28', notes: '', professionalId: 'pro', futureCredit: 125.50},
+      {id: 'zero', name: 'Outra pessoa QA', phone: '', cpf: '', birthDate: '1997-01-03', notes: '', futureCredit: 0},
+      {id: 'leap', name: 'Pessoa Bissexta QA', phone: '', cpf: '', birthDate: '2000-02-29', notes: '', futureCredit: 0},
       {id: 'unlinked', name: 'Paciente sem vínculo QA', phone: '', cpf: '', birthDate: '', notes: '', futureCredit: 30}
     ];
     snapshot.data.procedures = [{id: 'product', name: 'Produto QA', category: 'QA', price: 100, averageCost: 45, professionalPercent: 70, notes: '', active: true}];
@@ -28,6 +29,28 @@ try {
   await navigationButton(page, 'Cadastro de Pacientes').click();
   const search = page.getByRole('searchbox', {name: 'Pesquisar paciente pelo nome'});
   const row = name => page.getByRole('row').filter({hasText: name});
+  const birthdayStart = page.getByLabel('Aniversariantes de', {exact: true});
+  const birthdayEnd = page.getByLabel('Aniversariantes até', {exact: true});
+  await birthdayStart.fill('2026-12-28');
+  await birthdayEnd.fill('2027-01-03');
+  assert.equal(await row('Márcia Costa QA').getByRole('cell', {name: '28/12', exact: true}).count(), 1);
+  assert.equal(await row('Outra pessoa QA').getByRole('cell', {name: '03/01', exact: true}).count(), 1);
+  assert.equal(await row('Paciente sem vínculo QA').count(), 0);
+  assert.equal(await row('Pessoa Bissexta QA').count(), 0);
+  await search.fill('costa');
+  assert.equal(await row('Outra pessoa QA').count(), 0);
+  await search.clear();
+  await birthdayEnd.fill('2026-12-27');
+  await page.getByRole('alert').filter({hasText: 'A data final deve ser'}).waitFor();
+  await birthdayStart.fill('2027-02-28');
+  await birthdayEnd.fill('2027-03-01');
+  await page.getByText('Nenhum aniversariante encontrado no período.').waitFor();
+  await birthdayStart.fill('2028-02-29');
+  await birthdayEnd.fill('2028-02-29');
+  assert.equal(await row('Pessoa Bissexta QA').getByRole('cell', {name: '29/02', exact: true}).count(), 1);
+  await page.getByRole('button', {name: 'Limpar datas'}).click();
+  await row('Paciente sem vínculo QA').waitFor();
+  assert.equal(await page.getByRole('columnheader', {name: 'Aniversário'}).count(), 0);
   await search.fill('COSTA marcia');
   await row('Márcia Costa QA').waitFor();
   assert.equal(await row('Outra pessoa QA').count(), 0);
@@ -78,7 +101,7 @@ try {
   await navigationButton(page, 'Cadastro de Pacientes').click();
   await creditTab.click();
   assert.match(await row('Paciente nova QA').innerText(), /55,00/);
-  console.log('PASS: patient and product dialogs, cancel/save/reload, accent-insensitive search, positive credit and linked professional. Isolated fixtures.');
+  console.log('PASS: patient and product dialogs, cancel/save/reload, accent-insensitive search, birthdays across years and leap days, positive credit and linked professional. Isolated fixtures.');
 } finally {
   await browser.close();
 }

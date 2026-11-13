@@ -73,6 +73,7 @@ import type { ServicePackage } from "@/lib/servicePackages";
 import { packageSessionError, isPackageSessionTreatment } from "@/lib/packageSessions";
 import { SearchSelect } from "@/app/components/SearchSelect";
 import { matchesSearch } from "@/lib/search";
+import { birthdayInPeriod } from "@/lib/patientBirthdays";
 import { History } from "lucide-react";
 import { UltraformerView } from "@/app/components/UltraformerView";
 import { InventorySection } from "@/app/components/GiftInventoryView";
@@ -3018,10 +3019,17 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
   const [photoPatientId, setPhotoPatientId] = useState<string | null>(null);
   const [patientList, setPatientList] = useState<"all" | "credit">("all");
   const [patientQuery, setPatientQuery] = useState("");
-  const matchingPatients = patients.filter(patient => matchesSearch(patient.name, patientQuery));
-  const visiblePatients = patientList === "credit"
-    ? matchingPatients.filter(patient => Number(patient.futureCredit) > 0)
-    : matchingPatients;
+  const [birthdayStart, setBirthdayStart] = useState("");
+  const [birthdayEnd, setBirthdayEnd] = useState("");
+  const invalidBirthdayRange = Boolean(birthdayStart && birthdayEnd && birthdayStart > birthdayEnd);
+  const filterBirthdays = Boolean(birthdayStart && birthdayEnd && !invalidBirthdayRange);
+  const birthdayColumn = filterBirthdays ? ["Aniversário"] : [];
+  const visiblePatients = useMemo(() => patients.filter(patient =>
+    (patientList !== "credit" || Number(patient.futureCredit) > 0) &&
+    matchesSearch(patient.name, patientQuery) &&
+    (!filterBirthdays || birthdayInPeriod(patient.birthDate, birthdayStart, birthdayEnd))
+  ), [patients, patientList, patientQuery, filterBirthdays, birthdayStart, birthdayEnd]);
+  const birthdayCell = (patient: Patient) => filterBirthdays ? [patient.birthDate.slice(5).split("-").reverse().join("/")] : [];
   const professionalNames = new Map(professionals.map(professional => [professional.id, professional.name]));
   const professionalName = (patient: Patient) => professionalNames.get(patient.professionalId ?? "") || "Sem profissional vinculada";
 
@@ -3124,23 +3132,36 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
             <button type="button" role="tab" aria-selected={patientList === "all"} onClick={() => setPatientList("all")} className={patientList === "all" ? "rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white" : "rounded-md border border-avvi-line px-4 py-2 text-sm font-bold text-avvi-blue"}>Todos os pacientes</button>
             <button type="button" role="tab" aria-selected={patientList === "credit"} onClick={() => setPatientList("credit")} className={patientList === "credit" ? "rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white" : "rounded-md border border-avvi-line px-4 py-2 text-sm font-bold text-avvi-blue"}>Pacientes com crédito</button>
           </div>
-          <div className="w-full sm:max-w-xs">
-            <FormField label="Pesquisar paciente pelo nome">
-              <input type="search" className="input" value={patientQuery} onChange={event => setPatientQuery(event.target.value)} />
-            </FormField>
+          <div className="flex w-full flex-wrap items-end gap-x-4 gap-y-3 lg:w-auto">
+            <div className="w-full sm:w-60">
+              <FormField label="Pesquisar paciente pelo nome">
+                <input type="search" className="input" value={patientQuery} onChange={event => setPatientQuery(event.target.value)} />
+              </FormField>
+            </div>
+            <fieldset>
+              <legend className="mb-1 text-xs font-semibold text-slate-600">Aniversariantes</legend>
+              <div className="flex flex-wrap items-end gap-2">
+                <input type="date" className="input w-auto" aria-label="Aniversariantes de" aria-invalid={invalidBirthdayRange} value={birthdayStart} onChange={event => setBirthdayStart(event.target.value)} />
+                <span className="self-center text-xs text-slate-600">até</span>
+                <input type="date" className="input w-auto" aria-label="Aniversariantes até" aria-invalid={invalidBirthdayRange} value={birthdayEnd} onChange={event => setBirthdayEnd(event.target.value)} />
+                {(birthdayStart || birthdayEnd) && <button type="button" onClick={() => { setBirthdayStart(""); setBirthdayEnd(""); }} className="rounded-lg border border-avvi-line px-3 py-2 text-xs font-bold text-avvi-blue">Limpar datas</button>}
+              </div>
+            </fieldset>
           </div>
         </div>
+        {invalidBirthdayRange && <p role="alert" className="mb-3 text-sm text-avvi-red">A data final deve ser igual ou posterior à inicial.</p>}
         {!visiblePatients.length ? (
-          <p role="status" className="py-6 text-center text-sm text-slate-500">{patientList === "credit" ? "Nenhum paciente com crédito encontrado." : "Nenhum paciente encontrado."}</p>
+          <p role="status" className="py-6 text-center text-sm text-slate-500">{filterBirthdays ? "Nenhum aniversariante encontrado no período." : patientList === "credit" ? "Nenhum paciente com crédito encontrado." : "Nenhum paciente encontrado."}</p>
         ) : patientList === "credit" ? (
-          <DataTable compact headers={["Paciente", "Crédito disponível", "Profissional"]} rows={visiblePatients.map(patient => [
-            patient.name, currency(Number(patient.futureCredit)), professionalName(patient)
+          <DataTable compact headers={["Paciente", ...birthdayColumn, "Crédito disponível", "Profissional"]} rows={visiblePatients.map(patient => [
+            patient.name, ...birthdayCell(patient), currency(Number(patient.futureCredit)), professionalName(patient)
           ])} />
         ) : (
         <DataTable
-          headers={["Nome", "Gênero", "Telefone", "CPF", "Cadastro", "Pontos", "Profissional", "Crédito futuro", "Observações", "Ações"]}
+          headers={["Nome", ...birthdayColumn, "Gênero", "Telefone", "CPF", "Cadastro", "Pontos", "Profissional", "Crédito futuro", "Observações", "Ações"]}
           rows={visiblePatients.map((patient) => [
             patient.name,
+            ...birthdayCell(patient),
             patient.gender || "-",
             patient.phone || "-",
             patient.cpf || "-",
