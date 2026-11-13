@@ -1,5 +1,5 @@
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import assert from 'node:assert/strict';import {pathToFileURL} from 'node:url';import {createRequire} from 'node:module';import ts from 'typescript';
-import {matchesPostgrestFilters} from './postgrest-filters-helper.mjs';
+import {matchesPostgrestFilters,projectPostgrestRow} from './postgrest-filters-helper.mjs';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'avvi-write-egress-')),require=createRequire(import.meta.url),originalFetch=globalThis.fetch;
 try{
  const modules=['postProcedure','packageSessions','stockAccess','inventory','gifts','servicePackages','anamnese','bodyAnamnese','strategyDefinitions','access','accessServer','accountsServer','accessSnapshot','database','supabase','persistence','ultraformer','agendaAvailability','invoices','appointmentServices','checkout','calculations'];
@@ -30,8 +30,7 @@ try{
   assert.equal(method,'GET');if(failReads)return Response.json({message:'isolated unavailable'},{status:503});
   const offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500),selection=url.searchParams.get('select');
   let rows=[...records.values()].filter(row=>matchesPostgrestFilters(row,url)).sort((a,b)=>a.record_id.localeCompare(b.record_id)).slice(offset,offset+limit);
-  if(selection==='record_id')rows=rows.map(({record_id})=>({record_id}));
-  else if(selection==='data')rows=rows.map(({data})=>({data}));
+  rows=rows.map(row=>projectPostgrestRow(row,selection));
   const body=JSON.stringify(new Headers(init.headers).get('accept')?.includes('vnd.pgrst.object')?(rows[0]??null):rows);bytes+=Buffer.byteLength(body);reads.push({entity:url.searchParams.get('entity'),count:rows.length,selection});
   return new Response(body,{headers:{'Content-Type':'application/json'}});
  };
@@ -57,6 +56,28 @@ try{
  const form={id:'new-form',patientId:'patient',professionalId:'pro',date:'2026-11-10',templateVersion:1,answers:{name:'Paciente QA',bruxism:'Sim',bruxismOptions:['Dormindo']}};
  result=await save([{entity:'anamneses',record_id:form.id,data:form}]);assert.equal(result.status,200);const clinicalBytes=bytes;assert.ok(bytes<10000,'Creating a clinical form must not download every form or patient');
  const revision={...records.get('anamneses:new-form').data,answers:{...form.answers,bruxism:'Não'}};result=await save([{entity:'anamneses',record_id:form.id,data:revision}]);assert.equal(result.status,200);assert.equal(records.get('anamneses:new-form').data.answers.bruxism,'Não');assert.ok(bytes<10000);
+ const importedPackages=[{id:'legacy-package',name:'Pacote QA',purchasedOn:'2026-10-01',expiresOn:'2027-01-01',remainingSessions:2,saleValue:100,professionalName:'Profissional QA',source:'legacy-csv'}];
+ put('patients',{id:'patient',name:'Paciente QA',notes:'x'.repeat(100000),importedPackages});
+ result=await save([{entity:'patients',record_id:'patient',data:{id:'patient',name:'Paciente QA editado',notes:'x'.repeat(100000)}}]);
+ assert.equal(result.status,200);const patientBytes=bytes;
+ assert.ok(bytes<1000,'Editing a patient only reads the stored imported balances');
+ assert.deepEqual(records.get('patients:patient').data.importedPackages,importedPackages);
+ const stock={id:'stock-row',procedureId:'used-product',quantity:8};
+ const gift={id:'used-gift',name:'Brinde QA',quantity:5};
+ put('inventory',stock);put('gifts',gift);
+ for(let i=0;i<350;i++){
+  put('inventory',{id:'unused-stock-'+i,procedureId:'unused-product-'+i,quantity:10});
+  put('gifts',{id:'unused-gift-'+i,name:'Brinde não utilizado',quantity:10});
+ }
+ const productUse={id:'product-use',procedureId:'used-product',quantity:1,unitCost:20};
+ const giftUse={id:'gift-use',giftId:gift.id,name:gift.name,quantity:1};
+ const stockedVisit={...closed,stockConsumption:[{procedureId:'used-product',quantity:1}],giftConsumption:[giftUse],closedAccount:{...closed.closedAccount,procedureLines:[{servicePrice:100,quantity:1}],products:[productUse],gifts:[giftUse],payments:[{amount:100}]}};
+ const stockRows=[{entity:'inventory',record_id:stock.id,data:{...stock,quantity:7}},{entity:'gifts',record_id:gift.id,data:{...gift,quantity:4}}];
+ result=await save([update(stockedVisit),...stockRows]);assert.equal(result.status,200);const stockBytes=bytes;
+ assert.ok(bytes<10000,'Checkout only reads the relevant inventory and gifts');
+ assert.equal(records.get('inventory:'+stock.id).data.quantity,7);
+ assert.equal(records.get('gifts:'+gift.id).data.quantity,4);
+ result=await save([{entity:'inventory',record_id:stock.id,data:{...stock,quantity:99}}]);assert.equal(result.status,403,'The stock limit still blocks arbitrary quantity changes');
  failReads=true;result=await save([update({...fresh,notes:'pending'})]);assert.equal(result.status,503,'A failed targeted read must never be treated as an empty agenda');assert.equal(records.get('appointments:fresh').data.accountClosed,true);failReads=false;
- console.log(`PASS: isolated reads transfer booking ${bookingBytes} B, closure ${closureBytes} B and clinical create ${clinicalBytes} B despite 3500 historical visits and 300 heavy forms/patients/professionals. Conflicts, all rooms, cancellations, fractional/overnight intervals, foreign account IDs, saved answers and read failures remain protected.`);
+ console.log(`PASS: booking ${bookingBytes} B, closure ${closureBytes} B, clinical create ${clinicalBytes} B, patient edit ${patientBytes} B and stock/gift checkout ${stockBytes} B in isolated fixtures. Conflict, permission, stock and read-failure checks preserved.`);
 }finally{globalThis.fetch=originalFetch;assert.equal(path.dirname(path.resolve(dir)),path.resolve(os.tmpdir()));fs.rmSync(dir,{recursive:true,force:true});}

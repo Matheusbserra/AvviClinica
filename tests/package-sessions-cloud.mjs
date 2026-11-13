@@ -1,3 +1,4 @@
+import { matchesPostgrestFilters, projectPostgrestRow } from './postgrest-filters-helper.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {pathToFileURL} from 'node:url';import {createRequire} from 'node:module';import ts from 'typescript';
 import {createPackageTestDatabase} from './package-session-db-helper.mjs';
@@ -13,7 +14,7 @@ try{
  Object.assign(process.env,{AVVI_SESSION_SECRET:'isolated-package-sessions-secret-2026',NEXT_PUBLIC_SUPABASE_URL:'https://package-sessions-test.supabase.co',NEXT_PUBLIC_SUPABASE_ANON_KEY:'sb_publishable_isolated_test',SUPABASE_SERVICE_ROLE_KEY:'sb_secret_isolated_test',AVVI_LOCAL_ACCOUNTS_DIRECTORY:path.join(dir,'private')});delete process.env.VERCEL;
  const load=name=>import(pathToFileURL(path.join(dir,name+'.mjs'))),auth=await load('accessServer'),route=await load('route'),packages=await load('servicePackages');
  const operator={id:'operator',login:'operator',role:'standard',tabs:['Agenda'],version:1},admin={login:'admin',role:'admin'};
- const noRpc=process.env.AVVI_PACKAGE_TEST_NO_RPC==='1';let missingRpc=noRpc,rpcCalls=0,loseInsertAck=false,rpcFailure=false;
+ const noRpc=process.env.AVVI_PACKAGE_TEST_NO_RPC==='1';let missingRpc=noRpc,rpcCalls=0,loseInsertAck=false,rpcFailure=false,appointmentReadBytes=0;
  globalThis.fetch=async(raw,init={})=>{
   const url=new URL(raw),method=init.method??'GET';assert.equal(url.hostname,'package-sessions-test.supabase.co');
   if(url.pathname==='/rest/v1/avvi_user_accounts')return Response.json([operator]);
@@ -32,15 +33,14 @@ try{
    return new Response('[]',{status:201});
   }
   const result=await db.query('select entity,record_id,data,updated_at from avvi_records order by entity,record_id');
-  const matches=row=>[...url.searchParams].every(([field,value])=>{
-   const actual=field==='entity'?row.entity:field==='record_id'?row.record_id:field==='data'?JSON.stringify(row.data):field.startsWith('data->>')?row.data[field.slice(7)]:undefined;
-   return actual===undefined||!value.startsWith('eq.')||(field==='data'?JSON.stringify(JSON.parse(String(actual)))===JSON.stringify(JSON.parse(value.slice(3))):String(actual)===value.slice(3));
-  });
+  const matches=row=>matchesPostgrestFilters(row,url);
   const rows=result.rows.filter(matches);
   if(method==='PATCH'){const body=JSON.parse(init.body);for(const row of rows)await db.query('update avvi_records set data=$3,updated_at=clock_timestamp() where entity=$1 and record_id=$2',[row.entity,row.record_id,JSON.stringify(body.data)]);return Response.json(rows.map(row=>({...row,...body})));}
   if(method==='DELETE'){for(const row of rows)await db.query('delete from avvi_records where entity=$1 and record_id=$2',[row.entity,row.record_id]);return new Response(null,{status:204});}
   const offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500);
-  return Response.json(new Headers(init.headers).get('accept')?.includes('vnd.pgrst.object')?(rows[0]??null):rows.slice(offset,offset+limit));
+  const page = rows.slice(offset,offset+limit).map(row=>projectPostgrestRow(row,url.searchParams.get("select")));
+  if(url.searchParams.get('entity')==='eq.appointments')appointmentReadBytes+=Buffer.byteLength(JSON.stringify(page));
+  return Response.json(new Headers(init.headers).get('accept')?.includes('vnd.pgrst.object')?(page[0]??null):page);
  };
  const request=(body,user=admin)=>new Request('http://test/api/access/data',{method:'POST',headers:{origin:'http://test','Content-Type':'application/json',...(user?{cookie:auth.accessCookie+'='+auth.signAccess(user)}:{})},body:JSON.stringify(body)});
  const row=(entity,data)=>({entity,record_id:data.id,data});
@@ -115,6 +115,13 @@ try{
  rpcFailure=true;assert.equal((await save([row('appointments',sale)])).status,503,'An actual RPC database failure cannot silently fall back to another write');rpcFailure=false;
  assert.equal(await read('_package_checkout_lock','checkout'),undefined,'Lease released after an unsuccessful save');
  const privateRead=await route.GET(new Request('http://test/api/access/data?entity=_package_checkout_lock',{headers:{cookie:auth.accessCookie+'='+auth.signAccess(admin)}}));assert.equal(privateRead.status,403);
+ await db.query(`insert into avvi_records(entity,record_id,data)
+   select 'appointments','history-'||id,jsonb_build_object('id','history-'||id,'startsAt','2025-01-01T08:00:00','endsAt','2025-01-01T09:00:00','notes',repeat('x',1200),'accountClosed',true,'closedAccount',jsonb_build_object('id','old-account-'||id,'packageSessionUses','[]'::jsonb,'procedureLines','[]'::jsonb))
+   from generate_series(1,3500) id`);
+ appointmentReadBytes=0;
+ assert.equal((await save([row('appointments',immediate)],user)).status,200);
+ assert.ok(appointmentReadBytes<50000,`Package saves must skip 3500 unrelated appointments (${appointmentReadBytes} bytes)`);
+ console.log(`PASS: package checkout reads ${appointmentReadBytes} B of appointment data with 3500 unrelated bookings.`);
  assert.ok(rpcCalls>=5);
  console.log('PASS: migration executes/reexecutes in isolated PostgreSQL, service-only RPC, missing optional migration saves in the existing table, same-sale consumption, expired lease recovery, real authenticated gateway/admin/standard, stale concurrent consumptions serialize with one rejected, idempotent retry, patient/source/quantity guards, used-sale deletion blocked, consumption reversal, zero-charge stock consumption once, transactional rollback. No real cloud.');
 }finally{await db.close();fs.rmSync(dir,{recursive:true,force:true});}

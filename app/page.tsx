@@ -70,6 +70,7 @@ import { PackagesView } from "@/app/components/PackagesView";
 import type { ServicePackage } from "@/lib/servicePackages";
 import { packageSessionError, isPackageSessionTreatment } from "@/lib/packageSessions";
 import { SearchSelect } from "@/app/components/SearchSelect";
+import { matchesSearch } from "@/lib/search";
 import { History } from "lucide-react";
 import { UltraformerView } from "@/app/components/UltraformerView";
 import { InventorySection } from "@/app/components/GiftInventoryView";
@@ -2751,6 +2752,7 @@ function ServicesView({ services, setServices, packages, setPackages }: { servic
 }
 
 function ProceduresView({ procedureForm, setProcedureForm, procedures, setProcedures, saveProcedure }: { procedureForm: ReturnType<typeof makeProcedureForm>; setProcedureForm: (form: ReturnType<typeof makeProcedureForm>) => void; procedures: Procedure[]; setProcedures: (items: Procedure[]) => void; saveProcedure: () => void }) {
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const productCost = Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
   const taxValue = (Number(procedureForm.price) || 0) * ((Number(procedureForm.taxPercent) || 0) / 100);
   const clinicCost = Number(procedureForm.clinicCost) || 0;
@@ -2829,7 +2831,13 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
           </div>
           <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{procedures.length} produtos</span>
         </div>
-        <div className="grid gap-3 md:grid-cols-3">
+        <button type="button" onClick={() => { setProcedureForm(makeProcedureForm()); setIsFormOpen(true); }} className="rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white">
+          <Plus className="mr-2 inline" size={16} />Adicionar produto
+        </button>
+      </Panel>
+      {isFormOpen && (
+        <ClinicalDialog title={procedureForm.id ? "Editar produto" : "Adicionar produto"} onClose={() => setIsFormOpen(false)}>
+          <div className="grid gap-3 md:grid-cols-3">
           <FormField label="Nome"><input className="input" value={procedureForm.name} onChange={(event) => setProcedureForm({ ...procedureForm, name: event.target.value })} /></FormField>
           <FormField label="Categoria"><input className="input" value={procedureForm.category} onChange={(event) => setProcedureForm({ ...procedureForm, category: event.target.value })} /></FormField>
           <FormField label="Preço padrão"><MoneyInput value={Number(procedureForm.price)} onChange={(value) => setProcedureForm({ ...procedureForm, price: value })} /></FormField>
@@ -2843,8 +2851,12 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
           </div>
           <FormField label="Observações"><input className="input" value={procedureForm.notes} onChange={(event) => setProcedureForm({ ...procedureForm, notes: event.target.value })} /></FormField>
         </div>
-        <button onClick={saveProcedure} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white">Salvar produto</button>
-      </Panel>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={() => setIsFormOpen(false)} className="rounded-md border border-avvi-line px-4 py-2 text-sm">Cancelar</button>
+            <button type="button" onClick={() => { saveProcedure(); setIsFormOpen(false); }} className="rounded-md bg-avvi-blue px-5 py-2 text-sm font-bold text-white">Salvar produto</button>
+          </div>
+        </ClinicalDialog>
+      )}
       <Panel>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -2861,7 +2873,10 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
           rows={sortedProcedures.map((procedure) => [procedure.name, procedure.category, currency(procedure.price), currency(procedure.averageCost), (
             <div key={procedure.id} className="flex flex-wrap items-center gap-2">
               <ActionButtons
-                onEdit={() => setProcedureForm({ ...procedure, productCost: procedure.productCost ?? procedure.averageCost, taxPercent: procedure.taxPercent ?? 0, clinicCost: procedure.clinicCost ?? 0 })}
+                onEdit={() => {
+                  setProcedureForm({ ...procedure, productCost: procedure.productCost ?? procedure.averageCost, taxPercent: procedure.taxPercent ?? 0, clinicCost: procedure.clinicCost ?? 0 });
+                  setIsFormOpen(true);
+                }}
                 onDelete={() => setProcedures(procedures.filter((item) => item.id !== procedure.id))}
               />
               <button onClick={() => setProcedures(procedures.map((item) => item.id === procedure.id ? { ...item, active: !item.active } : item))} className="rounded-md bg-avvi-soft px-3 py-2 text-sm font-bold text-avvi-blue">
@@ -2973,20 +2988,39 @@ function ProfessionalsView({ professionalForm, setProfessionalForm, professional
   );
 }
 
-function PatientsView({ patientForm, setPatientForm, patients, setPatients, professionals, appointments }: { patientForm: Patient; setPatientForm: (form: Patient) => void; patients: Patient[]; setPatients: (patients: Patient[]) => void; professionals: Professional[]; appointments: Appointment[] }) {
+function PatientsView({ patientForm, setPatientForm, patients, setPatients, professionals, appointments }: { patientForm: Patient; setPatientForm: (form: Patient) => void; patients: Patient[]; setPatients: Dispatch<SetStateAction<Patient[]>>; professionals: Professional[]; appointments: Appointment[] }) {
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const originalPatientForm = useRef<Patient | null>(null);
   const [patientSection, setPatientSection] = useState<"details" | "packages">("details");
   const [showScheduleInfo, setShowScheduleInfo] = useState(false);
   const [photoPatientId, setPhotoPatientId] = useState<string | null>(null);
+  const [patientList, setPatientList] = useState<"all" | "credit">("all");
+  const [patientQuery, setPatientQuery] = useState("");
+  const matchingPatients = patients.filter(patient => matchesSearch(patient.name, patientQuery));
+  const visiblePatients = patientList === "credit"
+    ? matchingPatients.filter(patient => Number(patient.futureCredit) > 0)
+    : matchingPatients;
+  const professionalNames = new Map(professionals.map(professional => [professional.id, professional.name]));
+  const professionalName = (patient: Patient) => professionalNames.get(patient.professionalId ?? "") || "Sem profissional vinculada";
 
-  function savePatient() {
-    setPatients(savePatientRecord(patientForm, patients));
-    setPatientForm(makePatientForm());
+  function closePatient() {
     setIsFormOpen(false);
+    setPatientForm(makePatientForm());
     setShowScheduleInfo(false);
   }
 
+  function savePatient() {
+    const original = originalPatientForm.current;
+    const changes = original && Object.fromEntries(Object.entries(patientForm).filter(([key, value]) => value !== original[key as keyof Patient]));
+    setPatients(current => {
+      const latest = current.find(patient => patient.id === patientForm.id);
+      return savePatientRecord(latest && changes ? { ...latest, ...changes } : patientForm, current);
+    });
+    closePatient();
+  }
+
   function openNewPatient() {
+    originalPatientForm.current = null;
     setPatientForm(makePatientForm());
     setPatientSection("details");
     setShowScheduleInfo(false);
@@ -2994,7 +3028,9 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
   }
 
   function openEditPatient(patient: Patient) {
-    setPatientForm({ ...makePatientForm(), ...patient });
+    const form = { ...makePatientForm(), ...patient };
+    originalPatientForm.current = form;
+    setPatientForm(form);
     setPatientSection("details");
     setShowScheduleInfo(false);
     setIsFormOpen(true);
@@ -3006,7 +3042,6 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-bold">Cadastro de Pacientes</h3>
-            <p className="text-sm text-slate-500">Prévia dos pacientes cadastrados.</p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={openNewPatient} className="rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white"><Plus className="mr-2 inline" size={16} />Adicionar Paciente</button>
@@ -3016,16 +3051,7 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
       </Panel>
 
       {isFormOpen && (
-        <Panel>
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-lg font-bold">{patientForm.id ? "Editar paciente" : "Adicionar Paciente"}</h3>
-              <p className="text-sm text-slate-500">Todas as informações são opcionais.</p>
-            </div>
-            <button onClick={() => { setIsFormOpen(false); setPatientForm(makePatientForm()); setShowScheduleInfo(false); }} className="rounded-md border border-avvi-line p-2 text-slate-500 hover:bg-avvi-soft" title="Fechar">
-              <X size={18} />
-            </button>
-          </div>
+        <ClinicalDialog title={patientForm.id ? "Editar paciente" : "Adicionar Paciente"} onClose={closePatient}>
           {patientForm.id && <div role="tablist" aria-label="Informações do paciente" className="mb-4 flex flex-wrap gap-2"><button type="button" role="tab" aria-selected={patientSection === "details"} onClick={()=>setPatientSection("details")} className={`rounded-lg border px-4 py-2 text-sm font-bold ${patientSection === "details"?"border-avvi-blue bg-avvi-blue text-white":"border-avvi-line text-avvi-blue"}`}>Dados cadastrais</button><button type="button" role="tab" aria-selected={patientSection === "packages"} onClick={()=>setPatientSection("packages")} className={`rounded-lg border px-4 py-2 text-sm font-bold ${patientSection === "packages"?"border-avvi-blue bg-avvi-blue text-white":"border-avvi-line text-avvi-blue"}`}>Pacotes ativos</button></div>}
           {patientSection === "packages" && <PatientPackagesView patient={patients.find(item=>item.id===patientForm.id) ?? patientForm} appointments={appointments} today={todayKey()}/>}
           <div hidden={patientSection !== "details"}>
@@ -3062,27 +3088,49 @@ function PatientsView({ patientForm, setPatientForm, patients, setPatients, prof
               {showScheduleInfo && <PatientScheduleInfo patientId={patientForm.id} appointments={appointments} />}
             </div>
           )}
-          <button onClick={savePatient} className="mt-4 rounded-md bg-avvi-blue px-5 py-2 font-bold text-white">Salvar paciente</button>
           </div>
-        </Panel>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={closePatient} className="rounded-md border border-avvi-line px-4 py-2 text-sm">Cancelar</button>
+            {patientSection === "details" && <button type="button" onClick={savePatient} className="rounded-md bg-avvi-blue px-5 py-2 text-sm font-bold text-white">Salvar paciente</button>}
+          </div>
+        </ClinicalDialog>
       )}
 
       <Panel>
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div role="tablist" aria-label="Lista de pacientes" className="flex flex-wrap gap-2">
+            <button type="button" role="tab" aria-selected={patientList === "all"} onClick={() => setPatientList("all")} className={patientList === "all" ? "rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white" : "rounded-md border border-avvi-line px-4 py-2 text-sm font-bold text-avvi-blue"}>Todos os pacientes</button>
+            <button type="button" role="tab" aria-selected={patientList === "credit"} onClick={() => setPatientList("credit")} className={patientList === "credit" ? "rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white" : "rounded-md border border-avvi-line px-4 py-2 text-sm font-bold text-avvi-blue"}>Pacientes com crédito</button>
+          </div>
+          <div className="w-full sm:max-w-xs">
+            <FormField label="Pesquisar paciente pelo nome">
+              <input type="search" className="input" value={patientQuery} onChange={event => setPatientQuery(event.target.value)} />
+            </FormField>
+          </div>
+        </div>
+        {!visiblePatients.length ? (
+          <p role="status" className="py-6 text-center text-sm text-slate-500">{patientList === "credit" ? "Nenhum paciente com crédito encontrado." : "Nenhum paciente encontrado."}</p>
+        ) : patientList === "credit" ? (
+          <DataTable compact headers={["Paciente", "Crédito disponível", "Profissional"]} rows={visiblePatients.map(patient => [
+            patient.name, currency(Number(patient.futureCredit)), professionalName(patient)
+          ])} />
+        ) : (
         <DataTable
           headers={["Nome", "Gênero", "Telefone", "CPF", "Cadastro", "Pontos", "Profissional", "Crédito futuro", "Observações", "Ações"]}
-          rows={patients.map((patient) => [
+          rows={visiblePatients.map((patient) => [
             patient.name,
             patient.gender || "-",
             patient.phone || "-",
             patient.cpf || "-",
             patient.registrationDate ? formatDate(patient.registrationDate) : "-",
             String(patient.loyaltyPoints ?? 0),
-            professionals.find((professional) => professional.id === patient.professionalId)?.name || "-",
+            professionalName(patient),
             currency(Number(patient.futureCredit) || 0),
             patient.notes || "-",
             <div key={patient.id} className="flex items-center gap-2"><button type="button" aria-label={`Fotos de ${patient.name}`} onClick={() => setPhotoPatientId(patient.id)} className="text-xs font-semibold text-avvi-blue">Fotos ({patient.photos?.length ?? 0})</button><ActionButtons onEdit={() => openEditPatient(patient)} onDelete={() => setPatients(patients.filter((item) => item.id !== patient.id))} /></div>
           ])}
         />
+        )}
       </Panel>
       {photoPatientId && patients.find(patient => patient.id === photoPatientId) && <PatientPhotos patient={patients.find(patient => patient.id === photoPatientId)!} onChange={patient => setPatients(patients.map(item => item.id === patient.id ? {...item, photos: patient.photos} : item))} onClose={() => setPhotoPatientId(null)} />}
     </div>
@@ -3552,10 +3600,10 @@ function MetricCard({ title, value, meta, tone, delta }: { title: string; value:
   );
 }
 
-function DataTable({ headers, rows }: { headers: string[]; rows: ReactNode[][] }) {
+function DataTable({ headers, rows, compact = false }: { headers: string[]; rows: ReactNode[][]; compact?: boolean }) {
   return (
     <div className="overflow-auto thin-scrollbar">
-      <table className="w-full min-w-[920px] border-separate border-spacing-0 text-left text-sm">
+      <table className={`w-full ${compact ? "min-w-[360px]" : "min-w-[920px]"} border-separate border-spacing-0 text-left text-sm`}>
         <thead>
           <tr className="border-b border-avvi-line bg-slate-50/80 text-xs uppercase text-slate-500">
             {headers.map((header) => <th key={header} className="px-3 py-3 font-bold">{header}</th>)}

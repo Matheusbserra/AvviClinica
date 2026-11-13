@@ -15,7 +15,7 @@ import { validAnamnese } from "@/lib/anamnese";
 import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice, preserveCloudInvoice } from "@/lib/invoices";
 import { entityNames } from "@/lib/database";
 import type { EntityName } from "@/lib/database";
-import type { Appointment, FinancialEntry } from "@/lib/types";
+import type { Appointment, FinancialEntry, GiftStockItem, InventoryItem } from "@/lib/types";
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "no-store" };
 function database() {
@@ -24,15 +24,14 @@ function database() {
   if (!url || !key?.trim()) throw new Error("Conexão com a nuvem não configurada.");
   return createClient(url, key.trim(), { auth: { persistSession: false }, global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(25000) }) } });
 }
-type ReadFilter = { field: string; op: "in"; values: string[] } | { field: string; op: "lt" | "gt"; value: string };
+type ReadFilter = { field: string; op: "in"; values: string[] } | { field: string; op: "lt" | "gt" | "neq" | "like"; value: string };
 async function rows(entity: string, filters: ReadFilter[] = [], projection = "record_id,data,updated_at") {
   const db = database(); const result: { record_id: string; data: Record<string, unknown>; updated_at?: string }[] = [];
   for (let offset = 0; ; offset += 500) {
     let query = db.from("avvi_records").select(projection).eq("entity", entity);
     for (const filter of filters) {
       if (filter.op === "in") query = query.in(filter.field, filter.values);
-      else if (filter.op === "lt") query = query.lt(filter.field, filter.value);
-      else query = query.gt(filter.field, filter.value);
+      else query = query.filter(filter.field, filter.op, filter.value);
     }
     const { data, error } = await query.order("record_id").range(offset, offset + 499);
     if (error) throw error;
@@ -247,37 +246,37 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const stockUpdates = upserts.filter(row => ["inventory", "gifts"].includes(row.entity));
     const stockRestricted = user.role === "standard" && !canMoveStock(user);
     const deletedAppointments = removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids);
-    let stored = (await rowsByIds("appointments", [...appointmentUpdates.map(item => item.id), ...deletedAppointments])).map(row => row.data as unknown as Appointment);
+    const stored = (await rowsByIds("appointments", [...appointmentUpdates.map(item => item.id), ...deletedAppointments])).map(row => row.data as unknown as Appointment);
     for (const appointment of appointmentUpdates) Object.assign(appointment, preserveCloudInvoice(stored.find(item => item.id === appointment.id), appointment));
     const packageSensitive = [...appointmentUpdates, ...stored.filter(item => deletedAppointments.includes(item.id) || appointmentUpdates.some(next => next.id === item.id))].some(hasPackageSessionData);
     const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt && old.eventType === item.eventType && !(old.status === "Cancelado" && item.status !== "Cancelado")));
-    if (packageSensitive || appointmentUpdates.length > 20) {
-      // Package sales/consumption still validate the complete shared history under
-      // the existing lease. Large imports use the original single-history path.
-      stored = (await rows("appointments")).map(row => row.data as unknown as Appointment);
-    } else {
-      // Ordinary saves only need their old records, overlapping slots (all
-      // professionals, for the three-room limit), and any duplicate account ID.
-      const overlaps = new Map<string, Appointment>(stored.map(item => [item.id,item]));
-      const intervals = new Map(moved.map(item => { const range=reservedInterval(item.startsAt,item.endsAt);return [JSON.stringify(range),range]; }));
-      for (const interval of intervals.values()) if (interval) {
-        const matches = await rows("appointments", [{field:"data->>startsAt",op:"lt",value:interval.end},{field:"data->>endsAt",op:"gt",value:interval.start}]);
-        for (const row of matches) overlaps.set(row.record_id,row.data as unknown as Appointment);
-      }
-      if (user.role === "standard") for (const row of await rowsByIds("appointments", appointmentUpdates.flatMap(item => item.closedAccount?.id ? [item.closedAccount.id] : []), "data->closedAccount->>id")) overlaps.set(row.record_id,row.data as unknown as Appointment);
-      stored = [...overlaps.values()];
-    }
-    if (packageSensitive) {
-      const effective = [...stored.filter(item => !deletedAppointments.includes(item.id) && !appointmentUpdates.some(next => next.id === item.id)), ...appointmentUpdates];
-      const packageError = packageSessionError(effective);
+    if (packageSensitive && ownsPackageLease) {
+      // The lease protects both reads. Only sales and uses can affect a package
+      // balance. Match the JSON key before applying the existing exact validator.
+      const [sales, uses] = await Promise.all([
+        rows("appointments", [{ field: "data->closedAccount->>procedureLines", op: "like", value: '%"packageId"%' }]),
+        rows("appointments", [{ field: "data->closedAccount->packageSessionUses", op: "neq", value: "[]" }])
+      ]);
+      const effective = new Map([...sales, ...uses].map(row => [row.record_id, row.data as unknown as Appointment]));
+      for (const id of deletedAppointments) effective.delete(id);
+      for (const appointment of appointmentUpdates) effective.set(appointment.id, appointment);
+      const packageError = packageSessionError([...effective.values()]);
       if (packageError) return Response.json({ error: packageError }, { status: 409, headers });
     }
     if (stockRestricted) {
       if (removed.some(item => ["inventory", "gifts"].includes(item.entity) && item.ids?.length)) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
       if (stockUpdates.length) {
         if (!canAccessTab(user, "Agenda")) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
-        const [inventory, gifts] = await Promise.all([rows("inventory"), rows("gifts")]);
-        if (!checkoutStockUpdates(inventory.map(row => row.data as unknown as import("@/lib/types").InventoryItem), gifts.map(row => row.data as unknown as import("@/lib/types").GiftStockItem), stored, appointmentUpdates, deletedAppointments, stockUpdates)) return Response.json({ error: "Sem permissão para ajustar o estoque. A baixa automática deve corresponder ao fechamento da conta." }, { status: 403, headers });
+        const inventoryUpdates = stockUpdates.filter(row => row.entity === "inventory");
+        const giftUpdates = stockUpdates.filter(row => row.entity === "gifts");
+        const [inventoryByProduct, inventoryById, gifts] = await Promise.all([
+          rowsByIds("inventory", inventoryUpdates.map(row => row.data?.procedureId), "data->>procedureId"),
+          rowsByIds("inventory", inventoryUpdates.map(row => row.record_id)),
+          rowsByIds("gifts", giftUpdates.map(row => row.record_id))
+        ]);
+        const inventory = [...new Map([...inventoryByProduct, ...inventoryById].map(row => [row.record_id, row])).values()]
+          .sort((first, second) => first.record_id < second.record_id ? -1 : first.record_id > second.record_id ? 1 : 0);
+        if (!checkoutStockUpdates(inventory.map(row => row.data as unknown as InventoryItem), gifts.map(row => row.data as unknown as GiftStockItem), stored, appointmentUpdates, deletedAppointments, stockUpdates)) return Response.json({ error: "Sem permissão para ajustar o estoque. A baixa automática deve corresponder ao fechamento da conta." }, { status: 403, headers });
       }
     }
     const tipUpdates = upserts.filter(row => row.entity === "ultraformer_tips");
@@ -307,20 +306,42 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
       }
     }
     if (moved.length) {
+      // Availability needs the slot and status only, including across professionals
+      // for the room limit. Checkout history is read separately by ID.
+      const projection = "record_id,professionalId:data->>professionalId,startsAt:data->>startsAt,endsAt:data->>endsAt,status:data->>status,eventType:data->>eventType";
+      const intervals = new Map(moved.map(item => {
+        const interval = reservedInterval(item.startsAt, item.endsAt);
+        return [JSON.stringify(interval), interval];
+      }));
+      const overlaps = new Map<string, Appointment>();
+      async function addSlots(filters: ReadFilter[]) {
+        const slots = await rows("appointments", filters, projection);
+        for (const slot of slots) overlaps.set(slot.record_id, { ...slot, id: slot.record_id } as unknown as Appointment);
+      }
+      if (intervals.size > 20) await addSlots([]);
+      else for (const interval of intervals.values()) if (interval) {
+        await addSlots([
+          { field: "data->>startsAt", op: "lt", value: interval.end },
+          { field: "data->>endsAt", op: "gt", value: interval.start }
+        ]);
+      }
       const professionals = (await rowsByIds("professionals", moved.map(item=>item.professionalId))).map(row => row.data as unknown as import("@/lib/types").Professional);
-      const deleted = new Set(removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids));
-      const effectiveAppointments = [...stored.filter(item => !deleted.has(item.id) && !appointmentUpdates.some(next => next.id === item.id)), ...appointmentUpdates];
+      const replaced = new Set([...deletedAppointments, ...appointmentUpdates.map(item => item.id)]);
+      const effectiveAppointments = [...[...overlaps.values()].filter(item => !replaced.has(item.id)), ...appointmentUpdates];
       for (const appointment of moved) {
         const professional = upserts.find(row => row.entity === "professionals" && row.record_id === appointment.professionalId)?.data ?? professionals.find(item => item.id === appointment.professionalId);
         const error = appointmentAvailabilityError(professional, effectiveAppointments, appointment.startsAt, appointment.endsAt, appointment.id, appointment.eventType);
         if (error) return Response.json({ error }, { status: 409, headers });
       }
     }
-    if (user.role === "standard") for (const appointment of appointmentUpdates) {
-      const account = appointment.closedAccount;
-      if (!account) continue;
-      const foreign = stored.some((item) => item.id !== appointment.id && item.closedAccount?.id === account.id);
-      if (account.appointmentId !== appointment.id || foreign || (account.generatedEntryId && account.generatedEntryId !== `procedure-account-${account.id}`)) return Response.json({ error: "Vínculo de fechamento inválido." }, { status: 403, headers });
+    if (user.role === "standard") {
+      const linked = await rowsByIds("appointments", appointmentUpdates.flatMap(item => item.closedAccount?.id ? [item.closedAccount.id] : []), "data->closedAccount->>id", "record_id,accountId:data->closedAccount->>id");
+      for (const appointment of appointmentUpdates) {
+        const account = appointment.closedAccount;
+        if (!account) continue;
+        const foreign = linked.some(item => item.record_id !== appointment.id && (item as unknown as { accountId: string }).accountId === account.id);
+        if (account.appointmentId !== appointment.id || foreign || (account.generatedEntryId && account.generatedEntryId !== `procedure-account-${account.id}`)) return Response.json({ error: "Vínculo de fechamento inválido." }, { status: 403, headers });
+      }
     }
     const touched = stored.filter((item) => deletedAppointments.includes(item.id) || appointmentUpdates.some((update) => update.id === item.id));
     const accounts = new Set([...touched, ...appointmentUpdates].flatMap((item) => [item.closedAccount?.id, item.financialEntryId, item.closedAccount?.generatedEntryId]).filter(Boolean));
@@ -331,13 +352,16 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     for (const row of upserts) {
       if (!entityNames.includes(row.entity) || typeof row.record_id !== "string" || !row.data || (row.data.id || row.data.month) !== row.record_id) return Response.json({ error: "Registro inválido." }, { status: 400, headers });
       if (row.entity === "patients" && canWriteEntity(user,"patients")) {
-        const previous = await db.from("avvi_records").select("data").eq("entity","patients").eq("record_id",row.record_id).maybeSingle();
+        const packagesOnly = user.role === "admin" && row.data.importedPackages !== undefined && Object.keys(row.data).every(key => key === "id" || key === "importedPackages");
+        const previous = await db.from("avvi_records")
+          .select(packagesOnly ? "data" : "importedPackages:data->importedPackages")
+          .eq("entity", "patients").eq("record_id", row.record_id).maybeSingle();
         if (previous.error) throw previous.error;
-        // Administrative import may append balances without resending registration
-        // fields, preserving any edits made by the clinic during the import.
-        const packagesOnly = user.role === "admin" && previous.data && Object.keys(row.data).every(key=>key === "id" || key === "importedPackages") && row.data.importedPackages !== undefined;
-        const candidate = packagesOnly ? {...previous.data!.data,importedPackages:row.data.importedPackages} : row.data;
-        try { row.data = preserveImportedPatientPackages(previous.data?.data, candidate, user.role === "admin"); }
+        // Regular saves only need the previously imported balances. A balances
+        // import also needs the registration fields it does not send itself.
+        const storedPatient = packagesOnly ? previous.data?.data : previous.data;
+        const candidate = packagesOnly && storedPatient ? { ...storedPatient, importedPackages: row.data.importedPackages } : row.data;
+        try { row.data = preserveImportedPatientPackages(storedPatient, candidate, user.role === "admin"); }
         catch (error) { return Response.json({error:error instanceof Error?error.message:"Pacotes inválidos."},{status:400,headers}); }
       }
       if (row.entity === "services" && row.data.postProcedure !== undefined && !validPostProcedurePlan(row.data.postProcedure)) return Response.json({ error: "Prazos de pós-procedimento inválidos." }, { status: 400, headers });

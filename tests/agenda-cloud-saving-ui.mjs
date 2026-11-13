@@ -1,5 +1,5 @@
 import {selectSearchOption} from './search-select-helper.mjs';
-import {matchesPostgrestFilters} from './postgrest-filters-helper.mjs';
+import {matchesPostgrestFilters,projectPostgrestRow} from './postgrest-filters-helper.mjs';
 // Isolated Next server + real data gateway/Supabase SDK; no production credentials or records.
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -38,7 +38,8 @@ const mock=http.createServer(async(req,res)=>{
   if(method==='GET'){
    payloadReads++;
    const result=[...records.values()].filter(matches),offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??500);
-   res.end(JSON.stringify(req.headers.accept?.includes('vnd.pgrst.object')?(result[0]??null):result.slice(offset,offset+limit)));return;
+   const page=result.slice(offset,offset+limit).map(row=>projectPostgrestRow(row,url.searchParams.get('select')));
+   res.end(JSON.stringify(req.headers.accept?.includes('vnd.pgrst.object')?(page[0]??null):page));return;
   }
   if(method==='POST'){
    const rows=JSON.parse(body),batch=Array.isArray(rows)?rows:[rows];writes.push(structuredClone(batch));
