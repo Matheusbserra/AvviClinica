@@ -12,7 +12,9 @@ try{
  assert.equal(checkoutAllowsNoProducts([{...line("Avaliação"),quantity:0}],[]),false);
  assert.equal(checkoutAllowsNoProducts([{...line("Avaliação"),serviceId:undefined,procedureId:"product"}],[]),false);
  assert.equal(checkoutAllowsNoProducts([{...line(""),serviceId:"eval"}],[{id:"eval",name:"Avaliação HOF"}]),true);
- assert.equal(checkoutAllowsNoProducts([line("Botox"),line("Retorno")],[]),true);
+ assert.equal(checkoutAllowsNoProducts([line("Avaliação HOF"),line("Preenchimento")],[]),false);
+ assert.equal(checkoutAllowsNoProducts([line("Botox"),line("Retorno")],[]),false);
+ assert.equal(checkoutAllowsNoProducts([line("Avaliação HOF"),line("Retorno")],[]),true);
  const lines=[line("Avaliação HOF")],totals=checkoutTotals(lines,[]);assert.equal(totals.total,0);assert.equal(totals.received,0);assert.equal(totals.remaining,0);
  const discounted=[{...line("Avaliação estética"),servicePrice:200,discount:200}];assert.equal(checkoutTotals(discounted,[]).total,0);
  const account={id:"eval-account",appointmentId:"appointment",patientId:"patient",professionalId:"professional",procedureLines:lines,products:[],payments:[],commercialDiscount:0,discountSplit:"Empresa assume",date:"2026-10-09"};

@@ -307,7 +307,7 @@ A barra lateral ajusta a altura das opções à tela e exibe somente uma faixa p
 
 ## Fechamento de avaliações e retornos
 
-Quando algum serviço da conta contém “avaliação” ou “retorno” no nome, o fechamento permite não adicionar produtos. A identificação ignora acentos e diferenças de maiúsculas/minúsculas, inclusive avaliação estética e avaliação HOF. A regra acompanha os serviços atuais do fechamento: remover a avaliação/retorno remove a exceção. Nome de produto não libera essa regra. O preço e os descontos continuam editáveis; total a pagar zero permite fechar sem selecionar pagamento. Contas de outros serviços continuam exigindo ao menos um produto.
+Quando todos os serviços da conta são avaliações ou retornos, o fechamento permite não adicionar produtos. A identificação pelo nome ignora acentos e diferenças de maiúsculas/minúsculas, inclusive avaliação estética e avaliação HOF. Se houver outro procedimento na mesma conta, é preciso registrar ao menos um produto, respeitando as regras específicas de venda de pacotes e de disparos do Ultraformer. Nome de produto não libera essa regra. O preço e os descontos continuam editáveis; total a pagar zero permite fechar sem selecionar pagamento.
 
 Sem produtos, o fechamento marca o atendimento como Finalizado, grava a conta e não cria um lançamento de procedimentos nem movimenta o estoque de produtos. Produtos ou brindes efetivamente utilizados mantêm suas regras de consumo. Se produtos forem adicionados, o lançamento de procedimentos segue a regra existente. Os registros são salvos pelo mesmo fluxo da agenda e não exigem migração dos dados existentes.
 

@@ -15,9 +15,9 @@ export function moneyRound(value: number) { return Math.round((value + Number.EP
 export function paymentChoiceKey(payment: PaymentItem) {
   return payment.method === "Crédito" && payment.cardBrand ? `Crédito-${payment.cardBrand}` : payment.method;
 }
-// Only service names grant the evaluation/return exception; products do not.
+// The exception applies only when every service is an evaluation or return.
 export function checkoutAllowsNoProducts(lines: Pick<ProcedureLine, "serviceId" | "procedureId" | "manualProcedure" | "quantity">[], services: Pick<Service, "id" | "name">[]) {
-  return lines.some(line => {
+  return lines.length > 0 && lines.every(line => {
     if (line.quantity <= 0 || (line.procedureId && !line.serviceId)) return false;
     const name = line.manualProcedure || services.find(service => service.id === line.serviceId)?.name || "";
     const normalized = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
