@@ -25,7 +25,7 @@ try{
  },key);
  await page.reload();await tab('Agenda').click();
  await page.locator('[data-agenda-slot][data-professional-id="qa"][data-hour="8"]').getByRole('button').click();await page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
- await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente busca QA');
+ await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente busca QA');await details.getByLabel('Telefone',{exact:true}).fill('(98) 99999-1234');
  await add();
  // Reproduces the reported second-field failure before choosing any other item.
  await input('Serviço adicional 1').fill('LABIAL',{timeout:3000});

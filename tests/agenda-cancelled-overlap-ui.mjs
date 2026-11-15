@@ -30,7 +30,7 @@ try{
  await page.reload();await tab('Agenda').click();
  for(const id of ['cancel1','cancel2'])assert.equal(await card(id).count(),0);
  await page.locator('[data-agenda-slot][data-professional-id="qa"][data-hour="9"]').getByRole('button').click();await page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
- const details=page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente normal QA');await selectSearchOption(details,'Serviço','Serviço QA');
+ const details=page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente normal QA');await details.getByLabel('Telefone',{exact:true}).fill('(98) 99999-1234');await selectSearchOption(details,'Serviço','Serviço QA');
  await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.waitFor({state:'hidden'});
  await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)).data.appointments.length===3,key);
  const before=await state(),active=before.appointments.find(a=>a.status!=='Cancelado'),ids=[active.id,'cancel1','cancel2'];

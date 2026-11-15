@@ -116,7 +116,7 @@ import { AccountsView } from "@/app/components/AccountsView";
 import { MyAccountView } from "@/app/components/MyAccountView";
 import { PostProcedureView } from "@/app/components/PostProcedureView";
 import { ServicePostProcedureEditor } from "@/app/components/ServicePostProcedureEditor";
-import { servicePostProcedurePlan, validPostProcedurePlan } from "@/lib/postProcedure";
+import { servicePostProcedurePlan, validPostProcedurePhone, validPostProcedurePlan } from "@/lib/postProcedure";
 import type { PostProcedureContact, PostProcedureMessage } from "@/lib/types";
 import { SimulationView } from "@/app/components/SimulationView";
 import { calculateCardFee, calculateDebitFee } from "@/lib/paymentFees";
@@ -1061,8 +1061,15 @@ export default function Home() {
     });
   }
 
+  const requiresNewPatientContact = !appointmentForm.patientId && appointmentForm.eventType === "Novo Agendamento" &&
+    (!selectedAppointmentId || Boolean(appointmentForm.patientName.trim()));
+
   function saveAppointment() {
     if (!appointmentForm.professionalId || !appointmentForm.date || !Number.isInteger(appointmentForm.durationMinutes) || appointmentForm.durationMinutes <= 0) return;
+    if (requiresNewPatientContact) {
+      if (!appointmentForm.patientName.trim()) { setAppointmentError("Informe o nome do novo paciente."); return; }
+      if (!validPostProcedurePhone(appointmentForm.phone.trim())) { setAppointmentError("Informe um telefone válido com DDD para o novo paciente."); return; }
+    }
     const selectedService = services.find((service) => service.id === appointmentForm.serviceId);
     if (appointmentForm.serviceId && !selectedService) return;
     if (appointmentForm.additionalServices.some((item) => item.serviceId && !services.some((service) => service.id === item.serviceId))) return;
@@ -1084,7 +1091,7 @@ export default function Home() {
         name: appointmentForm.patientName.trim(),
         gender: appointmentForm.gender,
         email: appointmentForm.email.trim(),
-        phone: appointmentForm.phone,
+        phone: appointmentForm.phone.trim(),
         cpf: appointmentForm.cpf,
         birthDate: appointmentForm.birthDate,
         address: "",
@@ -1994,6 +2001,7 @@ export default function Home() {
             </div>
             <AppointmentForm
               form={appointmentForm}
+              requiresNewPatientContact={requiresNewPatientContact}
               setForm={setAppointmentForm}
               openHistory={() => appointmentForm.patientId && setHistoryPatientId(appointmentForm.patientId)}
               editPatient={() => setEditingPatientId(appointmentForm.patientId)}
@@ -2047,7 +2055,7 @@ function MobileTabs({ activeTab, setActiveTab, allowedTabs }: { activeTab: Tab; 
   );
 }
 
-function AppointmentForm({ form, setForm, patients, services, professionals, saveAppointment, openCheckout, openHistory, editPatient, deleteAccount, error }: { form: ReturnType<typeof makeAppointmentForm>; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; services: Service[]; professionals: Professional[]; saveAppointment: () => void; openCheckout: () => void; openHistory: () => void; editPatient: () => void; deleteAccount?: () => void; error: string }) {
+function AppointmentForm({ form, requiresNewPatientContact, setForm, patients, services, professionals, saveAppointment, openCheckout, openHistory, editPatient, deleteAccount, error }: { form: ReturnType<typeof makeAppointmentForm>; requiresNewPatientContact: boolean; setForm: (form: ReturnType<typeof makeAppointmentForm>) => void; patients: Patient[]; services: Service[]; professionals: Professional[]; saveAppointment: () => void; openCheckout: () => void; openHistory: () => void; editPatient: () => void; deleteAccount?: () => void; error: string }) {
   const hasServices = !!form.serviceId || form.additionalServices.some(item => item.serviceId);
   const serviceOptions = (selectedId: string) => services.filter(service => service.active || service.id === selectedId).map(service => ({
     id: service.id,
@@ -2077,10 +2085,11 @@ function AppointmentForm({ form, setForm, patients, services, professionals, sav
           setForm({...form, patientId, patientName: patient?.name ?? "", phone: patient?.phone ?? "", email: patient?.email ?? "", gender: patient?.gender || "Não informado", cpf: patient?.cpf ?? "", birthDate: patient?.birthDate ?? "", patientNotes: patient?.notes ?? ""});
         }}/>
       </div>
+      {requiresNewPatientContact && <p className="self-end text-xs text-slate-600">Para agendar um novo paciente, informe o nome e o telefone com DDD.</p>}
       <FormField label="Nome do paciente">
-        <input value={form.patientName} onChange={(event) => setForm({ ...form, patientName: event.target.value })} className="input" placeholder="Nome completo" />
+        <input aria-required={requiresNewPatientContact} value={form.patientName} onChange={(event) => setForm({ ...form, patientName: event.target.value })} className="input" placeholder="Nome completo" />
       </FormField>
-      <FormField label="Telefone"><input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} className="input" /></FormField>
+      <FormField label="Telefone"><input type="tel" aria-required={requiresNewPatientContact} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} className="input" /></FormField>
       <FormField label="E-mail"><input type="email" value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} className="input" /></FormField>
       <FormField label="Gênero"><select aria-label="Gênero" value={form.gender} onChange={event => setForm({ ...form, gender: event.target.value as typeof form.gender })} className="input"><option value="Não informado">Não informado</option><option value="Feminino">Feminino</option><option value="Masculino">Masculino</option></select></FormField>
       <FormField label="CPF"><input value={form.cpf} onChange={(event) => setForm({ ...form, cpf: event.target.value })} className="input" /></FormField>

@@ -75,7 +75,7 @@ try{
  async function book(s,professional,hour,name,service='service'){
   const {page}=s,slot=page.locator(`[data-agenda-slot][data-professional-id="${professional}"][data-hour="${hour}"]`);
   await slot.getByRole('button').click();await page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
-  const details=page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill(name);
+  const details=page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill(name);await details.getByLabel('Telefone',{exact:true}).fill('(98) 99999-1234');
   if(service)await selectSearchOption(details,'Serviço',service==='evaluation'?'Avaliação QA':'Serviço QA');
   await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.waitFor({state:'hidden'});
  }
@@ -170,7 +170,7 @@ try{
  console.log('PASS: two users share new bookings and closures/reversals on return/manual refresh without reload or continuous polling; later saves preserve the other user’s bookings.');
  await admin.page.reload();await saved(admin);
  const fourthSlot=admin.page.locator('[data-agenda-slot][data-professional-id="fourth"][data-hour="14"]');await fourthSlot.getByRole('button').click();await admin.page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
- const details=admin.page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente excedente');await selectSearchOption(details,'Serviço','Serviço QA');await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.getByRole('alert').filter({hasText:/3.*simult/}).waitFor();assert.equal(appointmentFor('Paciente excedente'),undefined);await details.getByRole('button',{name:'Fechar',exact:true}).click();
+ const details=admin.page.getByTestId('appointment-details-window');await details.getByLabel('Nome do paciente',{exact:true}).fill('Paciente excedente');await details.getByLabel('Telefone',{exact:true}).fill('(98) 99999-1234');await selectSearchOption(details,'Serviço','Serviço QA');await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();await details.getByRole('alert').filter({hasText:/3.*simult/}).waitFor();assert.equal(appointmentFor('Paciente excedente'),undefined);await details.getByRole('button',{name:'Fechar',exact:true}).click();
  const fourth={id:'fourth-overflow',professionalId:'fourth',patientId:'patient',startsAt:date+'T14:00:00',endsAt:date+'T15:00:00',eventType:'Novo Agendamento',status:'Agendado',notes:''};
  for(const s of [standard,admin])assert.equal((await s.context.request.post(origin+'/api/access/data',{data:{upserts:[{entity:'appointments',record_id:fourth.id,data:fourth}]}})).status(),409);
  const adminVisit=appointmentFor('Paciente paralelo ana');await admin.page.getByTestId('appointment-'+adminVisit.id).click();await admin.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();const adminCheckout=admin.page.getByRole('dialog',{name:/Fechamento de conta/i});
@@ -242,7 +242,7 @@ try{
  await standard.page.evaluate(()=>window.dispatchEvent(new Event('focus')));await standard.page.getByTestId('appointment-past-remote').waitFor({timeout:20000});
  await standard.page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
  const pastForm=standard.page.getByTestId('appointment-details-window');await pastForm.waitFor();
- await pastForm.getByLabel('Nome do paciente',{exact:true}).fill('Paciente conflito histórico QA');
+ await pastForm.getByLabel('Nome do paciente',{exact:true}).fill('Paciente conflito histórico QA');await pastForm.getByLabel('Telefone',{exact:true}).fill('(98) 99999-1234');
  await selectSearchOption(pastForm,'Serviço','Serviço QA');
  await pastForm.getByRole('button',{name:'Salvar agendamento',exact:true}).click();
  await pastForm.getByRole('alert').filter({hasText:/reservado/}).waitFor();

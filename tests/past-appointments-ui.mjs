@@ -19,7 +19,7 @@ async function book(hour,name){
  await page.getByRole('menuitem',{name:'Novo agendamento',exact:true}).click();
  await details.waitFor({timeout:3000});
  assert.equal(await details.getByLabel('Data',{exact:true}).inputValue(),'2025-10-10');
- await details.getByLabel('Nome do paciente',{exact:true}).fill(name);
+ await details.getByLabel('Nome do paciente',{exact:true}).fill(name);await details.getByLabel('Telefone',{exact:true}).fill('(98) 99999-1234');
  await selectSearchOption(details,'Serviço','Serviço QA');
  await details.getByRole('button',{name:'Salvar agendamento',exact:true}).click();
  await details.waitFor({state:'hidden'});
