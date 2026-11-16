@@ -84,12 +84,12 @@ import { AccountCheckout } from "@/app/components/AccountCheckout";
 import type { CheckoutDraft, CheckoutResult } from "@/app/components/AccountCheckout";
 import { checkoutAllowsNoProducts, distributeCheckoutDiscount, restoreCheckoutItems } from "@/lib/checkout";
 import { originalAppointmentNotes } from "@/lib/appointmentNotes";
-import { checkoutCommission } from "@/lib/checkout";
+import { checkoutCommission, moneyRound } from "@/lib/checkout";
 import { InvoiceView } from "@/app/components/InvoiceView";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { procedureEntryFromAccount } from "@/lib/accountProcedures";
 import { changeProcedureLineCostTotal, changeProcedureLineQuantity, overrideProcedureLineTotal, procedureLineCostTotal, procedureLineTotal } from "@/lib/procedureEntryPricing";
-import { applyCheckoutInventory, applyStockMovement } from "@/lib/inventory";
+import { applyCheckoutInventory, applyStockMovement, appointmentStockConsumption, checkoutStockProducts, stockConsumptionFor, validComboItems } from "@/lib/inventory";
 import { importedServices } from "@/lib/importedServices";
 import { appointmentServices, totalServiceMinutes } from "@/lib/appointmentServices";
 import type { AppointmentService } from "@/lib/types";
@@ -1280,7 +1280,7 @@ export default function Home() {
       return procedureEntry && !preserved.some((entry) => entry.id === procedureEntry.id) ? [procedureEntry, ...preserved] : preserved;
     });
     const consumesStock = result.total > 0 || isPackageSessionTreatment(account);
-    const stockUpdate = applyCheckoutInventory(inventory, currentAppointment.stockConsumption, consumesStock ? result.products : []);
+    const stockUpdate = applyCheckoutInventory(inventory, currentAppointment.stockConsumption, checkoutStockProducts(result.products, consumesStock));
     setInventory(stockUpdate.inventory);
     const giftUpdate = applyCheckoutGifts(gifts, currentAppointment.giftConsumption ?? currentAppointment.closedAccount?.gifts, consumesStock ? result.gifts : []);
     setGifts(giftUpdate.gifts);
@@ -1322,7 +1322,8 @@ export default function Home() {
     setEntries((current) => current.filter((entry) => !removedIds.has(entry.id)));
     setRevenues((current) => current.filter((revenue) => !removedIds.has(revenue.sourceFinancialEntryId ?? "")));
     setCosts((current) => current.filter((cost) => !removedIds.has(cost.sourceFinancialEntryId ?? "")));
-    const consumed = appointment.stockConsumption ?? account?.products ?? [];
+    const consumed = appointment.closedAccount || appointment.stockConsumption
+      ? appointmentStockConsumption(appointment) : stockConsumptionFor(account?.products ?? []);
     setInventory(applyCheckoutInventory(inventory, consumed, []).inventory);
     setGifts(applyCheckoutGifts(gifts, appointment.giftConsumption ?? appointment.closedAccount?.gifts, []).gifts);
     setUltraformerTips(applyCheckoutUltraformer(ultraformerTips, { ...appointment, accountClosed: false, closedAccount: undefined }, "", "", undefined));
@@ -1631,7 +1632,9 @@ export default function Home() {
 
   function saveProcedure() {
     const price = Number(procedureForm.price) || 0;
-    const productCost = Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
+    const productCost = procedureForm.comboItems
+      ? comboProductCost(procedureForm.comboItems, procedures)
+      : Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
     const taxPercent = Number(procedureForm.taxPercent) || 0;
     const clinicCost = Number(procedureForm.clinicCost) || 0;
     const taxValue = price * (taxPercent / 100);
@@ -1849,7 +1852,7 @@ export default function Home() {
           {canAccessTab(currentUser, "Estratégias") && activeTab === "Estratégias" && <StrategiesView user={currentUser} professionals={professionals} records={strategies} setRecords={setStrategies} entries={accounting.entries} appointments={accounting.appointments} services={services} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />}
           {canAccessTab(currentUser, "Anamnese") && activeTab === "Anamnese" && <AnamneseView user={currentUser} patients={patients} professionals={professionals} records={anamneses} setRecords={setAnamneses} onPatientChange={patient => setPatients(current => current.map(item => item.id === patient.id ? {...item, photos: patient.photos} : item))} />}
           {canAccessTab(currentUser, "Ultraformer MPT") && activeTab === "Ultraformer MPT" && <UltraformerView user={currentUser} tips={ultraformerTips} setTips={setUltraformerTips} patients={patients} professionals={professionals} />}
-          {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection canMove={canMoveStock(currentUser)} moveStock={moveStock} gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={accounting.appointments} entries={accounting.entries} patients={patients} professionals={professionals} />}
+          {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection canMove={canMoveStock(currentUser)} moveStock={moveStock} gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={appointments} entries={accounting.entries} patients={patients} professionals={professionals} />}
 
           {canAccessTab(currentUser, "Simulação") && activeTab === "Simulação" && <SimulationView procedures={procedures} services={services} />}
 
@@ -2834,13 +2837,22 @@ function ServicesView({ services, setServices, packages, setPackages }: { servic
   );
 }
 
+function comboProductCost(items: NonNullable<Procedure["comboItems"]>, procedures: Procedure[]) {
+  return moneyRound(items.reduce((sum, item) => sum + (procedures.find(product => product.id === item.procedureId)?.averageCost ?? 0) * item.quantity, 0));
+}
+
 function ProceduresView({ procedureForm, setProcedureForm, procedures, setProcedures, saveProcedure }: { procedureForm: ReturnType<typeof makeProcedureForm>; setProcedureForm: (form: ReturnType<typeof makeProcedureForm>) => void; procedures: Procedure[]; setProcedures: (items: Procedure[]) => void; saveProcedure: () => void }) {
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const productCost = Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
+  const [onlyCombos, setOnlyCombos] = useState(false);
+  const [comboProductId, setComboProductId] = useState("");
+  const comboItems = procedureForm.comboItems;
+  const productCost = comboItems ? comboProductCost(comboItems, procedures) : Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
   const taxValue = (Number(procedureForm.price) || 0) * ((Number(procedureForm.taxPercent) || 0) / 100);
   const clinicCost = Number(procedureForm.clinicCost) || 0;
   const calculatedAverageCost = productCost + taxValue + clinicCost;
   const sortedProcedures = procedures.slice().sort((first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }));
+  const componentOptions = sortedProcedures.filter(product => !product.comboItems && !comboItems?.some(item => item.procedureId === product.id));
+  const visibleProcedures = onlyCombos ? sortedProcedures.filter(product => product.comboItems) : sortedProcedures;
 
   function exportProceduresExcel() {
     import("xlsx").then((xlsx) => {
@@ -2914,17 +2926,19 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
           </div>
           <span className="rounded-full bg-avvi-soft px-3 py-1 text-xs font-bold text-avvi-blue">{procedures.length} produtos</span>
         </div>
-        <button type="button" onClick={() => { setProcedureForm(makeProcedureForm()); setIsFormOpen(true); }} className="rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white">
+        <div className="flex flex-wrap gap-2"><button type="button" onClick={() => { setProcedureForm(makeProcedureForm()); setIsFormOpen(true); }} className="rounded-md bg-avvi-blue px-4 py-2 text-sm font-bold text-white">
           <Plus className="mr-2 inline" size={16} />Adicionar produto
         </button>
+        <button type="button" onClick={() => { setComboProductId(""); setProcedureForm({ ...makeProcedureForm(), category: "Combo", comboItems: [] }); setIsFormOpen(true); }} className="rounded-md border border-avvi-blue px-4 py-2 text-sm font-bold text-avvi-blue"><Plus className="mr-2 inline" size={16} />Adicionar combo</button></div>
       </Panel>
       {isFormOpen && (
-        <ClinicalDialog title={procedureForm.id ? "Editar produto" : "Adicionar produto"} onClose={() => setIsFormOpen(false)}>
+        <ClinicalDialog title={comboItems ? (procedureForm.id ? "Editar combo" : "Adicionar combo") : (procedureForm.id ? "Editar produto" : "Adicionar produto")} onClose={() => setIsFormOpen(false)}>
           <div className="grid gap-3 md:grid-cols-3">
           <FormField label="Nome"><input className="input" value={procedureForm.name} onChange={(event) => setProcedureForm({ ...procedureForm, name: event.target.value })} /></FormField>
           <FormField label="Categoria"><input className="input" value={procedureForm.category} onChange={(event) => setProcedureForm({ ...procedureForm, category: event.target.value })} /></FormField>
           <FormField label="Preço padrão"><MoneyInput value={Number(procedureForm.price)} onChange={(value) => setProcedureForm({ ...procedureForm, price: value })} /></FormField>
-          <FormField label="Custo do produto"><MoneyInput value={productCost} onChange={(value) => setProcedureForm({ ...procedureForm, productCost: value })} /></FormField>
+          {comboItems ? <FormField label="Custo dos componentes"><p className="mt-1 rounded-md border border-avvi-line p-2 text-sm font-semibold">{currency(productCost)}</p></FormField>
+            : <FormField label="Custo do produto"><MoneyInput value={productCost} onChange={(value) => setProcedureForm({ ...procedureForm, productCost: value })} /></FormField>}
           <FormField label="Imposto (%)"><input className="input" type="number" value={procedureForm.taxPercent ?? 0} onChange={(event) => setProcedureForm({ ...procedureForm, taxPercent: Number(event.target.value) })} /></FormField>
           <FormField label="Custo da clínica"><MoneyInput value={clinicCost} onChange={(value) => setProcedureForm({ ...procedureForm, clinicCost: value })} /></FormField>
           <div className="rounded-md border border-amber-200 bg-avvi-soft p-3 text-sm">
@@ -2934,9 +2948,22 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
           </div>
           <FormField label="Observações"><input className="input" value={procedureForm.notes} onChange={(event) => setProcedureForm({ ...procedureForm, notes: event.target.value })} /></FormField>
         </div>
+          {comboItems && <fieldset className="mt-4 space-y-3 rounded-md border border-avvi-line p-3">
+            <legend className="px-1 text-sm font-bold">Produtos do combo</legend>
+            <div className="flex flex-wrap items-end gap-2"><div className="min-w-48 flex-1"><SearchSelect label="Selecionar produto do combo" options={componentOptions} value={comboProductId} onChange={setComboProductId}/></div>
+              <button type="button" disabled={!componentOptions.some(product => product.id === comboProductId)} onClick={() => { setProcedureForm({ ...procedureForm, comboItems: [...comboItems, { procedureId: comboProductId, quantity: 1 }] }); setComboProductId(""); }} className="rounded-md border border-avvi-line px-3 py-2 text-sm font-bold text-avvi-blue disabled:opacity-40">Incluir produto no combo</button></div>
+            {comboItems.map(item => {
+              const name = procedures.find(product => product.id === item.procedureId)?.name ?? "Produto removido do cadastro";
+              return <div key={item.procedureId} className="flex flex-wrap items-center gap-3 border-t border-avvi-line pt-2">
+                <span className="min-w-0 flex-1 text-sm font-semibold">{name}</span>
+                <input aria-label={`Quantidade de ${name} no combo`} className="input w-24" type="number" min={1} max={10000} step={1} value={item.quantity || ""} onChange={event => setProcedureForm({ ...procedureForm, comboItems: comboItems.map(current => current.procedureId === item.procedureId ? { ...current, quantity: Number(event.target.value) } : current) })}/>
+                <button type="button" aria-label={`Retirar ${name} do combo`} onClick={() => setProcedureForm({ ...procedureForm, comboItems: comboItems.filter(current => current.procedureId !== item.procedureId) })} className="rounded p-2 text-avvi-red"><Trash2 size={16}/></button>
+              </div>;
+            })}
+          </fieldset>}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" onClick={() => setIsFormOpen(false)} className="rounded-md border border-avvi-line px-4 py-2 text-sm">Cancelar</button>
-            <button type="button" onClick={() => { saveProcedure(); setIsFormOpen(false); }} className="rounded-md bg-avvi-blue px-5 py-2 text-sm font-bold text-white">Salvar produto</button>
+            <button type="button" disabled={!!comboItems && (!procedureForm.name.trim() || !validComboItems(comboItems) || comboItems.some(item => !procedures.some(product => product.id === item.procedureId && !product.comboItems)))} onClick={() => { saveProcedure(); setIsFormOpen(false); if (comboItems) setOnlyCombos(true); }} className="rounded-md bg-avvi-blue px-5 py-2 text-sm font-bold text-white disabled:opacity-40">{comboItems ? "Salvar combo" : "Salvar produto"}</button>
           </div>
         </ClinicalDialog>
       )}
@@ -2951,16 +2978,27 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
             <button onClick={exportProceduresExcel} className="rounded-md bg-avvi-green px-4 py-2 text-sm font-bold text-white"><Download className="mr-2 inline" size={16} />Exportar Excel</button>
           </div>
         </div>
+        <div role="group" className="mb-3 flex gap-2" aria-label="Filtrar cadastro de produtos">
+          <button type="button" aria-pressed={!onlyCombos} onClick={() => setOnlyCombos(false)} className={`rounded-md border border-avvi-line px-3 py-2 text-sm font-semibold ${!onlyCombos ? "bg-avvi-blue text-white" : "text-avvi-blue"}`}>Todos</button>
+          <button type="button" aria-pressed={onlyCombos} onClick={() => setOnlyCombos(true)} className={`rounded-md border border-avvi-line px-3 py-2 text-sm font-semibold ${onlyCombos ? "bg-avvi-blue text-white" : "text-avvi-blue"}`}>Combos</button>
+        </div>
         <DataTable
           headers={["Produto", "Categoria", "Preço", "Custo médio", "Ações"]}
-          rows={sortedProcedures.map((procedure) => [procedure.name, procedure.category, currency(procedure.price), currency(procedure.averageCost), (
+          rows={visibleProcedures.map((procedure) => [procedure.comboItems ? <div key={procedure.id}><strong>{procedure.name}</strong><p className="mt-1 text-xs text-slate-500">{procedure.comboItems.map(item => `${item.quantity}× ${procedures.find(product => product.id === item.procedureId)?.name ?? "Produto removido"}`).join(" · ")}</p></div> : procedure.name, procedure.category, currency(procedure.price), currency(procedure.averageCost), (
             <div key={procedure.id} className="flex flex-wrap items-center gap-2">
               <ActionButtons
                 onEdit={() => {
+                  setComboProductId("");
                   setProcedureForm({ ...procedure, productCost: procedure.productCost ?? procedure.averageCost, taxPercent: procedure.taxPercent ?? 0, clinicCost: procedure.clinicCost ?? 0 });
                   setIsFormOpen(true);
                 }}
-                onDelete={() => setProcedures(procedures.filter((item) => item.id !== procedure.id))}
+                onDelete={() => {
+                  if (procedures.some(item => item.comboItems?.some(component => component.procedureId === procedure.id))) {
+                    window.alert("Este produto faz parte de um combo. Retire-o da composição antes de excluir.");
+                    return;
+                  }
+                  setProcedures(procedures.filter((item) => item.id !== procedure.id));
+                }}
               />
               <button onClick={() => setProcedures(procedures.map((item) => item.id === procedure.id ? { ...item, active: !item.active } : item))} className="rounded-md bg-avvi-soft px-3 py-2 text-sm font-bold text-avvi-blue">
                 {procedure.active ? "Desativar" : "Ativar"}

@@ -1,5 +1,5 @@
 import { appointmentAvailabilityError } from "./agendaAvailability";
-import { applyCheckoutInventory } from "./inventory";
+import { applyCheckoutInventory, appointmentStockConsumption } from "./inventory";
 import { applyCheckoutGifts } from "./gifts";
 import { recordIsPending } from "./persistence";
 import type { DataSnapshot } from "./persistence";
@@ -60,10 +60,10 @@ export function omitPendingAppointments(baseline: DataSnapshot, draft: DataSnaps
     for (const item of [previous, next]) {
       if (item?.patientId) patients.add(item.patientId);
       for (const source of [item?.closedAccount?.id, item?.closedAccount?.generatedEntryId, item?.financialEntryId]) if (source) sources.add(source);
-      for (const product of item?.stockConsumption ?? item?.closedAccount?.products ?? []) if (product.procedureId) products.add(product.procedureId);
+      for (const product of appointmentStockConsumption(item)) products.add(product.procedureId);
       for (const gift of item?.giftConsumption ?? item?.closedAccount?.gifts ?? []) giftIds.add(gift.giftId);
     }
-    data.inventory = applyCheckoutInventory(data.inventory, next.stockConsumption ?? (next.accountClosed ? next.closedAccount?.products : []), previous?.stockConsumption ?? (previous?.accountClosed ? previous.closedAccount?.products ?? [] : [])).inventory;
+    data.inventory = applyCheckoutInventory(data.inventory, appointmentStockConsumption(next), appointmentStockConsumption(previous)).inventory;
     data.gifts = applyCheckoutGifts(data.gifts, next.giftConsumption ?? (next.accountClosed ? next.closedAccount?.gifts : []), previous?.giftConsumption ?? (previous?.accountClosed ? previous.closedAccount?.gifts ?? [] : [])).gifts;
     // Undo only this account's credit delta; other pending payments remain intact.
     if (next.closedAccount?.patientId) adjustments.set(next.closedAccount.patientId, (adjustments.get(next.closedAccount.patientId) ?? 0) - credit(next.closedAccount));

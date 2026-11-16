@@ -1,4 +1,4 @@
-import { applyCheckoutInventory } from "./inventory";
+import { applyCheckoutInventory, appointmentStockConsumption, checkoutStockProducts } from "./inventory";
 import { applyCheckoutGifts } from "./gifts";
 import { checkoutTotals } from "./checkout";
 import { isPackageSessionTreatment } from "./packageSessions";
@@ -14,6 +14,7 @@ export function checkoutStockUpdates(
   inventory: InventoryItem[], gifts: GiftStockItem[], previous: Appointment[],
   appointments: Appointment[], removedAppointments: string[],
   updates: { entity: string; record_id: string; data: unknown }[],
+  requiredProducts = new Set<string>(),
 ) {
   let expectedInventory = inventory, expectedGifts = gifts;
   const deleted = previous.filter(item => removedAppointments.includes(item.id))
@@ -21,12 +22,12 @@ export function checkoutStockUpdates(
   for (const next of [...appointments, ...deleted]) {
     const old = previous.find(item => item.id === next.id);
     const paidAccount = next.accountClosed && next.closedAccount && (checkoutTotals(next.closedAccount.procedureLines, next.closedAccount.payments ?? []).total > 0 || isPackageSessionTreatment(next.closedAccount));
-    const products = paidAccount ? next.closedAccount!.products : [];
+    const products = next.accountClosed ? next.closedAccount?.products ?? [] : [];
     const selectedGifts = paidAccount ? next.closedAccount!.gifts ?? [] : [];
     if (!Array.isArray(products) || !Array.isArray(selectedGifts) ||
       products.some(item => !item.procedureId || !Number.isSafeInteger(item.quantity) || item.quantity < 0) ||
       selectedGifts.some(item => !item.giftId || !Number.isSafeInteger(item.quantity) || item.quantity < 0)) return false;
-    const stock = applyCheckoutInventory(expectedInventory, old?.stockConsumption ?? old?.closedAccount?.products, products);
+    const stock = applyCheckoutInventory(expectedInventory, appointmentStockConsumption(old), checkoutStockProducts(products, !!paidAccount));
     const giftStock = applyCheckoutGifts(expectedGifts, old?.giftConsumption ?? old?.closedAccount?.gifts, selectedGifts);
     // Invoice-only edits and historical imports need not carry a stock marker.
     const consumptionChanged = stable(old?.stockConsumption ?? []) !== stable(next.stockConsumption ?? []) ||
@@ -37,7 +38,9 @@ export function checkoutStockUpdates(
       stable(next.giftConsumption ?? next.closedAccount?.gifts ?? []) !== stable(giftStock.consumption)) return false;
     expectedInventory = stock.inventory; expectedGifts = giftStock.gifts;
   }
-  return updates.every(update => {
+  const changed = expectedInventory.filter(row => requiredProducts.has(row.procedureId)
+    && row.quantity !== (inventory.find(item => item.id === row.id)?.quantity ?? 0));
+  return changed.every(item => updates.some(update => update.entity === "inventory" && update.record_id === item.id)) && updates.every(update => {
     const expected = (update.entity === "inventory" ? expectedInventory : expectedGifts).find(item => item.id === update.record_id);
     return !!expected && stable(update.data) === stable(expected);
   });

@@ -22,7 +22,7 @@ export function InventoryView({ procedures, inventory, setInventory, moveStock, 
   const [savingMovement, setSavingMovement] = useState(false);
   const [movementError, setMovementError] = useState("");
   const [productId, setProductId] = useState("");
-  const available = procedures.filter(procedure => !stockProductVisible(procedure, inventory));
+  const available = procedures.filter(procedure => !procedure.comboItems && !stockProductVisible(procedure, inventory));
   const [history, setHistory] = useState<{ procedureId: string; page: number } | null>(null);
   const historyProcedure = procedures.find((procedure) => procedure.id === history?.procedureId);
   const usage = history ? procedureUsageHistory(history.procedureId, appointments, entries, patients, professionals) : [];

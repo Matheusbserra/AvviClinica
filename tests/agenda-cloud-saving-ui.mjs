@@ -400,6 +400,56 @@ try{
  const creditRevenue=records.get('revenues:receita-entry-'+creditAccount.id).data;
  assert.equal(creditRevenue.total,0);assert.equal(creditRevenue.clientCreditUsedTotal,-50);
  console.log('PASS: future-credit button is disabled with zero balance; with paid credit, checkout consumes only the due amount and saves the remainder.');
+ const comboName='Combo preenchimento de glúteo QA', filler='Preenchedor Belarine QA', cannula='Cânula QA';
+ for(const [id,name,amount] of [['filler',filler,12],['cannula',cannula,8]]){
+  put('procedures',{id,name,price:80,averageCost:25,active:true});
+  put('inventory',{id,procedureId:id,quantity:amount,visibleInStock:true});
+ }
+ await admin.page.reload();await saved(admin);await navigationButton(admin.page,'Cadastro de Produtos').click();
+ await admin.page.getByRole('button',{name:'Adicionar combo',exact:true}).click();
+ let comboDialog=admin.page.getByRole('dialog',{name:'Adicionar combo',exact:true});
+ await comboDialog.getByLabel('Nome',{exact:true}).fill(comboName);
+ assert.equal(await comboDialog.getByRole('button',{name:'Salvar combo',exact:true}).isDisabled(),true);
+ for(const name of [filler,cannula]){
+  await selectSearchOption(comboDialog,'Selecionar produto do combo',name);
+  await comboDialog.getByRole('button',{name:'Incluir produto no combo',exact:true}).click();
+ }
+ await comboDialog.getByLabel('Quantidade de '+filler+' no combo',{exact:true}).fill('3');
+ await comboDialog.getByRole('button',{name:'Salvar combo',exact:true}).click();await comboDialog.waitFor({state:'hidden'});await saved(admin);
+ const comboRow=admin.page.getByRole('row').filter({hasText:comboName});
+ assert.match(await comboRow.innerText(),/3× Preenchedor Belarine QA/);
+ const comboId=[...records.values()].find(row=>row.entity==='procedures'&&row.data.name===comboName).record_id;
+ await admin.page.reload();await saved(admin);await navigationButton(admin.page,'Cadastro de Produtos').click();
+ await admin.page.getByRole('button',{name:'Combos',exact:true}).click();
+ await comboRow.waitFor();
+ assert.equal(await admin.page.getByText(cannula,{exact:true}).count(),0,'Combo filter hides standalone product rows');
+ put('appointments',{...creditVisit,id:'combo-visit',startsAt:date+'T18:00:00',endsAt:date+'T18:30:00',servicePrice:100});
+ await standard.page.reload();await saved(standard);await navigationButton(standard.page,'Agenda').click();
+ await standard.page.getByTestId('appointment-combo-visit').click();
+ await standard.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();
+ const comboCheckout=standard.page.getByRole('dialog',{name:'Fechamento de conta',exact:true});
+ await comboCheckout.getByRole('button',{name:'Produtos',exact:true}).click();
+ await selectSearchOption(comboCheckout,'Adicionar produto ao consumo',comboName);
+ await comboCheckout.getByLabel('Quantidade do produto a adicionar',{exact:true}).fill('2');
+ await comboCheckout.getByRole('button',{name:'Adicionar produto',exact:true}).click();
+ assert.match(await comboCheckout.getByTestId('checkout-products').innerText(),/6× Preenchedor Belarine QA · 2× Cânula QA/);
+ await comboCheckout.getByLabel('Receber por Pix',{exact:true}).check();
+ await comboCheckout.getByRole('button',{name:'Fechar Conta',exact:true}).click();await comboCheckout.waitFor({state:'hidden'});await saved(standard);
+ assert.equal(records.get('inventory:filler').data.quantity,6);
+ assert.equal(records.get('inventory:cannula').data.quantity,6);
+ assert.equal(records.has('inventory:'+comboId),false);
+ await comboRow.getByTitle('Editar',{exact:true}).click();
+ comboDialog=admin.page.getByRole('dialog',{name:'Editar combo',exact:true});
+ await comboDialog.getByLabel('Quantidade de '+filler+' no combo',{exact:true}).fill('4');
+ await comboDialog.getByRole('button',{name:'Salvar combo',exact:true}).click();await comboDialog.waitFor({state:'hidden'});await saved(admin);
+ assert.equal(records.get('procedures:'+comboId).data.comboItems[0].quantity,4);
+ await refresh(standard);
+ await standard.page.getByTestId('appointment-combo-visit').click();
+ await standard.page.getByRole('menuitem',{name:'Ver fechamento',exact:true}).click();
+ await standard.page.getByRole('dialog').getByRole('button',{name:'Excluir fechamento',exact:true}).click();await saved(standard);
+ assert.equal(records.get('inventory:filler').data.quantity,12);
+ assert.equal(records.get('inventory:cannula').data.quantity,8);
+ console.log('PASS: create, filter and edit product combos in the catalog, choose a combo in checkout, deduct multiplied physical quantities and reverse the original composition after catalog changes.');
  assert.deepEqual(errors,[]);
  console.log('PASS: admin/standard save past appointments through real gateway, reuse cancelled time, share both ways without reload and persist after reload; cancellation history and reactivation conflicts preserved; remote conflict while menu is open produces an explicit error and no orphan patient.');
  console.log('PASS: administrator saving and reload, three professionals at one time, fourth rejected in browser and server for both roles, lost acknowledgement retries without duplicate patients/bookings. Isolated mock cloud only.');

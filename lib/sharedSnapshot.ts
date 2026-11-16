@@ -1,7 +1,7 @@
 import { canAccessTab, canMoveStock } from "./access";
 import type { AppUser } from "./access";
 import { checkoutTotals } from "./checkout";
-import { applyCheckoutInventory } from "./inventory";
+import { applyCheckoutInventory, appointmentStockConsumption, checkoutStockProducts } from "./inventory";
 import { applyCheckoutGifts } from "./gifts";
 import { isPackageSessionTreatment } from "./packageSessions";
 import { recoverPendingChanges } from "./persistence";
@@ -13,7 +13,7 @@ function applyUsage(state: DataSnapshot, old: Appointment | undefined, next: App
   const account = next?.accountClosed ? next.closedAccount : undefined;
   const consumesStock = account && (checkoutTotals(account.procedureLines, account.payments ?? []).total > 0 || isPackageSessionTreatment(account));
   return { ...state,
-    inventory: applyCheckoutInventory(state.inventory, old?.stockConsumption ?? (old?.accountClosed ? old.closedAccount?.products : []), consumesStock ? account.products : []).inventory,
+    inventory: applyCheckoutInventory(state.inventory, appointmentStockConsumption(old?.accountClosed ? old : undefined), checkoutStockProducts(account?.products ?? [], !!consumesStock)).inventory,
     gifts: applyCheckoutGifts(state.gifts, old?.giftConsumption ?? (old?.accountClosed ? old.closedAccount?.gifts : []), consumesStock ? account.gifts ?? [] : []).gifts
   };
 }

@@ -55,6 +55,7 @@ const procedureCostByName: Record<string, number> = {
 
 export function applyProcedureCostOverrides(procedures: Procedure[]) {
   return procedures.map((procedure) => {
+    if (procedure.comboItems) return procedure;
     const cost = procedureCostByName[normalizeProcedureName(procedure.name)];
     return cost === undefined ? procedure : { ...procedure, averageCost: cost };
   });

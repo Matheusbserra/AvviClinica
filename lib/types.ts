@@ -77,6 +77,8 @@ export type ImportedPatientPackage = {
 
 export type PatientPhoto = { id: string; name: string; date: string; uploadedBy: string; path?: string; localImage?: string };
 
+export type StockComponent = { procedureId: string; quantity: number };
+
 export type Procedure = {
   id: string;
   name: string;
@@ -89,6 +91,7 @@ export type Procedure = {
   professionalPercent: number;
   notes: string;
   active: boolean;
+  comboItems?: StockComponent[];
 };
 
 export type Service = {
@@ -155,7 +158,7 @@ export type ProcedureLine = {
   professionalPercent: number;
 };
 
-export type ProductUsage = { id: string; procedureId: string; quantity: number; unitCost: number };
+export type ProductUsage = { id: string; procedureId: string; quantity: number; unitCost: number; comboItems?: StockComponent[] };
 
 export type FinancialEntry = {
   id: string;
@@ -217,7 +220,7 @@ export type Appointment = {
   id: string;
   closedAccount?: ClosedAccount;
   accountClosed?: boolean;
-  stockConsumption?: { procedureId: string; quantity: number }[];
+  stockConsumption?: StockComponent[];
   serviceId?: string;
   servicePrice?: number;
   servicePriceType?: Service["priceType"];

@@ -91,4 +91,47 @@ try {
  assert.equal((await gateway.POST(request([{...stockRows[0],data:{...afterMovement,visibleInStock:true}}]))).status,200);
  assert.deepEqual(records.get('inventory:i').data,afterMovement);
  console.log('PASS: authenticated stock additions/removals, server-side actor and date, idempotent retry, concurrent balance validation, stale-history protection and hide/restore.');
+ const secondStock={id:'second-stock',procedureId:'second',quantity:12,visibleInStock:true};
+ records.set('procedures:second',{entity:'procedures',record_id:'second',data:{id:'second',name:'Cânula QA'}});
+ records.set('inventory:second-stock',{entity:'inventory',record_id:'second-stock',data:secondStock});
+ const comboItems=[{procedureId:'prod',quantity:3},{procedureId:'second',quantity:1}];
+ const combo={id:'combo',name:'Combo preenchimento QA',comboItems};
+ const comboRow=(data)=>({entity:'procedures',record_id:combo.id,data});
+ assert.equal((await gateway.POST(request([comboRow(combo)]))).status,403);
+ serverUser={login:'admin',role:'admin'};
+ for (const invalid of [[],[{procedureId:'missing',quantity:1}],[{procedureId:'combo',quantity:1}],[{procedureId:'prod',quantity:0}], [...comboItems,comboItems[0]]]) {
+  assert.equal((await gateway.POST(request([comboRow({...combo,comboItems:invalid})]))).status,400);
+ }
+ assert.equal((await gateway.POST(request([comboRow(combo)]))).status,200);
+ assert.equal(stock.stockProductVisible(combo,[]),false);
+ assert.equal((await move({...addition,id:crypto.randomUUID(),procedureId:'combo'})).status,404);
+ const comboVisit={...old,id:'combo-visit',startsAt:'2026-10-12T16:00:00',endsAt:'2026-10-12T17:00:00'};
+ records.set('appointments:combo-visit',{entity:'appointments',record_id:comboVisit.id,data:comboVisit});
+ const comboLine={id:'used-combo',procedureId:'combo',quantity:2,unitCost:100,comboItems};
+ const standalone={id:'extra-product',procedureId:'prod',quantity:1,unitCost:10};
+ const comboClosure={...comboVisit,accountClosed:true,stockConsumption:[{procedureId:'prod',quantity:7},{procedureId:'second',quantity:2}],
+  closedAccount:{...next.closedAccount,id:'combo-account',appointmentId:comboVisit.id,products:[comboLine,standalone],gifts:[]}};
+ const appointmentRow=data=>({entity:'appointments',record_id:comboVisit.id,data});
+ const stockRow=data=>({entity:'inventory',record_id:data.id,data});
+ const comboWrites=[appointmentRow(comboClosure),stockRow({...afterMovement,quantity:14}),stockRow({...secondStock,quantity:10})];
+ assert.equal((await gateway.POST(request(comboWrites.slice(0,2)))).status,409,'Even an admin must include the complete combo deduction');
+ const {comboItems: omittedItems,...omittedLine}=comboLine;
+ const forged={...comboClosure,closedAccount:{...comboClosure.closedAccount,products:[omittedLine,standalone]}};
+ assert.equal((await gateway.POST(request([appointmentRow(forged),...comboWrites.slice(1)]))).status,409,'A combo cannot be sent as one ordinary product');
+ serverUser=readOnly;
+ assert.equal((await gateway.POST(request(comboWrites))).status,200);
+ assert.equal((await gateway.POST(request(comboWrites))).status,200,'Replaying a committed checkout must not deduct the combo twice');
+ assert.equal(records.get('inventory:i').data.quantity,14);
+ assert.equal(records.get('inventory:second-stock').data.quantity,10);
+ assert.equal(records.has('inventory:combo'),false);
+ serverUser={login:'admin',role:'admin'};
+ assert.equal((await gateway.POST(request([comboRow({...combo,comboItems:[{procedureId:'prod',quantity:10}]})]))).status,200);
+ serverUser=readOnly;
+ const reducedClosure={...comboClosure,stockConsumption:[{procedureId:'prod',quantity:4},{procedureId:'second',quantity:1}],closedAccount:{...comboClosure.closedAccount,products:[{...comboLine,quantity:1},standalone]}};
+ assert.equal((await gateway.POST(request([appointmentRow(reducedClosure),stockRow({...afterMovement,quantity:17}),stockRow({...secondStock,quantity:11})]))).status,200);
+ const cancel={...comboVisit,accountClosed:false,stockConsumption:[]};
+ assert.equal((await gateway.POST(request([appointmentRow(cancel),stockRow(afterMovement),stockRow(secondStock)]))).status,200);
+ assert.equal(records.get('inventory:i').data.quantity,21);
+ assert.equal(records.get('inventory:second-stock').data.quantity,12);
+ console.log('PASS: product combo catalog validation, multi-product quantities, standard-user checkout, required deductions, idempotent retry, catalog changes and exact stock reversal.');
 } finally {assert.equal(path.dirname(path.resolve(dir)),path.resolve(os.tmpdir()));assert.ok(path.basename(dir).startsWith('avvi-invoice-stock-'));fs.rmSync(dir,{recursive:true,force:true});}

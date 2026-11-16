@@ -7,7 +7,7 @@ import type { AppUser } from "@/lib/access";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
 import { followUpEnabled, canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, isMetaReviewer, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { checkoutStockUpdates } from "@/lib/stockAccess";
-import { applyStockMovement, validStockMovement } from "@/lib/inventory";
+import { applyStockMovement, sameComboItems, validComboItems, validStockMovement } from "@/lib/inventory";
 import { stockHistoryEntry, followUpEntityRows, postProcedureOnly, postProcedureEntityRows } from "@/lib/accessSnapshot";
 import { appointmentAvailabilityError, reservedInterval, validClosedShifts } from "@/lib/agendaAvailability";
 import { applyCheckoutUltraformer, isUltraformerTip, usageOnlyTipUpdate, validCheckoutShots } from "@/lib/ultraformer";
@@ -16,7 +16,7 @@ import { validAnamnese } from "@/lib/anamnese";
 import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice, preserveCloudInvoice } from "@/lib/invoices";
 import { entityNames } from "@/lib/database";
 import type { EntityName } from "@/lib/database";
-import type { Appointment, FinancialEntry, GiftStockItem, InventoryItem, Patient, PatientCreditDeposit, Professional, StockMovementRequest } from "@/lib/types";
+import type { Appointment, FinancialEntry, GiftStockItem, InventoryItem, Patient, PatientCreditDeposit, ProductUsage, Professional, StockComponent, StockMovementRequest } from "@/lib/types";
 import { patientCreditFeeCost, validPatientCreditDeposit } from "@/lib/patientCredit";
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "no-store" };
@@ -46,6 +46,9 @@ async function rowsByIds<T = RecordRow>(entity: string, ids: string[], field = "
   const unique = [...new Set(ids.filter(id => typeof id === "string" && id))], result: T[] = [];
   for (let offset = 0; offset < unique.length; offset += 100) result.push(...await rows<T>(entity, [{field,op:"in",values:unique.slice(offset,offset+100)}], projection));
   return result;
+}
+function catalogProducts(ids: string[]) {
+  return rowsByIds<{ record_id: string; comboItems: StockComponent[] | null }>("procedures", ids, "record_id", "record_id,comboItems:data->comboItems");
 }
 async function permittedRecords(user: AppUser, entity: string) {
     const records = await rows(entity);
@@ -172,8 +175,9 @@ export async function POST(request: Request) { return saveData(request); }
 async function recordStockMovement(db: ReturnType<typeof database>, user: AppUser, request: StockMovementRequest, ownsLease: () => Promise<boolean>) {
   const { id, kind, procedureId, quantity } = request;
   const [row] = await rowsByIds<{ record_id: string; data: InventoryItem }>("inventory", [procedureId], "data->>procedureId");
-  if (!row && !(await rowsByIds("procedures", [procedureId], "record_id", "record_id")).length) {
-    return Response.json({ error: "Produto não encontrado." }, { status: 404, headers });
+  if (!row) {
+    const [product] = await catalogProducts([procedureId]);
+    if (!product || product.comboItems) return Response.json({ error: "Selecione um produto de estoque." }, { status: 404, headers });
   }
   const current = row?.data ?? { id: procedureId, procedureId, quantity: 0, visibleInStock: true };
   const actorId = user.id ?? user.login;
@@ -258,9 +262,24 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     }
     const selectedStockProducts = upserts.filter(row => row.entity === "inventory" && row.data?.visibleInStock === true);
     if (selectedStockProducts.length) {
-      const productIds = new Set((await rowsByIds("procedures", selectedStockProducts.map(row => row.data.procedureId), "record_id", "record_id")).map(row => row.record_id));
-      for (const row of upserts) if (row.entity === "procedures" && canWriteEntity(user, "procedures")) productIds.add(row.record_id);
+      const productIds = new Set((await catalogProducts(selectedStockProducts.map(row => row.data.procedureId))).filter(row => !row.comboItems).map(row => row.record_id));
+      for (const row of upserts) if (row.entity === "procedures" && canWriteEntity(user, "procedures") && row.data?.comboItems === undefined) productIds.add(row.record_id);
       if (selectedStockProducts.some(row => !productIds.has(row.data.procedureId))) return Response.json({ error: "Selecione um produto do Cadastro de Produtos." }, { status: 400, headers });
+    }
+    const comboUpdates = upserts.filter(row => row.entity === "procedures" && row.data?.comboItems !== undefined);
+    if (comboUpdates.length) {
+      if (!canWriteEntity(user, "procedures")) return Response.json({ error: "Cadastro de combos não autorizado." }, { status: 403, headers });
+      if (comboUpdates.some(row => typeof row.data.name !== "string" || !row.data.name.trim() || !validComboItems(row.data.comboItems))) {
+        return Response.json({ error: "Informe o nome e os produtos do combo com quantidades inteiras e positivas." }, { status: 400, headers });
+      }
+      const componentIds = comboUpdates.flatMap(row => (row.data.comboItems as StockComponent[]).map(item => item.procedureId));
+      const components = new Set((await catalogProducts(componentIds)).filter(row => !row.comboItems).map(row => row.record_id));
+      for (const row of upserts) if (row.entity === "procedures") {
+        if (row.data?.comboItems === undefined) components.add(row.record_id);
+        else components.delete(row.record_id);
+      }
+      for (const item of removed) if (item.entity === "procedures" && Array.isArray(item.ids)) for (const id of item.ids) components.delete(id);
+      if (componentIds.some(id => !components.has(id))) return Response.json({ error: "Selecione produtos cadastrados para compor o combo." }, { status: 400, headers });
     }
     const packageUpdates = upserts.filter(row => row.entity === "service_packages");
     if (packageUpdates.length) {
@@ -308,6 +327,39 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     const deletedAppointments = removed.filter(item => item.entity === "appointments" && Array.isArray(item.ids)).flatMap(item => item.ids);
     const stored = (await rowsByIds("appointments", [...appointmentUpdates.map(item => item.id), ...deletedAppointments])).map(row => row.data as unknown as Appointment);
     for (const appointment of appointmentUpdates) Object.assign(appointment, preserveCloudInvoice(stored.find(item => item.id === appointment.id), appointment));
+    const additions: ProductUsage[] = [];
+    for (const appointment of appointmentUpdates) {
+      const products = appointment.accountClosed ? appointment.closedAccount?.products ?? [] : [];
+      if (!Array.isArray(products)) return Response.json({ error: "Confira os produtos do fechamento." }, { status: 400, headers });
+      const previousProducts = stored.find(item => item.id === appointment.id)?.closedAccount?.products ?? [];
+      for (const product of products) {
+        if (!product || typeof product.procedureId !== "string" || !product.procedureId) return Response.json({ error: "Confira os produtos do fechamento." }, { status: 400, headers });
+        if (product.comboItems !== undefined && (!validComboItems(product.comboItems) || !Number.isSafeInteger(product.quantity) || product.quantity < 1
+          || product.comboItems.some(item => item.procedureId === product.procedureId || !Number.isSafeInteger(item.quantity * product.quantity)))) {
+          return Response.json({ error: "Confira as quantidades do combo." }, { status: 400, headers });
+        }
+        const previous = previousProducts.find(item => item.id === product.id && item.procedureId === product.procedureId);
+        if (!previous) additions.push(product);
+        else if (!sameComboItems(product.comboItems, previous.comboItems)) {
+          return Response.json({ error: "A composição de um combo já utilizado deve ser preservada." }, { status: 409, headers });
+        }
+      }
+    }
+    if (additions.length) {
+      const catalog = new Map((await catalogProducts(additions.flatMap(product => [product.procedureId, ...(product.comboItems ?? []).map(item => item.procedureId)])))
+        .map(row => [row.record_id, row.comboItems]));
+      if (canWriteEntity(user, "procedures")) {
+        for (const row of upserts) if (row.entity === "procedures") catalog.set(row.record_id, row.data?.comboItems ?? null);
+        for (const item of removed) if (item.entity === "procedures" && Array.isArray(item.ids)) for (const id of item.ids) catalog.delete(id);
+      }
+      if (additions.some(product => !sameComboItems(product.comboItems, catalog.get(product.procedureId))
+        || product.comboItems?.some(item => !catalog.has(item.procedureId) || catalog.get(item.procedureId)))) {
+        return Response.json({ error: "A composição do combo mudou. Atualize os dados e selecione o combo novamente." }, { status: 409, headers });
+      }
+    }
+    const comboComponentIds = new Set([...stored, ...appointmentUpdates].flatMap(item => (item.closedAccount?.products ?? []).flatMap(product =>
+      (product.comboItems ?? []).map(component => component.procedureId))));
+    if (comboComponentIds.size && !ownsPackageLease) return await packageLockedSave(retryRequest, db);
     const packageSensitive = [...appointmentUpdates, ...stored.filter(item => deletedAppointments.includes(item.id) || appointmentUpdates.some(next => next.id === item.id))].some(hasPackageSessionData);
     const moved = appointmentUpdates.filter(item => !stored.some(old => old.id === item.id && old.professionalId === item.professionalId && old.startsAt === item.startsAt && old.endsAt === item.endsAt && old.eventType === item.eventType && !(old.status === "Cancelado" && item.status !== "Cancelado")));
     if (packageSensitive && ownsPackageLease) {
@@ -325,20 +377,22 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
       const packageError = packageSessionError([...effective.values()]);
       if (packageError) return Response.json({ error: packageError }, { status: 409, headers });
     }
-    if (stockRestricted) {
-      if (removed.some(item => ["inventory", "gifts"].includes(item.entity) && item.ids?.length)) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
-      if (stockUpdates.length) {
-        if (!canAccessTab(user, "Agenda")) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
-        const inventoryUpdates = stockUpdates.filter(row => row.entity === "inventory");
-        const giftUpdates = stockUpdates.filter(row => row.entity === "gifts");
-        const [inventoryByProduct, gifts] = await Promise.all([
-          rowsByIds<{ record_id: string; data: InventoryItem }>("inventory", inventoryUpdates.map(row => row.data?.procedureId), "data->>procedureId"),
-          rowsByIds("gifts", giftUpdates.map(row => row.record_id))
-        ]);
-        const inventoryById = inventoryRows.filter(row => inventoryUpdates.some(update => update.record_id === row.record_id));
-        const inventory = [...new Map([...inventoryByProduct, ...inventoryById].map(row => [row.record_id, row])).values()]
-          .sort((first, second) => first.record_id < second.record_id ? -1 : first.record_id > second.record_id ? 1 : 0);
-        if (!checkoutStockUpdates(inventory.map(row => row.data), gifts.map(row => row.data as unknown as GiftStockItem), stored, appointmentUpdates, deletedAppointments, stockUpdates)) return Response.json({ error: "Sem permissão para ajustar o estoque. A baixa automática deve corresponder ao fechamento da conta." }, { status: 403, headers });
+    if (stockRestricted && removed.some(item => ["inventory", "gifts"].includes(item.entity) && item.ids?.length)) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
+    if ((stockRestricted && stockUpdates.length) || comboComponentIds.size) {
+      if (!canAccessTab(user, "Agenda")) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
+      const inventoryUpdates = stockUpdates.filter(row => row.entity === "inventory");
+      const giftUpdates = stockUpdates.filter(row => row.entity === "gifts");
+      const [inventoryByProduct, gifts] = await Promise.all([
+        rowsByIds<{ record_id: string; data: InventoryItem }>("inventory", [...inventoryUpdates.map(row => row.data?.procedureId), ...comboComponentIds], "data->>procedureId"),
+        rowsByIds("gifts", giftUpdates.map(row => row.record_id))
+      ]);
+      const inventoryById = inventoryRows.filter(row => inventoryUpdates.some(update => update.record_id === row.record_id));
+      const inventory = [...new Map([...inventoryByProduct, ...inventoryById].map(row => [row.record_id, row])).values()]
+        .sort((first, second) => first.record_id < second.record_id ? -1 : first.record_id > second.record_id ? 1 : 0);
+      const checkedUpdates = stockRestricted ? stockUpdates : inventoryUpdates.filter(row => comboComponentIds.has(row.data?.procedureId));
+      if (!checkoutStockUpdates(inventory.map(row => row.data), gifts.map(row => row.data as unknown as GiftStockItem), stored, appointmentUpdates, deletedAppointments, checkedUpdates, comboComponentIds)) {
+        const error = comboComponentIds.size ? "A baixa dos produtos do combo deve corresponder ao fechamento. Atualize os dados e tente novamente." : "Sem permissão para ajustar o estoque. A baixa automática deve corresponder ao fechamento da conta.";
+        return Response.json({ error }, { status: comboComponentIds.size ? 409 : 403, headers });
       }
     }
     const tipUpdates = upserts.filter(row => row.entity === "ultraformer_tips");
