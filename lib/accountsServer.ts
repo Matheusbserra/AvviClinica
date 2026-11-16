@@ -6,11 +6,12 @@ import { appTabs, accountPermissions, standardTabs, professionalAccessTabs, prof
 import type { AppRole, AppUser } from "./access";
 import { legacyStandard } from "./accessServer";
 export type StoredAccount = { id: string; login: string; name: string; role: AppRole; tabs: string[]; salt: string; password_hash: string; password_ciphertext: string | null; version: number; professional_report?: { professionalIds: string[] } | null; professional_registration?: { professionalIds: string[] } | null };
+type SessionAccount = Omit<StoredAccount, "salt" | "password_hash" | "password_ciphertext">;
 export type ManagedAccount = AppUser & { id: string; name: string; tabs: string[]; revision: number; locked: boolean; password: string | null };
 export class AccountError extends Error { constructor(message: string, public status = 400) { super(message); } }
 const primary: ManagedAccount = { id: "primary-admin", login: "admin", name: "Administrador principal", role: "admin", tabs: [...appTabs], revision: 0, locked: true, password: null };
 const builtin: StoredAccount = { id: "builtin-standard", login: "avviclinica", name: "AvviClínica", role: "standard", tabs: [...standardTabs], salt: legacyStandard.salt, password_hash: legacyStandard.hash, password_ciphertext: null, version: 0 };
-export function accountUser(account: StoredAccount): AppUser {
+export function accountUser(account: SessionAccount): AppUser {
   const clean = (scope: StoredAccount["professional_report"]) => scope ? { professionalIds: Array.isArray(scope.professionalIds) ? scope.professionalIds.filter(id => typeof id === "string") : [] } : undefined;
   const scope = professionalScope({ login: account.login, role: account.role, professionalReport: clean(account.professional_report), professionalRegistration: clean(account.professional_registration) });
   return { id: account.id, login: account.login, name: account.name, role: account.role, tabs: account.role === "admin" ? [...appTabs] : account.tabs.filter(tab => accountPermissions.includes(tab)), revision: account.version, ...(scope ? { professionalReport: scope, professionalRegistration: scope } : {}) };
@@ -56,6 +57,27 @@ async function storedAccounts(allowUnprepared = false): Promise<StoredAccount[]>
   return data as StoredAccount[];
 }
 export async function findAccount(idOrLogin: string) { const stored = await storedAccounts(true), all = stored.some(item => item.id === builtin.id) ? stored : [...stored, builtin]; return all.find(item => item.id === idOrLogin || item.login === idOrLogin); }
+
+export async function findSessionAccount(id: string): Promise<SessionAccount | undefined> {
+  if (accountStorageMode() === "local") return findAccount(id);
+  const fallback = id === builtin.id ? builtin : undefined;
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) return fallback;
+
+  const db = cloud();
+  const scopeFields = new Set(["professional_report", "professional_registration"]);
+  for (;;) {
+    const columns = ["id", "login", "name", "role", "tabs", "version", ...scopeFields];
+    const { data, error, status } = await db.from("avvi_user_accounts")
+      .select(columns.join(",")).eq("id", id).limit(1).overrideTypes<SessionAccount[], { merge: false }>();
+    if (!error) return data.find(account => account.id === id) ?? fallback;
+    if (unavailable(error)) return fallback;
+    // Older deployments may have only one of the optional scope columns.
+    const missing = error.code === "42703" && [...scopeFields].find(field => error.message.includes(`avvi_user_accounts.${field} does not exist`));
+    if (!missing) throw databaseFailure(error, status, "consultar");
+    scopeFields.delete(missing);
+  }
+}
+
 export async function authenticateManaged(login: string, password: string): Promise<AppUser | null> {
   const account = await findAccount(login.trim().toLowerCase()); if (!account || password.length > 256) return null;
   if (isMetaReviewer(accountUser(account)) && (process.env.VERCEL || process.env.AVVI_WHATSAPP_LOCAL_TEST !== "true")) return null;

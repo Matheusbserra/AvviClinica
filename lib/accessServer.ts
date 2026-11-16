@@ -57,7 +57,8 @@ export async function resolveAccess(request: Request, now = Date.now(), reportUn
   const signed = readAccess(request, now); if (!signed) return null;
   if (signed.login === "admin" && signed.role === "admin" && (!signed.id || signed.id === "primary-admin")) return { login: "admin", role: "admin", name: "Administrador principal" };
   try {
-    const { findAccount, accountUser } = await import("./accountsServer"); const account = await findAccount(signed.id ?? signed.login);
+    const { findAccount, findSessionAccount, accountUser } = await import("./accountsServer");
+    const account = signed.id ? await findSessionAccount(signed.id) : await findAccount(signed.login);
     if (!account || account.login !== signed.login || account.role !== signed.role || account.version !== (signed.revision ?? 0)) return null;
     const user = accountUser(account);
     if (isMetaReviewer(user) && (process.env.VERCEL || process.env.AVVI_WHATSAPP_LOCAL_TEST !== "true")) return null;

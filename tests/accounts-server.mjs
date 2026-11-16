@@ -96,5 +96,31 @@ try {
  const cloudScoped=await accounts.saveAccount({...cloudEdited,id:cloudEdited.id,tabs:access.professionalAccessTabs,professionalAccess:{professionalIds:["ana"]}});
  assert.deepEqual(cloudRows.get(cloudUser.id).professional_report,{professionalIds:["ana"]});assert.deepEqual(cloudRows.get(cloudUser.id).professional_registration,{professionalIds:["ana"]});
  const cloudAuthenticated=await accounts.authenticateManaged("cloud-user","changed-cloud-password-2026");assert.deepEqual(access.professionalScope(cloudAuthenticated),{professionalIds:["ana"]});assert.deepEqual(cloudAuthenticated.professionalReport,cloudAuthenticated.professionalRegistration);assert.equal(cloudAuthenticated.revision,cloudScoped.revision);
+ const sessionLookups=[];
+ let missingScope="", sessionError="";
+ const unrelated={...cloudRows.get(cloudUser.id),id:"other-id",login:"other-user"};
+ globalThis.fetch=async input=>{
+  const url=new URL(input);
+  assert.equal(url.pathname,"/rest/v1/avvi_user_accounts");
+  const selected=url.searchParams.get("select").split(",");
+  assert.ok(selected.every(column=>["id","login","name","role","tabs","version","professional_report","professional_registration"].includes(column)),"Session checks must not download password fields");
+  const id=url.searchParams.get("id");
+  assert.ok(id?.startsWith("eq."),"Each workstation must query only its own session account");
+  assert.equal(url.searchParams.get("limit"),"1");
+  sessionLookups.push(id);
+  if(sessionError)return Response.json({code:sessionError},{status:503});
+  if(missingScope && selected.includes(missingScope))return Response.json({code:"42703",message:`column avvi_user_accounts.${missingScope} does not exist`},{status:400});
+  const rows=[...cloudRows.values(),unrelated].filter(row=>"eq."+row.id===id);
+  return Response.json(rows.map(row=>Object.fromEntries(selected.filter(column=>column in row).map(column=>[column,row[column]]))));
+ };
+ assert.deepEqual(await auth.resolveAccess(request(cloudAuthenticated)),cloudAuthenticated);
+ assert.deepEqual(sessionLookups,["eq."+cloudUser.id]);
+ missingScope="professional_registration";
+ assert.deepEqual(await auth.resolveAccess(request(cloudAuthenticated)),cloudAuthenticated,"Older schemas still enforce the scope stored in professional_report");
+ missingScope="";
+ assert.equal(await auth.resolveAccess(request(cloudUser)),null,"Scope and password changes still revoke old sessions");
+ assert.equal((await auth.resolveAccess(request(original))).id,original.id,"The built-in account still works if it has no stored row");
+ sessionError="XX000";
+ assert.equal(await auth.resolveAccess(request(cloudAuthenticated)),null,"An unavailable account lookup must fail closed");
  console.log("PASS: Immutable primary admin, existing user, private encrypted passwords, new users, exact custom tabs and API permissions, duplicate login, rename/password/role editing, promotion, stale edit rejection, session revocation and cloud failure closed; specific safe diagnostics for API keys, project mismatch, schema permissions and missing columns; legacy and modern private keys; root/REST/auth URLs yield the exact REST path for listing, creation, editing and login. Isolated files and mocked network only.");
 }finally{fs.rmSync(dir,{recursive:true,force:true});}
