@@ -1631,12 +1631,13 @@ export default function Home() {
   }
 
   function saveProcedure() {
-    const price = Number(procedureForm.price) || 0;
-    const productCost = procedureForm.comboItems
-      ? comboProductCost(procedureForm.comboItems, procedures)
+    const comboItems = procedureForm.comboItems;
+    const price = comboItems ? 0 : Number(procedureForm.price) || 0;
+    const productCost = comboItems
+      ? comboProductCost(comboItems, procedures)
       : Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
-    const taxPercent = Number(procedureForm.taxPercent) || 0;
-    const clinicCost = Number(procedureForm.clinicCost) || 0;
+    const taxPercent = comboItems ? 0 : Number(procedureForm.taxPercent) || 0;
+    const clinicCost = comboItems ? 0 : Number(procedureForm.clinicCost) || 0;
     const taxValue = price * (taxPercent / 100);
     const saved = {
       ...procedureForm,
@@ -2847,8 +2848,8 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
   const [comboProductId, setComboProductId] = useState("");
   const comboItems = procedureForm.comboItems;
   const productCost = comboItems ? comboProductCost(comboItems, procedures) : Number(procedureForm.productCost ?? procedureForm.averageCost) || 0;
-  const taxValue = (Number(procedureForm.price) || 0) * ((Number(procedureForm.taxPercent) || 0) / 100);
-  const clinicCost = Number(procedureForm.clinicCost) || 0;
+  const taxValue = comboItems ? 0 : (Number(procedureForm.price) || 0) * ((Number(procedureForm.taxPercent) || 0) / 100);
+  const clinicCost = comboItems ? 0 : Number(procedureForm.clinicCost) || 0;
   const calculatedAverageCost = productCost + taxValue + clinicCost;
   const sortedProcedures = procedures.slice().sort((first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }));
   const componentOptions = sortedProcedures.filter(product => !product.comboItems && !comboItems?.some(item => item.procedureId === product.id));
@@ -2935,16 +2936,18 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
         <ClinicalDialog title={comboItems ? (procedureForm.id ? "Editar combo" : "Adicionar combo") : (procedureForm.id ? "Editar produto" : "Adicionar produto")} onClose={() => setIsFormOpen(false)}>
           <div className="grid gap-3 md:grid-cols-3">
           <FormField label="Nome"><input className="input" value={procedureForm.name} onChange={(event) => setProcedureForm({ ...procedureForm, name: event.target.value })} /></FormField>
-          <FormField label="Categoria"><input className="input" value={procedureForm.category} onChange={(event) => setProcedureForm({ ...procedureForm, category: event.target.value })} /></FormField>
-          <FormField label="Preço padrão"><MoneyInput value={Number(procedureForm.price)} onChange={(value) => setProcedureForm({ ...procedureForm, price: value })} /></FormField>
           {comboItems ? <FormField label="Custo dos componentes"><p className="mt-1 rounded-md border border-avvi-line p-2 text-sm font-semibold">{currency(productCost)}</p></FormField>
-            : <FormField label="Custo do produto"><MoneyInput value={productCost} onChange={(value) => setProcedureForm({ ...procedureForm, productCost: value })} /></FormField>}
-          <FormField label="Imposto (%)"><input className="input" type="number" value={procedureForm.taxPercent ?? 0} onChange={(event) => setProcedureForm({ ...procedureForm, taxPercent: Number(event.target.value) })} /></FormField>
-          <FormField label="Custo da clínica"><MoneyInput value={clinicCost} onChange={(value) => setProcedureForm({ ...procedureForm, clinicCost: value })} /></FormField>
+            : <>
+              <FormField label="Categoria"><input className="input" value={procedureForm.category} onChange={(event) => setProcedureForm({ ...procedureForm, category: event.target.value })} /></FormField>
+              <FormField label="Preço padrão"><MoneyInput value={Number(procedureForm.price)} onChange={(value) => setProcedureForm({ ...procedureForm, price: value })} /></FormField>
+              <FormField label="Custo do produto"><MoneyInput value={productCost} onChange={(value) => setProcedureForm({ ...procedureForm, productCost: value })} /></FormField>
+              <FormField label="Imposto (%)"><input className="input" type="number" value={procedureForm.taxPercent ?? 0} onChange={(event) => setProcedureForm({ ...procedureForm, taxPercent: Number(event.target.value) })} /></FormField>
+              <FormField label="Custo da clínica"><MoneyInput value={clinicCost} onChange={(value) => setProcedureForm({ ...procedureForm, clinicCost: value })} /></FormField>
+            </>}
           <div className="rounded-md border border-amber-200 bg-avvi-soft p-3 text-sm">
             <p className="text-xs font-bold uppercase text-avvi-blue">Custo médio calculado</p>
             <p className="mt-1 text-lg font-bold text-avvi-ink">{currency(calculatedAverageCost)}</p>
-            <p className="mt-1 text-xs text-slate-500">Produto + imposto ({currency(taxValue)}) + clínica</p>
+            {!comboItems && <p className="mt-1 text-xs text-slate-500">Produto + imposto ({currency(taxValue)}) + clínica</p>}
           </div>
           <FormField label="Observações"><input className="input" value={procedureForm.notes} onChange={(event) => setProcedureForm({ ...procedureForm, notes: event.target.value })} /></FormField>
         </div>
@@ -2984,7 +2987,7 @@ function ProceduresView({ procedureForm, setProcedureForm, procedures, setProced
         </div>
         <DataTable
           headers={["Produto", "Categoria", "Preço", "Custo médio", "Ações"]}
-          rows={visibleProcedures.map((procedure) => [procedure.comboItems ? <div key={procedure.id}><strong>{procedure.name}</strong><p className="mt-1 text-xs text-slate-500">{procedure.comboItems.map(item => `${item.quantity}× ${procedures.find(product => product.id === item.procedureId)?.name ?? "Produto removido"}`).join(" · ")}</p></div> : procedure.name, procedure.category, currency(procedure.price), currency(procedure.averageCost), (
+          rows={visibleProcedures.map((procedure) => [procedure.comboItems ? <div key={procedure.id}><strong>{procedure.name}</strong><p className="mt-1 text-xs text-slate-500">{procedure.comboItems.map(item => `${item.quantity}× ${procedures.find(product => product.id === item.procedureId)?.name ?? "Produto removido"}`).join(" · ")}</p></div> : procedure.name, procedure.category, procedure.comboItems ? "—" : currency(procedure.price), currency(procedure.averageCost), (
             <div key={procedure.id} className="flex flex-wrap items-center gap-2">
               <ActionButtons
                 onEdit={() => {

@@ -406,9 +406,19 @@ try{
   put('inventory',{id,procedureId:id,quantity:amount,visibleInStock:true});
  }
  await admin.page.reload();await saved(admin);await navigationButton(admin.page,'Cadastro de Produtos').click();
+ const productFields=['Categoria','Preço padrão','Custo do produto','Imposto (%)','Custo da clínica'];
+ await admin.page.getByRole('button',{name:'Adicionar produto',exact:true}).click();
+ const productForm=admin.page.getByRole('dialog',{name:'Adicionar produto',exact:true});
+ await productForm.waitFor();
+ for(const label of productFields)assert.equal(await productForm.getByText(label).count(),1,`Produto avulso mantém o campo ${label}`);
+ await productForm.getByRole('button',{name:'Cancelar',exact:true}).click();
  await admin.page.getByRole('button',{name:'Adicionar combo',exact:true}).click();
  let comboDialog=admin.page.getByRole('dialog',{name:'Adicionar combo',exact:true});
+ await comboDialog.waitFor();
+ for(const label of productFields)assert.equal(await comboDialog.getByText(label).count(),0,`Novo combo deve ocultar ${label}`);
+ for(const label of ['Custo dos componentes','Custo médio calculado','Produtos do combo'])assert.equal(await comboDialog.getByText(label).count(),1,`Novo combo mantém ${label}`);
  await comboDialog.getByLabel('Nome',{exact:true}).fill(comboName);
+ await comboDialog.getByLabel('Observações',{exact:true}).fill('Composição de teste');
  assert.equal(await comboDialog.getByRole('button',{name:'Salvar combo',exact:true}).isDisabled(),true);
  for(const name of [filler,cannula]){
   await selectSearchOption(comboDialog,'Selecionar produto do combo',name);
@@ -419,6 +429,8 @@ try{
  const comboRow=admin.page.getByRole('row').filter({hasText:comboName});
  assert.match(await comboRow.innerText(),/3× Preenchedor Belarine QA/);
  const comboId=[...records.values()].find(row=>row.entity==='procedures'&&row.data.name===comboName).record_id;
+ assert.equal(records.get('procedures:'+comboId).data.notes,'Composição de teste');
+ assert.equal(records.get('procedures:'+comboId).data.averageCost,100);
  await admin.page.reload();await saved(admin);await navigationButton(admin.page,'Cadastro de Produtos').click();
  await admin.page.getByRole('button',{name:'Combos',exact:true}).click();
  await comboRow.waitFor();
@@ -438,11 +450,21 @@ try{
  assert.equal(records.get('inventory:filler').data.quantity,6);
  assert.equal(records.get('inventory:cannula').data.quantity,6);
  assert.equal(records.has('inventory:'+comboId),false);
+ put('procedures',{...records.get('procedures:'+comboId).data,price:500,taxPercent:10,clinicCost:30,averageCost:180});
+ await admin.page.reload();await saved(admin);await navigationButton(admin.page,'Cadastro de Produtos').click();
+ await admin.page.getByRole('button',{name:'Combos',exact:true}).click();
+ await comboRow.getByText(/180,00/).waitFor();
  await comboRow.getByTitle('Editar',{exact:true}).click();
  comboDialog=admin.page.getByRole('dialog',{name:'Editar combo',exact:true});
+ await comboDialog.waitFor();
+ for(const label of productFields)assert.equal(await comboDialog.getByText(label).count(),0,`Combo existente deve ocultar ${label}`);
+ assert.equal(await comboDialog.getByText(/180,00/).count(),0);
  await comboDialog.getByLabel('Quantidade de '+filler+' no combo',{exact:true}).fill('4');
+ assert.equal(await comboDialog.getByText(/125,00/).count(),2);
  await comboDialog.getByRole('button',{name:'Salvar combo',exact:true}).click();await comboDialog.waitFor({state:'hidden'});await saved(admin);
  assert.equal(records.get('procedures:'+comboId).data.comboItems[0].quantity,4);
+ const savedCombo=records.get('procedures:'+comboId).data;
+ assert.deepEqual([savedCombo.price,savedCombo.taxPercent,savedCombo.clinicCost,savedCombo.productCost,savedCombo.averageCost],[0,0,0,125,125]);
  await refresh(standard);
  await standard.page.getByTestId('appointment-combo-visit').click();
  await standard.page.getByRole('menuitem',{name:'Ver fechamento',exact:true}).click();
