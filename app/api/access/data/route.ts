@@ -7,6 +7,7 @@ import type { AppUser } from "@/lib/access";
 import { resolveAccess, sameOrigin } from "@/lib/accessServer";
 import { followUpEnabled, canAccessProfessional, canManageProfessional, canMoveStock, registrationOnly, isMetaReviewer, canAccessTab, canReadEntity, canWriteEntity, hasFinancialAccess } from "@/lib/access";
 import { checkoutStockUpdates } from "@/lib/stockAccess";
+import { applyStockMovement, validStockMovement } from "@/lib/inventory";
 import { stockHistoryEntry, followUpEntityRows, postProcedureOnly, postProcedureEntityRows } from "@/lib/accessSnapshot";
 import { appointmentAvailabilityError, reservedInterval, validClosedShifts } from "@/lib/agendaAvailability";
 import { applyCheckoutUltraformer, isUltraformerTip, usageOnlyTipUpdate, validCheckoutShots } from "@/lib/ultraformer";
@@ -15,7 +16,7 @@ import { validAnamnese } from "@/lib/anamnese";
 import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice, preserveCloudInvoice } from "@/lib/invoices";
 import { entityNames } from "@/lib/database";
 import type { EntityName } from "@/lib/database";
-import type { Appointment, FinancialEntry, GiftStockItem, InventoryItem, Patient, PatientCreditDeposit, Professional } from "@/lib/types";
+import type { Appointment, FinancialEntry, GiftStockItem, InventoryItem, Patient, PatientCreditDeposit, Professional, StockMovementRequest } from "@/lib/types";
 import { patientCreditFeeCost, validPatientCreditDeposit } from "@/lib/patientCredit";
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "no-store" };
@@ -167,18 +168,73 @@ async function packageLockedSave(request: Request, db: ReturnType<typeof databas
   }
 }
 export async function POST(request: Request) { return saveData(request); }
+
+async function recordStockMovement(db: ReturnType<typeof database>, user: AppUser, request: StockMovementRequest, ownsLease: () => Promise<boolean>) {
+  const { id, kind, procedureId, quantity } = request;
+  const [row] = await rowsByIds<{ record_id: string; data: InventoryItem }>("inventory", [procedureId], "data->>procedureId");
+  if (!row && !(await rowsByIds("procedures", [procedureId], "record_id", "record_id")).length) {
+    return Response.json({ error: "Produto não encontrado." }, { status: 404, headers });
+  }
+  const current = row?.data ?? { id: procedureId, procedureId, quantity: 0, visibleInStock: true };
+  const actorId = user.id ?? user.login;
+  const previous = current.movements?.find(entry => entry.id === id);
+  if (previous) {
+    if (previous.actorId !== actorId || previous.kind !== kind || previous.quantity !== quantity) {
+      return Response.json({ error: "Esta movimentação já foi registrada." }, { status: 409, headers });
+    }
+    return Response.json({ inventoryItem: current }, { headers });
+  }
+  const at = new Date().toISOString();
+  let inventoryItem: InventoryItem;
+  try { inventoryItem = applyStockMovement(current, { id, kind, quantity, at, by: user.name?.trim() || user.login, actorId }); }
+  catch (error) { return Response.json({ error: (error as Error).message }, { status: 409, headers }); }
+  if (!await ownsLease()) return Response.json({ error: "Tente salvar a movimentação novamente." }, { status: 409, headers });
+  const { error } = await db.from("avvi_records").upsert({
+    entity: "inventory", record_id: row?.record_id ?? inventoryItem.id, data: inventoryItem, updated_at: at
+  }, { onConflict: "entity,record_id" });
+  if (error) throw error;
+  return Response.json({ inventoryItem }, { headers });
+}
+
 async function saveData(request: Request, ownsPackageLease?: () => Promise<boolean>): Promise<Response> {
   const user = await resolveAccess(request); if (!user) return Response.json({ error: "Autentique-se novamente." }, { status: 401, headers });
   if (!sameOrigin(request)) return Response.json({ error: "Origem não autorizada." }, { status: 403, headers });
   try {
     const retryRequest = request.clone();
-    const { upserts = [], removed = [], patientCreditBases = {} } = await request.json();
+    const { upserts = [], removed = [], patientCreditBases = {}, stockMovement } = await request.json();
     if (!Array.isArray(upserts) || !Array.isArray(removed) || upserts.length > 5000 || removed.length > 5000) return Response.json({ error: "Requisição inválida." }, { status: 400, headers });
     if (!patientCreditBases || typeof patientCreditBases !== "object" || Array.isArray(patientCreditBases) || Object.values(patientCreditBases).some(value => !Number.isFinite(value))) return Response.json({ error: "Saldo de referência inválido." }, { status: 400, headers });
     if (!followUpEnabled && [...upserts, ...removed].some(row => typeof row?.entity === "string" && row.entity.startsWith("followup_"))) return Response.json({ disabled:true,error:"Follow Up temporariamente desativado. Atualize a página para continuar usando as outras áreas." }, { status:503,headers });
     if (isMetaReviewer(user) && [...upserts, ...removed].some(row => !canWriteEntity(user, row.entity))) return Response.json({ error: "Acesso restrito ao Follow Up." }, { status: 403, headers });
     if (canAccessTab(user, "Simulação") && !entityNames.some(entity => canWriteEntity(user, entity))) return Response.json({ error: "Esta conta tem acesso somente à simulação, sem gravação de dados." }, { status: 403, headers });
     const db = database();
+    if (stockMovement !== undefined) {
+      if (!canMoveStock(user)) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
+      if (!validStockMovement(stockMovement) || upserts.length || removed.length) return Response.json({ error: "Informe uma quantidade inteira e positiva." }, { status: 400, headers });
+      if (!ownsPackageLease) return await packageLockedSave(retryRequest, db);
+      return await recordStockMovement(db, user, stockMovement, ownsPackageLease);
+    }
+    const inventoryUpdates = upserts.filter(row => row?.entity === "inventory");
+    const inventoryDeletes = removed.filter(row => row?.entity === "inventory" && Array.isArray(row.ids)).flatMap(row => row.ids);
+    if ((inventoryUpdates.length || inventoryDeletes.length) && !ownsPackageLease) return await packageLockedSave(retryRequest, db);
+    const inventoryRows = (inventoryUpdates.length || inventoryDeletes.length)
+      ? await rowsByIds<{ record_id: string; data: InventoryItem }>("inventory", [...inventoryUpdates.map(row => row.record_id), ...inventoryDeletes])
+      : [];
+    // Movement history can only be changed by the authenticated operation above.
+    for (const { record_id, data } of inventoryRows) {
+      if (data.movements?.length && inventoryDeletes.includes(record_id)) return Response.json({ error: "O produto possui histórico de movimentações." }, { status: 409, headers });
+    }
+    for (const row of inventoryUpdates) {
+      const current = inventoryRows.find(item => item.record_id === row.record_id)?.data;
+      const history = current?.movements ?? [];
+      const submitted = row.data?.movements;
+      if (submitted !== undefined && !Array.isArray(submitted) || history.length !== (submitted?.length ?? 0)
+        || history.some((entry, index) => entry.id !== submitted[index]?.id)) {
+        return Response.json({ error: "O estoque mudou. Atualize os dados antes de salvar novamente." }, { status: 409, headers });
+      }
+      if (current?.movements) row.data.movements = current.movements;
+      else if (row.data) delete row.data.movements;
+    }
     const postContacts = upserts.filter(row => row.entity === "post_procedure_contacts");
     if (postContacts.length) {
       if (!canWriteEntity(user, "post_procedure_contacts")) return Response.json({ error: "Acesso ao pós-procedimento não autorizado." }, { status: 403, headers });
@@ -275,14 +331,14 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
         if (!canAccessTab(user, "Agenda")) return Response.json({ error: "Movimentação de estoque não autorizada." }, { status: 403, headers });
         const inventoryUpdates = stockUpdates.filter(row => row.entity === "inventory");
         const giftUpdates = stockUpdates.filter(row => row.entity === "gifts");
-        const [inventoryByProduct, inventoryById, gifts] = await Promise.all([
-          rowsByIds("inventory", inventoryUpdates.map(row => row.data?.procedureId), "data->>procedureId"),
-          rowsByIds("inventory", inventoryUpdates.map(row => row.record_id)),
+        const [inventoryByProduct, gifts] = await Promise.all([
+          rowsByIds<{ record_id: string; data: InventoryItem }>("inventory", inventoryUpdates.map(row => row.data?.procedureId), "data->>procedureId"),
           rowsByIds("gifts", giftUpdates.map(row => row.record_id))
         ]);
+        const inventoryById = inventoryRows.filter(row => inventoryUpdates.some(update => update.record_id === row.record_id));
         const inventory = [...new Map([...inventoryByProduct, ...inventoryById].map(row => [row.record_id, row])).values()]
           .sort((first, second) => first.record_id < second.record_id ? -1 : first.record_id > second.record_id ? 1 : 0);
-        if (!checkoutStockUpdates(inventory.map(row => row.data as unknown as InventoryItem), gifts.map(row => row.data as unknown as GiftStockItem), stored, appointmentUpdates, deletedAppointments, stockUpdates)) return Response.json({ error: "Sem permissão para ajustar o estoque. A baixa automática deve corresponder ao fechamento da conta." }, { status: 403, headers });
+        if (!checkoutStockUpdates(inventory.map(row => row.data), gifts.map(row => row.data as unknown as GiftStockItem), stored, appointmentUpdates, deletedAppointments, stockUpdates)) return Response.json({ error: "Sem permissão para ajustar o estoque. A baixa automática deve corresponder ao fechamento da conta." }, { status: 403, headers });
       }
     }
     const tipUpdates = upserts.filter(row => row.entity === "ultraformer_tips");

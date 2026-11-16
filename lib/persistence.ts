@@ -1,5 +1,5 @@
 import type { EntityName, EntityPayloadMap } from "./database";
-import type { Patient } from "./types";
+import type { InventoryItem, Patient } from "./types";
 
 export type DataSnapshot = { [K in EntityName]: EntityPayloadMap[K][] };
 export type LocalSnapshot = { savedAt: string; data: DataSnapshot; syncedData?: DataSnapshot; revision?: string };
@@ -35,9 +35,24 @@ export function recoverPendingChanges(remote: DataSnapshot, baseline: DataSnapsh
     const before = new Map(baseline[entity].map((record) => [recordId(record), record]));
     const after = new Map(draft[entity].map((record) => [recordId(record), record]));
     const recovered = new Map(remote[entity].map((record) => [recordId(record), record]));
-    for (const id of before.keys()) if (!after.has(id)) recovered.delete(id);
+    for (const id of before.keys()) if (!after.has(id)) {
+      if (entity === "inventory" && (recovered.get(id) as InventoryItem | undefined)?.movements?.length) continue;
+      recovered.delete(id);
+    }
     for (const [id, record] of after) {
       if (equal(before.get(id), record)) continue;
+      if (entity === "inventory") {
+        const local = record as InventoryItem;
+        const prior = before.get(id) as InventoryItem | undefined;
+        const cloud = recovered.get(id) as InventoryItem | undefined;
+        if (cloud?.movements?.length && !equal(cloud.movements, prior?.movements)) {
+          // Keep a concurrent server-owned movement when replaying a local edit.
+          const quantity = cloud.quantity + local.quantity - (prior?.quantity ?? 0);
+          const visibleInStock = local.visibleInStock !== prior?.visibleInStock ? local.visibleInStock : cloud.visibleInStock;
+          recovered.set(id, { ...cloud, quantity, ...(visibleInStock === undefined ? {} : { visibleInStock }) });
+          continue;
+        }
+      }
       if (entity === "patients") {
         const patient = record as Patient;
         const prior = before.get(id) as Patient | undefined;

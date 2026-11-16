@@ -89,7 +89,7 @@ import { InvoiceView } from "@/app/components/InvoiceView";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { procedureEntryFromAccount } from "@/lib/accountProcedures";
 import { changeProcedureLineCostTotal, changeProcedureLineQuantity, overrideProcedureLineTotal, procedureLineCostTotal, procedureLineTotal } from "@/lib/procedureEntryPricing";
-import { applyCheckoutInventory } from "@/lib/inventory";
+import { applyCheckoutInventory, applyStockMovement } from "@/lib/inventory";
 import { importedServices } from "@/lib/importedServices";
 import { appointmentServices, totalServiceMinutes } from "@/lib/appointmentServices";
 import type { AppointmentService } from "@/lib/types";
@@ -100,7 +100,7 @@ import { importedCosts } from "@/lib/importedCosts";
 import { applyProcedureCostOverrides } from "@/lib/procedureCosts";
 import { calculateEntry, currency, excludeZeroAccounts, monthKey, percent, splitDiscountImpact, summarizeMonth } from "@/lib/calculations";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { appDataTableMissing, selectInitialEntityStates, selectCloudState, syncEntityDiffs, setDatabaseAccess } from "@/lib/database";
+import { appDataTableMissing, selectInitialEntityStates, selectCloudState, syncEntityDiffs, setDatabaseAccess, saveStockMovement } from "@/lib/database";
 import type { Appointment, AppointmentStatus, DiscountSplit, FinancialEntry, FixedCost, FixedCostStatus, Patient, PaymentItem, PaymentMethod, Procedure, ProcedureLine, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, ProductUsage, ClosedAccount, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, AnamneseRecord, ProfessionalStrategy, ViewMode } from "@/lib/types";
 import type { MonthlyGoals as StoredMonthlyGoals } from "@/lib/database";
 import { hasSnapshotChanges, snapshotChanges, snapshotEntities } from "@/lib/persistence";
@@ -121,7 +121,7 @@ import type { PostProcedureContact, PostProcedureMessage } from "@/lib/types";
 import { SimulationView } from "@/app/components/SimulationView";
 import { calculateCardFee, calculateDebitFee } from "@/lib/paymentFees";
 import { patientCreditFee, patientCreditFeeCost, validPatientCreditDeposit } from "@/lib/patientCredit";
-import type { PatientCreditDeposit } from "@/lib/types";
+import type { PatientCreditDeposit, StockMovementRequest } from "@/lib/types";
 import { StrategiesView } from "@/app/components/StrategiesView";
 import { MovementsView } from "@/app/components/MovementsView";
 import { ReportsView } from "@/app/components/ReportsView";
@@ -878,6 +878,45 @@ export default function Home() {
       stopWatching();
     };
   }, [isAuthenticated, isDataReady, currentUser, applyDataSnapshot, persistLocalDraft]);
+
+  async function moveStock(movement: StockMovementRequest) {
+    if (!canMoveStock(currentUser)) throw new Error("Movimentação de estoque não autorizada.");
+    const replace = (items: InventoryItem[], item: InventoryItem) =>
+      items.some(existing => existing.id === item.id) ? items.map(existing => existing.id === item.id ? item : existing) : [...items, item];
+    if (!isSupabaseConfigured) {
+      const existing = inventory.find(item => item.procedureId === movement.procedureId);
+      const { procedureId, ...change } = movement;
+      const item = applyStockMovement(existing ?? { id: procedureId, procedureId, quantity: 0, visibleInStock: true }, {
+        ...change, at: new Date().toISOString(), by: currentUser.name?.trim() || currentUser.login, actorId: currentUser.id ?? currentUser.login
+      });
+      setInventory(current => replace(current, item));
+      return;
+    }
+    if (!cloudLoaded.current) throw new Error("Conecte-se à nuvem antes de movimentar o estoque.");
+    pendingSyncs.current++;
+    setIsSyncing(true);
+    const operation = syncQueue.current.catch(() => undefined).then(async () => {
+      const baseline = lastSyncedSnapshot.current, draft = latestDraft.current;
+      if (!baseline || !draft || JSON.stringify(baseline.inventory.find(item => item.procedureId === movement.procedureId)) !== JSON.stringify(draft.inventory.find(item => item.procedureId === movement.procedureId))) {
+        throw new Error("Salve as alterações pendentes deste produto antes de movimentar o estoque.");
+      }
+      const item = await saveStockMovement(movement);
+      const synced = lastSyncedSnapshot.current, latest = latestDraft.current;
+      if (!synced || !latest) return;
+      lastSyncedSnapshot.current = { ...synced, inventory: replace(synced.inventory, item) };
+      latestDraft.current = { ...latest, inventory: replace(latest.inventory, item) };
+      setInventory(current => replace(current, item));
+      setLastSavedAt(new Date().toISOString());
+      void persistLocalDraft(latestDraft.current);
+      notifySharedSave();
+    });
+    syncQueue.current = operation.catch(() => undefined);
+    try { await operation; }
+    finally {
+      pendingSyncs.current--;
+      setIsSyncing(pendingSyncs.current > 0);
+    }
+  }
 
   function retrySaving() {
     if (cloudLoaded.current) setSyncRetry((current) => current + 1);
@@ -1810,7 +1849,7 @@ export default function Home() {
           {canAccessTab(currentUser, "Estratégias") && activeTab === "Estratégias" && <StrategiesView user={currentUser} professionals={professionals} records={strategies} setRecords={setStrategies} entries={accounting.entries} appointments={accounting.appointments} services={services} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />}
           {canAccessTab(currentUser, "Anamnese") && activeTab === "Anamnese" && <AnamneseView user={currentUser} patients={patients} professionals={professionals} records={anamneses} setRecords={setAnamneses} onPatientChange={patient => setPatients(current => current.map(item => item.id === patient.id ? {...item, photos: patient.photos} : item))} />}
           {canAccessTab(currentUser, "Ultraformer MPT") && activeTab === "Ultraformer MPT" && <UltraformerView user={currentUser} tips={ultraformerTips} setTips={setUltraformerTips} patients={patients} professionals={professionals} />}
-          {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection canMove={canMoveStock(currentUser)} gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={accounting.appointments} entries={accounting.entries} patients={patients} professionals={professionals} />}
+          {canAccessTab(currentUser, "Estoque") && activeTab === "Estoque" && <InventorySection canMove={canMoveStock(currentUser)} moveStock={moveStock} gifts={gifts} setGifts={setGifts} procedures={procedures} inventory={inventory} setInventory={setInventory} appointments={accounting.appointments} entries={accounting.entries} patients={patients} professionals={professionals} />}
 
           {canAccessTab(currentUser, "Simulação") && activeTab === "Simulação" && <SimulationView procedures={procedures} services={services} />}
 

@@ -1,4 +1,5 @@
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import assert from 'node:assert/strict'; import {pathToFileURL} from 'node:url'; import {createRequire} from 'node:module'; import ts from 'typescript';
+import { matchesPostgrestFilters, projectPostgrestRow } from './postgrest-filters-helper.mjs';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'avvi-invoice-stock-')),require=createRequire(import.meta.url);
 try {
  const modules=['patientCredit','paymentFees','postProcedure','access','accessServer','accountsServer','accessSnapshot','packageSessions','stockAccess','inventory','gifts','checkout','invoices','calculations','appointmentServices','servicePackages','database','supabase','agendaAvailability','ultraformer','strategyDefinitions','anamnese','bodyAnamnese'];
@@ -23,7 +24,25 @@ try {
  Object.assign(process.env,{AVVI_SESSION_SECRET:'isolated-stock-invoice-session-secret-2026',NEXT_PUBLIC_SUPABASE_URL:'https://project.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'sb_secret_test'});
  const auth=await load('accessServer'),gateway=await load('gateway'),records=new Map([['procedures:prod',{entity:'procedures',record_id:'prod',data:{id:'prod',name:'Botox'}}],['appointments:appt',{entity:'appointments',record_id:'appt',data:old}],['inventory:i',{entity:'inventory',record_id:'i',data:inventory[0]}],['gifts:gift',{entity:'gifts',record_id:'gift',data:gifts[0]}]]);
  let serverUser=readOnly;
- globalThis.fetch=async(raw,init)=>{const url=new URL(raw);if(url.pathname==='/rest/v1/avvi_user_accounts')return Response.json([{...serverUser,version:1}]);if(init?.method==='POST'){for(const row of JSON.parse(init.body))records.set(row.entity+':'+row.record_id,structuredClone(row));return new Response(null,{status:201});}const entity=url.searchParams.get('entity')?.slice(3);return Response.json([...records.values()].filter(row=>row.entity===entity));};
+ globalThis.fetch=async(raw,init)=>{
+  const url=new URL(raw),method=init?.method??'GET';
+  if(url.pathname==='/rest/v1/avvi_user_accounts')return Response.json([{...serverUser,version:1}]);
+  if(method==='POST'){
+   const body=JSON.parse(init.body);
+   for(const row of Array.isArray(body)?body:[body]){
+    const key=row.entity+':'+row.record_id;
+    if(row.entity==='_package_checkout_lock'&&records.has(key))return Response.json({code:'23505'},{status:409});
+    records.set(key,structuredClone(row));
+   }
+   return new Response(null,{status:201});
+  }
+  if(method==='DELETE'){
+   for(const [key,row] of records)if(matchesPostgrestFilters(row,url))records.delete(key);
+   return new Response(null,{status:204});
+  }
+  const rows=[...records.values()].filter(row=>matchesPostgrestFilters(row,url)).map(row=>projectPostgrestRow(row,url.searchParams.get('select')));
+  return Response.json(rows);
+ };
  const request=(upserts,removed=[])=>new Request('http://test.local/api/access/data',{method:'POST',headers:{origin:'http://test.local',cookie:auth.accessCookie+'='+auth.signAccess(serverUser),'content-type':'application/json'},body:JSON.stringify({upserts,removed})});
  assert.equal((await gateway.POST(request(stockRows))).status,403);assert.equal((await gateway.POST(request([],[{entity:'inventory',ids:['i']}]))).status,403);
  assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:next},...stockRows]))).status,200);
@@ -52,4 +71,24 @@ try {
  assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...flagged,invoice:{...flagged.invoice,invalidCpf:'yes'}}}]))).status,400);
  assert.equal((await gateway.POST(request([{entity:'appointments',record_id:'appt',data:{...flagged,invoice:{...flagged.invoice,invalidCpf:false,updatedAt:'2026-10-29T10:00:00.000Z'}}}]))).status,200);assert.equal(records.get('appointments:appt').data.invoice.invalidCpf,false);
  console.log('PASS: stock permission and invoice-only guards, fixed cutoff; stale tabs preserve PDFs; deliberate status edits and CPF warning on/off persist for invoice-only users, malformed flags denied. Isolated fixtures.');
+ const move=(stockMovement)=>gateway.POST(new Request('http://test.local/api/access/data',{method:'POST',headers:{origin:'http://test.local',cookie:auth.accessCookie+'='+auth.signAccess(serverUser),'content-type':'application/json'},body:JSON.stringify({stockMovement})}));
+ const addition={id:crypto.randomUUID(),procedureId:'prod',kind:'addition',quantity:3,by:'Perfil forjado',at:'1999-01-01'};
+ assert.equal((await move(addition)).status,403);
+ serverUser={...operator,name:'Operadora do estoque QA'};
+ const added=await move(addition);assert.equal(added.status,200);const addedItem=(await added.json()).inventoryItem;
+ assert.equal(addedItem.quantity,102);assert.equal(addedItem.movements[0].by,serverUser.name);
+ assert.ok(Date.now()-Date.parse(addedItem.movements[0].at)<60000);
+ assert.deepEqual((await (await move(addition)).json()).inventoryItem,addedItem);
+ const removal={...addition,id:crypto.randomUUID(),kind:'removal',quantity:81};
+ assert.equal((await move({...removal,quantity:0})).status,400);
+ const concurrent=await Promise.all([move(removal),move({...removal,id:crypto.randomUUID()})]);
+ assert.deepEqual(concurrent.map(response=>response.status).sort(),[200,409]);
+ const afterMovement=records.get('inventory:i').data;
+ assert.equal(afterMovement.quantity,21);assert.equal(afterMovement.movements.length,2);
+ assert.equal((await gateway.POST(request([{...stockRows[0],data:addedItem}]))).status,409);
+ assert.equal((await gateway.POST(request([{...stockRows[0],data:{...afterMovement,visibleInStock:false}}]))).status,200);
+ assert.deepEqual(records.get('inventory:i').data,{...afterMovement,visibleInStock:false});
+ assert.equal((await gateway.POST(request([{...stockRows[0],data:{...afterMovement,visibleInStock:true}}]))).status,200);
+ assert.deepEqual(records.get('inventory:i').data,afterMovement);
+ console.log('PASS: authenticated stock additions/removals, server-side actor and date, idempotent retry, concurrent balance validation, stale-history protection and hide/restore.');
 } finally {assert.equal(path.dirname(path.resolve(dir)),path.resolve(os.tmpdir()));assert.ok(path.basename(dir).startsWith('avvi-invoice-stock-'));fs.rmSync(dir,{recursive:true,force:true});}

@@ -1,5 +1,5 @@
 import type { ServicePackage } from "./servicePackages";
-import type { PostProcedureContact, PostProcedureMessage } from "./types";
+import type { PostProcedureContact, PostProcedureMessage, StockMovementRequest } from "./types";
 import { supabase } from "./supabase";
 import type { AppRole, AppUser } from "./access";
 import { canReadEntity } from "./access";
@@ -13,6 +13,15 @@ async function accessRequest(url: string, init?: RequestInit) {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error ?? "Acesso não autorizado.");
   return data;
+}
+
+export async function saveStockMovement(movement: StockMovementRequest): Promise<InventoryItem> {
+  const result = await accessRequest("/api/access/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stockMovement: movement })
+  });
+  return result.inventoryItem;
 }
 import type { Appointment, FinancialEntry, FixedCost, Patient, Procedure, Professional, ProfessionalPaymentReceipt, Receipt, RevenueEntry, Service, InventoryItem, FollowUpRule, FollowUpContact, FollowUpLog, GiftStockItem, UltraformerTip, AnamneseRecord, ProfessionalStrategy } from "./types";
 

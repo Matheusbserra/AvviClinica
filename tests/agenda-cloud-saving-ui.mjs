@@ -43,8 +43,12 @@ const mock=http.createServer(async(req,res)=>{
   }
   if(method==='POST'){
    const rows=JSON.parse(body),batch=Array.isArray(rows)?rows:[rows];writes.push(structuredClone(batch));
-   for(const row of batch)records.set(row.entity+':'+row.record_id,structuredClone(row));
-   if(dropAcknowledgement){dropAcknowledgement=false;res.statusCode=503;res.end(JSON.stringify({code:'QA503',message:'Saved but acknowledgement lost'}));return;}
+   for(const row of batch){
+    const key=row.entity+':'+row.record_id;
+    if(row.entity==='_package_checkout_lock'&&records.has(key)){res.statusCode=409;res.end(JSON.stringify({code:'23505'}));return;}
+    records.set(key,structuredClone(row));
+   }
+   if(dropAcknowledgement&&batch.some(row=>row.entity!=='_package_checkout_lock')){dropAcknowledgement=false;res.statusCode=503;res.end(JSON.stringify({code:'QA503',message:'Saved but acknowledgement lost'}));return;}
    res.statusCode=201;res.end('[]');return;
   }
   if(method==='DELETE'){for(const [id,row]of records)if(matches(row))records.delete(id);res.statusCode=204;res.end();return;}
@@ -304,6 +308,93 @@ try{
  assert.equal(records.has('appointments:'+concurrentVisit.id),true);assert.equal(records.get('appointments:'+concurrentVisit.id).data.accountClosed,true);assert.equal(records.has('appointments:'+blockedId),false);assert.equal(records.get('inventory:stock').data.quantity,stockBeforeConflict-1);assert.equal(records.get('gifts:gift').data.quantity,giftBeforeConflict);
  await standard.page.reload();await saved(standard);assert.equal(await conflictPanel.count(),0);
  console.log('PASS: an old occupied-slot closure stays in an explicit review panel across reload, without orphan patient/stock/revenue; unrelated bookings reach the administrator, review opens the original patient, canceling discard preserves it and explicit discard retains cloud bookings and clears the persistent warning.');
+ if(process.env.AVVI_TEST_FULL_STANDARD==='true'){
+  put('procedures',{id:'audit-product',name:'Botox estoque QA',price:80,averageCost:30,active:true});
+  put('inventory',{id:'audit-stock',procedureId:'audit-product',quantity:5});
+  await refresh(standard);
+  await navigationButton(standard.page,'Estoque').click();
+  const quantity=standard.page.getByLabel('Quantidade de Botox estoque QA',{exact:true});
+  await quantity.waitFor();
+  assert.equal(await standard.page.getByRole('button',{name:/Adicionar uma unidade|Retirar uma unidade/}).count(),0);
+  for(const [verb,title,amount,expected] of [['Adicionar ao estoque de','Adicionar ao estoque','3',8],['Remover do estoque de','Remover do estoque','2',6]]){
+   await standard.page.getByRole('button',{name:verb+' Botox estoque QA',exact:true}).click();
+   const modal=standard.page.getByRole('dialog',{name:title,exact:true});
+   if(verb.startsWith('Remover')){
+    await modal.getByLabel('Quantidade',{exact:true}).fill('99');
+    await modal.getByRole('button',{name:title,exact:true}).click();
+    await modal.getByRole('alert').filter({hasText:'ultrapassa o saldo'}).waitFor();
+   }
+   await modal.getByLabel('Quantidade',{exact:true}).fill(amount);
+   await modal.getByRole('button',{name:title,exact:true}).click();
+   await modal.waitFor({state:'hidden'});
+   assert.equal(await quantity.inputValue(),String(expected));
+  }
+  await standard.page.getByRole('button',{name:'Retirar produto da lista do estoque',exact:true}).click();
+  const removalList=standard.page.getByRole('dialog',{name:'Retirar produtos da lista do estoque',exact:true});
+  await removalList.getByRole('button',{name:'Retirar Botox estoque QA da lista do estoque',exact:true}).click();
+  await quantity.waitFor({state:'hidden'});
+  await wait(async()=>records.get('inventory:audit-stock').data.visibleInStock===false,'Hidden product was not saved');
+  await removalList.getByRole('button',{name:/^Fechar/}).click();
+  await navigationButton(standard.page,'Produto').click();
+  const picker=standard.page.getByRole('dialog',{name:'Adicionar produto ao estoque',exact:true});
+  await picker.getByRole('combobox').fill('Botox estoque QA');
+  await picker.getByRole('option',{name:'Botox estoque QA',exact:true}).click();
+  await picker.getByRole('button',{name:'Adicionar produto',exact:true}).click();
+  await wait(async()=>records.get('inventory:audit-stock').data.visibleInStock===true,'Restored product was not saved');
+  await standard.page.reload();await saved(standard);await navigationButton(standard.page,'Estoque').click();
+  assert.equal(await quantity.inputValue(),'6');
+  await standard.page.getByRole('button',{name:'Histórico de Botox estoque QA',exact:true}).click();
+  const history=standard.page.getByRole('dialog',{name:'Histórico de Botox estoque QA',exact:true});
+  const today=new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeZone:'America/Sao_Paulo'}).format(new Date());
+  for(const [label,amount] of [['Adição ao estoque','3'],['Remoção do estoque','2']]){
+   const row=history.getByTestId(/^stock-movement-/).filter({hasText:label});
+   await row.getByText(operator.name,{exact:true}).waitFor();
+   assert.equal(await row.getByText(today,{exact:true}).count(),1);
+   assert.equal(await row.getByText(amount,{exact:true}).count(),1);
+  }
+  assert.equal(records.get('inventory:audit-stock').data.movements.length,2);
+  console.log('PASS: new stock controls record server-stamped quantity/date/profile, hide and restore without losing history, and survive a reload.');
+ }
+ // Open an evaluation with no balance, then fund that patient in the mock
+ // cloud and confirm a credit-only account through the protected gateway.
+ const creditPatient={id:'credit-qa',name:'Paciente crédito QA',phone:'98999999999',futureCredit:0};
+ put('patients',creditPatient);
+ const creditVisit={id:'credit-visit',professionalId:'ana',patientId:creditPatient.id,startsAt:date+'T08:00:00',endsAt:date+'T08:30:00',status:'Agendado',eventType:'Novo Agendamento',serviceId:'evaluation',notes:''};
+ put('appointments',creditVisit);
+ await admin.page.reload();await saved(admin);
+ await navigationButton(admin.page,'Agenda').click();
+ const openCreditCheckout=async()=>{
+  await admin.page.getByTestId('appointment-credit-visit').click();
+  await admin.page.getByRole('menuitem',{name:'Fechar conta',exact:true}).click();
+  return admin.page.getByRole('dialog',{name:'Fechamento de conta',exact:true});
+ };
+ let creditCheckout=await openCreditCheckout();
+ await creditCheckout.getByLabel('Preço de Avaliação QA na conta',{exact:true}).fill('50');
+ assert.equal(await creditCheckout.getByRole('button',{name:'Usar crédito futuro',exact:true}).isDisabled(),true);
+ await creditCheckout.getByRole('button',{name:'Cancelar',exact:true}).click();
+ put('patients',{...creditPatient,futureCredit:70,futureCreditDeposits:[{id:'patient-credit-5453e8ae-7fe0-4ad7-932a-a893a3f79828',date,amount:70,method:'Pix'}]});
+ await admin.page.reload();await saved(admin);
+ await navigationButton(admin.page,'Agenda').click();
+ creditCheckout=await openCreditCheckout();
+ const useCredit=creditCheckout.getByRole('button',{name:'Usar crédito futuro',exact:true});
+ const creditPrice=creditCheckout.getByLabel('Preço de Avaliação QA na conta',{exact:true});
+ const creditAmount=creditCheckout.getByLabel('Valor pago por Crédito futuro',{exact:true});
+ await creditPrice.fill('75');
+ await useCredit.click();
+ assert.equal(await creditAmount.inputValue(),'70');
+ assert.match(await creditCheckout.getByTestId('checkout-remaining').innerText(),/5,00/);
+ await creditCheckout.getByLabel('Receber por Crédito futuro',{exact:true}).uncheck();
+ await creditPrice.fill('50');
+ await useCredit.click();
+ assert.equal(await creditAmount.inputValue(),'50');
+ assert.equal(await useCredit.isDisabled(),true);
+ await creditCheckout.getByRole('button',{name:'Fechar Conta',exact:true}).click();await creditCheckout.waitFor({state:'hidden'});await saved(admin);
+ assert.equal(records.get('patients:'+creditPatient.id).data.futureCredit,20);
+ const creditAccount=records.get('appointments:credit-visit').data.closedAccount;
+ assert.deepEqual(creditAccount.payments.map(payment=>[payment.method,payment.amount]),[['Crédito Futuro',50]]);
+ const creditRevenue=records.get('revenues:receita-entry-'+creditAccount.id).data;
+ assert.equal(creditRevenue.total,0);assert.equal(creditRevenue.clientCreditUsedTotal,-50);
+ console.log('PASS: future-credit button is disabled with zero balance; with paid credit, checkout consumes only the due amount and saves the remainder.');
  assert.deepEqual(errors,[]);
  console.log('PASS: admin/standard save past appointments through real gateway, reuse cancelled time, share both ways without reload and persist after reload; cancellation history and reactivation conflicts preserved; remote conflict while menu is open produces an explicit error and no orphan patient.');
  console.log('PASS: administrator saving and reload, three professionals at one time, fourth rejected in browser and server for both roles, lost acknowledgement retries without duplicate patients/bookings. Isolated mock cloud only.');

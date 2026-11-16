@@ -117,11 +117,14 @@ export type PostProcedureContact = {
 export type GiftStockItem = { id: string; name: string; quantity: number };
 export type GiftUsage = { id: string; giftId: string; name: string; quantity: number };
 
+export type StockMovementRequest = { id: string; procedureId: string; kind: "addition" | "removal"; quantity: number };
+export type StockMovement = Omit<StockMovementRequest, "procedureId"> & { at: string; by: string; actorId: string };
 export type InventoryItem = {
   id: string;
   procedureId: string;
   quantity: number;
   visibleInStock?: boolean;
+  movements?: StockMovement[];
 };
 
 export type PaymentItem = {

@@ -1,4 +1,19 @@
-import type { Appointment, InventoryItem, Procedure, ProcedureLine } from "./types";
+import type { Appointment, InventoryItem, Procedure, ProcedureLine, StockMovement, StockMovementRequest } from "./types";
+
+export function validStockMovement(value: unknown): value is StockMovementRequest {
+  const movement = value as Partial<StockMovementRequest> | null;
+  return !!movement && typeof movement.id === "string" && /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(movement.id)
+    && typeof movement.procedureId === "string" && !!movement.procedureId.trim() && movement.procedureId.length <= 500
+    && (movement.kind === "addition" || movement.kind === "removal")
+    && Number.isSafeInteger(movement.quantity) && movement.quantity! > 0;
+}
+
+export function applyStockMovement(item: InventoryItem, movement: StockMovement) {
+  if (movement.kind === "removal" && movement.quantity > item.quantity) throw new Error("A quantidade a remover ultrapassa o saldo em estoque.");
+  const quantity = item.quantity + (movement.kind === "addition" ? movement.quantity : -movement.quantity);
+  if (!Number.isSafeInteger(quantity)) throw new Error("Quantidade inválida para este produto.");
+  return { ...item, quantity, movements: [...(item.movements ?? []), movement] };
+}
 
 export function stockProductVisible(procedure: Pick<Procedure, "id" | "name">, inventory: InventoryItem[]) {
   const saved = inventory.find(item => item.procedureId === procedure.id);
