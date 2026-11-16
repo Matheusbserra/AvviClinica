@@ -2,6 +2,14 @@
 // integration tests, including JSON paths, instead of silently returning all rows.
 export function matchesPostgrestFilters(row,url) {
  for(const [field,filter]of url.searchParams){
+  if(field==='or'){
+   const alternatives=[...filter.matchAll(/and\(([^,]+),(\S*?)\)/g)];
+   if(!alternatives.length || !alternatives.some(([,left,right])=>matchesPostgrestFilters(row,{searchParams:[left,right].map(condition=>{
+    const separator=condition.indexOf('.');
+    return [condition.slice(0,separator),condition.slice(separator+1)];
+   })})))return false;
+   continue;
+  }
   const match=/^(eq|neq|like|in|lt|gt|lte|gte)\.(.*)$/s.exec(filter);
   if(!match)continue;
   const actual=field.split(/->>?/).reduce((value,key)=>value?.[key],row),[,,value]=match;

@@ -14,7 +14,7 @@ try{
  let user={id:'operator',login:'operator',role:'standard',tabs:['Agenda','Anamnese','Estratégias'],revision:1},bytes=0,reads=[],failReads=false;const records=new Map();
  const put=(entity,data)=>records.set(entity+':'+data.id,{entity,record_id:data.id,data:structuredClone(data),updated_at:'2026-11-01T00:00:00Z'});
  const visit=(id,date='2026-10-01',professionalId='pro',start='08:00',end='09:00')=>({id,patientId:'patient',professionalId,startsAt:date+'T'+start+':00',endsAt:date+'T'+end+':00',status:'Confirmado',eventType:'Novo Agendamento',notes:'x'.repeat(1000)});
- put('patients',{id:'patient',name:'Paciente QA'});put('professionals',{id:'pro',name:'Profissional QA',active:true});put('professionals',{id:'other',name:'Outra QA',active:true});put('professionals',{id:'third',name:'Terceira QA',active:true});put('professionals',{id:'fourth',name:'Quarta QA',active:true});
+ put('patients',{id:'patient',name:'Paciente QA'});put('professionals',{id:'pro',name:'Profissional QA',active:true,avatarDataUrl:'x'.repeat(50000)});put('professionals',{id:'other',name:'Outra QA',active:true});put('professionals',{id:'third',name:'Terceira QA',active:true});put('professionals',{id:'fourth',name:'Quarta QA',active:true});
  for(let i=0;i<3500;i++)put('appointments',visit('old-'+i));
  for(let i=0;i<300;i++){
   put('anamneses',{id:'old-form-'+i,answers:{planningImage:'x'.repeat(5000)}});
@@ -42,6 +42,14 @@ try{
  const update=data=>({entity:'appointments',record_id:data.id,data});
  const fresh=visit('fresh','2026-11-10');let result=await save([update(fresh)]);assert.equal(result.status,200);const bookingBytes=bytes;
  assert.ok(bytes<15000,`Ordinary booking must not download 3500 historical appointments (${bytes} bytes)`);
+ const bulk=Array.from({length:25},(_,index)=>visit('bulk-'+index,`2026-12-${String(index+1).padStart(2,'0')}`));
+ put('appointments',visit('bulk-existing','2026-12-25'));
+ result=await save(bulk.map(update));assert.equal(result.status,409,'A conflict in the last group prevents the whole batch');
+ assert.ok(!records.has('appointments:bulk-0'));
+ const bulkConflictBytes=bytes;
+ assert.ok(bulkConflictBytes<6000,`Bulk booking must skip 3500 unrelated appointments (${bulkConflictBytes} bytes)`);
+ records.delete('appointments:bulk-existing');
+ result=await save(bulk.map(update));assert.equal(result.status,200);assert.ok(records.has('appointments:bulk-24'));
  const closed={...fresh,status:'Finalizado',accountClosed:true,closedAccount:{id:'account',appointmentId:'fresh',patientId:'patient',professionalId:'pro',date:'2026-11-10',procedureLines:[],products:[],payments:[]}};
  result=await save([update(closed)]);assert.equal(result.status,200);const closureBytes=bytes;assert.ok(bytes<20000,'An unmoved closure needs its old record and account-link check, not the entire agenda');
  result=await save([update(visit('conflict','2026-11-10'))]);assert.equal(result.status,409,'Same-professional conflict remains protected');
@@ -82,6 +90,14 @@ try{
  result=await save([creditRow(150,[cardDeposit,pix])]);assert.equal(result.status,200);
  assert.equal(records.get('patients:patient').data.futureCredit,150);
  assert.ok(!records.has(`fixed_costs:taxa-maquininha-patient-${pix.id}`));
+ const agendaTabs=user.tabs;
+ user.tabs=['Pós-procedimento','Nota Fiscal','Anamnese'];
+ const previousPatient=structuredClone(records.get('patients:patient').data);
+ result=await save([{entity:'patients',record_id:'patient',data:{...previousPatient,name:'Edição sem permissão'}}]);
+ assert.equal(result.status,403);
+ assert.equal(reads.filter(read=>read.entity==='eq.patients').length,1,'Combined restricted permissions must validate against one patient read');
+ assert.deepEqual(records.get('patients:patient').data,previousPatient);
+ user.tabs=agendaTabs;
  const stock={id:'stock-row',procedureId:'used-product',quantity:8};
  const gift={id:'used-gift',name:'Brinde QA',quantity:5};
  put('inventory',stock);put('gifts',gift);
@@ -99,5 +115,5 @@ try{
  assert.equal(records.get('gifts:'+gift.id).data.quantity,4);
  result=await save([{entity:'inventory',record_id:stock.id,data:{...stock,quantity:99}}]);assert.equal(result.status,403,'The stock limit still blocks arbitrary quantity changes');
  failReads=true;result=await save([update({...fresh,notes:'pending'})]);assert.equal(result.status,503,'A failed targeted read must never be treated as an empty agenda');assert.equal(records.get('appointments:fresh').data.accountClosed,true);failReads=false;
- console.log(`PASS: booking ${bookingBytes} B, closure ${closureBytes} B, clinical create ${clinicalBytes} B, patient edit ${patientBytes} B and stock/gift checkout ${stockBytes} B in isolated fixtures. Conflict, permission, stock and read-failure checks preserved.`);
+ console.log(`PASS: booking ${bookingBytes} B, 25-slot conflict ${bulkConflictBytes} B, closure ${closureBytes} B, clinical create ${clinicalBytes} B, patient edit ${patientBytes} B and stock/gift checkout ${stockBytes} B in isolated fixtures. Conflict, permission, stock and read-failure checks preserved.`);
 }finally{globalThis.fetch=originalFetch;assert.equal(path.dirname(path.resolve(dir)),path.resolve(os.tmpdir()));fs.rmSync(dir,{recursive:true,force:true});}

@@ -118,9 +118,10 @@ try{
  await db.query(`insert into avvi_records(entity,record_id,data)
    select 'appointments','history-'||id,jsonb_build_object('id','history-'||id,'startsAt','2025-01-01T08:00:00','endsAt','2025-01-01T09:00:00','notes',repeat('x',1200),'accountClosed',true,'closedAccount',jsonb_build_object('id','old-account-'||id,'packageSessionUses','[]'::jsonb,'procedureLines','[]'::jsonb))
    from generate_series(1,3500) id`);
+ await db.query("update avvi_records set data=data || jsonb_build_object('notes',repeat('x',100000)) where entity='appointments' and record_id in ('sale','legacy','legacy-use')");
  appointmentReadBytes=0;
  assert.equal((await save([row('appointments',immediate)],user)).status,200);
- assert.ok(appointmentReadBytes<50000,`Package saves must skip 3500 unrelated appointments (${appointmentReadBytes} bytes)`);
+ assert.ok(appointmentReadBytes<50000,`Package saves must skip 3500 unrelated appointments and omit unrelated fields from package history (${appointmentReadBytes} bytes)`);
  console.log(`PASS: package checkout reads ${appointmentReadBytes} B of appointment data with 3500 unrelated bookings.`);
  assert.ok(rpcCalls>=5);
  console.log('PASS: migration executes/reexecutes in isolated PostgreSQL, service-only RPC, missing optional migration saves in the existing table, same-sale consumption, expired lease recovery, real authenticated gateway/admin/standard, stale concurrent consumptions serialize with one rejected, idempotent retry, patient/source/quantity guards, used-sale deletion blocked, consumption reversal, zero-charge stock consumption once, transactional rollback. No real cloud.');

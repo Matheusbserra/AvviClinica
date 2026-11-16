@@ -9,6 +9,7 @@ export type PackageSessionBalance = Omit<PackageSessionUse, "id" | "quantity"> &
 };
 const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const key = (value: Pick<PackageSessionUse, "sourceAppointmentId" | "sourceAccountId" | "purchaseKey" | "serviceId">) => JSON.stringify([value.sourceAppointmentId, value.sourceAccountId, value.purchaseKey, value.serviceId]);
+type PackageVisit = Pick<Appointment, "id" | "patientId" | "accountClosed" | "closedAccount">;
 export function validPackageSessionUses(value: unknown): value is PackageSessionUse[] {
   if (!Array.isArray(value) || value.length > 100) return false;
   return value.every(item => item && ["id", "sourceAppointmentId", "sourceAccountId", "purchaseKey", "packageId", "packageName", "serviceId", "serviceName"].every(field => typeof item[field] === "string" && item[field].trim() && item[field].length <= 500)
@@ -23,7 +24,7 @@ export function packageExpiry(date: string, months: number) {
   end.setUTCDate(Math.min(day, last));
   return end.toISOString().slice(0, 10);
 }
-function purchases(appointments: Appointment[], patientId?: string) {
+function purchases(appointments: PackageVisit[], patientId?: string) {
   const balances = new Map<string, PackageSessionBalance>();
   for (const appointment of appointments) {
     const account = appointment.closedAccount;
@@ -55,7 +56,7 @@ export function patientPackageBalances(appointments: Appointment[], patientId: s
   }
   return [...balances.values()];
 }
-export function packageSessionError(appointments: Appointment[]) {
+export function packageSessionError(appointments: PackageVisit[]) {
   const byId = new Map(appointments.map(item => [item.id, item])), balances = purchases(appointments);
   for (const appointment of appointments) {
     if (!appointment.accountClosed) continue;

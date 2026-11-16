@@ -15,7 +15,7 @@ import { validAnamnese } from "@/lib/anamnese";
 import { cpfOnlyUpdate, invoiceOnlyUpdate, validInvoice, preserveCloudInvoice } from "@/lib/invoices";
 import { entityNames } from "@/lib/database";
 import type { EntityName } from "@/lib/database";
-import type { Appointment, FinancialEntry, GiftStockItem, InventoryItem, Patient, PatientCreditDeposit } from "@/lib/types";
+import type { Appointment, FinancialEntry, GiftStockItem, InventoryItem, Patient, PatientCreditDeposit, Professional } from "@/lib/types";
 import { patientCreditFeeCost, validPatientCreditDeposit } from "@/lib/patientCredit";
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "no-store" };
@@ -25,13 +25,15 @@ function database() {
   if (!url || !key?.trim()) throw new Error("Conexão com a nuvem não configurada.");
   return createClient(url, key.trim(), { auth: { persistSession: false }, global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(25000) }) } });
 }
-type ReadFilter = { field: string; op: "in"; values: string[] } | { field: string; op: "lt" | "gt" | "neq" | "like"; value: string };
-async function rows(entity: string, filters: ReadFilter[] = [], projection = "record_id,data,updated_at") {
-  const db = database(); const result: { record_id: string; data: Record<string, unknown>; updated_at?: string }[] = [];
+type ReadFilter = { field: string; op: "in"; values: string[] } | { field: string; op: "lt" | "gt" | "neq" | "like"; value: string } | { op: "or"; value: string };
+type RecordRow = { record_id: string; data: Record<string, unknown>; updated_at?: string };
+async function rows<T = RecordRow>(entity: string, filters: ReadFilter[] = [], projection = "record_id,data,updated_at") {
+  const db = database(); const result: T[] = [];
   for (let offset = 0; ; offset += 500) {
     let query = db.from("avvi_records").select(projection).eq("entity", entity);
     for (const filter of filters) {
       if (filter.op === "in") query = query.in(filter.field, filter.values);
+      else if (filter.op === "or") query = query.or(filter.value);
       else query = query.filter(filter.field, filter.op, filter.value);
     }
     const { data, error } = await query.order("record_id").range(offset, offset + 499);
@@ -39,9 +41,9 @@ async function rows(entity: string, filters: ReadFilter[] = [], projection = "re
     result.push(...data as unknown as typeof result); if (data.length < 500) return result;
   }
 }
-async function rowsByIds(entity: string, ids: string[], field = "record_id", projection = "record_id,data,updated_at") {
-  const unique = [...new Set(ids.filter(id => typeof id === "string" && id))], result: Awaited<ReturnType<typeof rows>> = [];
-  for (let offset = 0; offset < unique.length; offset += 100) result.push(...await rows(entity, [{field,op:"in",values:unique.slice(offset,offset+100)}], projection));
+async function rowsByIds<T = RecordRow>(entity: string, ids: string[], field = "record_id", projection = "record_id,data,updated_at") {
+  const unique = [...new Set(ids.filter(id => typeof id === "string" && id))], result: T[] = [];
+  for (let offset = 0; offset < unique.length; offset += 100) result.push(...await rows<T>(entity, [{field,op:"in",values:unique.slice(offset,offset+100)}], projection));
   return result;
 }
 async function permittedRecords(user: AppUser, entity: string) {
@@ -255,11 +257,13 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
     if (packageSensitive && ownsPackageLease) {
       // The lease protects both reads. Only sales and uses can affect a package
       // balance. Match the JSON key before applying the existing exact validator.
+      type PackageVisit = Pick<Appointment, "id" | "patientId" | "accountClosed" | "closedAccount">;
+      const projection = "record_id,id:data->>id,patientId:data->>patientId,accountClosed:data->accountClosed,closedAccount:data->closedAccount";
       const [sales, uses] = await Promise.all([
-        rows("appointments", [{ field: "data->closedAccount->>procedureLines", op: "like", value: '%"packageId"%' }]),
-        rows("appointments", [{ field: "data->closedAccount->packageSessionUses", op: "neq", value: "[]" }])
+        rows<PackageVisit & { record_id: string }>("appointments", [{ field: "data->closedAccount->>procedureLines", op: "like", value: '%"packageId"%' }], projection),
+        rows<PackageVisit & { record_id: string }>("appointments", [{ field: "data->closedAccount->packageSessionUses", op: "neq", value: "[]" }], projection)
       ]);
-      const effective = new Map([...sales, ...uses].map(row => [row.record_id, row.data as unknown as Appointment]));
+      const effective = new Map<string, PackageVisit>([...sales, ...uses].map(row => [row.record_id, row]));
       for (const id of deletedAppointments) effective.delete(id);
       for (const appointment of appointmentUpdates) effective.set(appointment.id, appointment);
       const packageError = packageSessionError([...effective.values()]);
@@ -311,23 +315,34 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
       // Availability needs the slot and status only, including across professionals
       // for the room limit. Checkout history is read separately by ID.
       const projection = "record_id,professionalId:data->>professionalId,startsAt:data->>startsAt,endsAt:data->>endsAt,status:data->>status,eventType:data->>eventType";
-      const intervals = new Map(moved.map(item => {
+      const intervals = [...new Map(moved.flatMap(item => {
         const interval = reservedInterval(item.startsAt, item.endsAt);
-        return [JSON.stringify(interval), interval];
-      }));
+        return interval ? [[interval.start + "/" + interval.end, interval] as const] : [];
+      })).values()];
       const overlaps = new Map<string, Appointment>();
       async function addSlots(filters: ReadFilter[]) {
         const slots = await rows("appointments", filters, projection);
         for (const slot of slots) overlaps.set(slot.record_id, { ...slot, id: slot.record_id } as unknown as Appointment);
       }
-      if (intervals.size > 20) await addSlots([]);
-      else for (const interval of intervals.values()) if (interval) {
-        await addSlots([
-          { field: "data->>startsAt", op: "lt", value: interval.end },
-          { field: "data->>endsAt", op: "gt", value: interval.start }
-        ]);
+      // Bound URL length while checking the exact requested intervals in bulk.
+      const intervalsPerQuery = 16;
+      for (let start = 0; start < intervals.length; start += intervalsPerQuery) {
+        const batch = intervals.slice(start, start + intervalsPerQuery);
+        if (batch.length === 1) {
+          await addSlots([
+            { field: "data->>startsAt", op: "lt", value: batch[0].end },
+            { field: "data->>endsAt", op: "gt", value: batch[0].start }
+          ]);
+        } else {
+          await addSlots([{ op: "or", value: batch.map(interval =>
+            `and(data->>startsAt.lt.${interval.end},data->>endsAt.gt.${interval.start})`
+          ).join(",") }]);
+        }
       }
-      const professionals = (await rowsByIds("professionals", moved.map(item=>item.professionalId))).map(row => row.data as unknown as import("@/lib/types").Professional);
+      const professionals = await rowsByIds<Pick<Professional, "id" | "active" | "closedShifts">>(
+        "professionals", moved.map(item => item.professionalId), "record_id",
+        "id:data->>id,active:data->active,closedShifts:data->closedShifts"
+      );
       const replaced = new Set([...deletedAppointments, ...appointmentUpdates.map(item => item.id)]);
       const effectiveAppointments = [...[...overlaps.values()].filter(item => !replaced.has(item.id)), ...appointmentUpdates];
       for (const appointment of moved) {
@@ -438,27 +453,19 @@ async function saveData(request: Request, ownsPackageLease?: () => Promise<boole
         continue;
       }
       if (row.entity === "appointments" && canAccessTab(user,"Nota Fiscal") && invoiceOnlyUpdate(stored.find(item=>item.id===row.record_id),row.data)) continue;
-      if (row.entity === "patients" && canAccessTab(user, "Pós-procedimento")) {
+      if (row.entity === "patients" && ["Pós-procedimento", "Nota Fiscal", "Anamnese"].some(tab => canAccessTab(user, tab))) {
         const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "patients").eq("record_id", row.record_id).maybeSingle();
         if (error) throw error;
-        if (postProcedurePhoneOnlyUpdate(previous?.data, row.data, postProcedureOnly(user))) {
+        if (canAccessTab(user, "Pós-procedimento") && previous && postProcedurePhoneOnlyUpdate(previous.data, row.data, postProcedureOnly(user))) {
           // A projected post-procedure record must never erase hidden patient fields.
-          row.data = { ...previous!.data, phone: row.data.phone };
+          row.data = { ...previous.data, phone: row.data.phone };
           continue;
         }
-      }
-      if (row.entity === "patients" && canAccessTab(user, "Nota Fiscal")) {
-        const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "patients").eq("record_id", row.record_id).maybeSingle();
-        if (error) throw error;
-        if (cpfOnlyUpdate(previous?.data, row.data)) continue;
-      }
-      if (row.entity === "patients" && canAccessTab(user, "Anamnese")) {
-        const { data: previous, error } = await db.from("avvi_records").select("data").eq("entity", "patients").eq("record_id", row.record_id).maybeSingle();
-        if (error) throw error;
+        if (canAccessTab(user, "Nota Fiscal") && cpfOnlyUpdate(previous?.data, row.data)) continue;
         // Photos are uploaded and attached by the private endpoint. A clinical-only
         // profile may acknowledge that saved record, without editing the patient.
         const stable = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a],[b]) => a.localeCompare(b))) : item);
-        if (previous && stable(previous.data) === stable(row.data)) continue;
+        if (canAccessTab(user, "Anamnese") && previous && stable(previous.data) === stable(row.data)) continue;
       }
       const accountDerivative = canAccessTab(user, "Agenda") && (row.entity === "financial_entries" ? accounts.has(row.data.sourceAccountId) && row.record_id === `procedure-account-${row.data.sourceAccountId}` && appointmentUpdates.some((item) => item.closedAccount?.generatedEntryId === row.record_id)
         : ["revenues", "fixed_costs"].includes(row.entity) && accounts.has(row.data.sourceFinancialEntryId) && row.record_id === `${row.entity === "revenues" ? "receita-entry" : "taxa-maquininha"}-${row.data.sourceFinancialEntryId}`);

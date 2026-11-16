@@ -11,7 +11,7 @@ export const weekdays = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-fei
 export function validClosedShifts(value: unknown): value is ClosedShift[] {
   return Array.isArray(value) && value.length <= 21 && value.every(item => item && Number.isInteger(item.weekday) && item.weekday >= 0 && item.weekday <= 6 && agendaShifts.some(shift => shift.id === item.shift));
 }
-export function shiftClosed(professional: Professional, date: string, startHour: number, endHour = startHour + 0.5) {
+export function shiftClosed(professional: Pick<Professional, "closedShifts">, date: string, startHour: number, endHour = startHour + 0.5) {
   const weekday = new Date(date + "T12:00:00Z").getUTCDay();
   return (professional.closedShifts ?? []).some(rule => {
     const shift = agendaShifts.find(item => item.id === rule.shift);
@@ -48,7 +48,7 @@ export function reservedInterval(startsAt: string, endsAt: string) {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
   return { start: new Date(Math.floor(start / 1800000) * 1800000).toISOString().slice(0,19), end: new Date(Math.ceil(end / 1800000) * 1800000).toISOString().slice(0,19) };
 }
-export function appointmentAvailabilityError(professional: Professional | undefined, appointments: Appointment[], startsAt: string, endsAt: string, editingId?: string, eventType?: Appointment["eventType"]) {
+export function appointmentAvailabilityError(professional: Pick<Professional, "id" | "active" | "closedShifts"> | undefined, appointments: Appointment[], startsAt: string, endsAt: string, editingId?: string, eventType?: Appointment["eventType"]) {
   const interval = reservedInterval(startsAt, endsAt);
   if (!professional?.active || !interval) return "Selecione um profissional ativo e um horário válido.";
   let day = interval.start.slice(0,10);
