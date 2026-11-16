@@ -315,6 +315,11 @@ try{
   await navigationButton(standard.page,'Estoque').click();
   const quantity=standard.page.getByLabel('Quantidade de Botox estoque QA',{exact:true});
   await quantity.waitFor();
+  assert.equal(await quantity.isEditable(),false,'Stock movement permission must not make the balance editable');
+  await quantity.press('ArrowUp');
+  await quantity.press('9');
+  assert.equal(await quantity.inputValue(),'5');
+  assert.equal(records.get('inventory:audit-stock').data.quantity,5);
   assert.equal(await standard.page.getByRole('button',{name:/Adicionar uma unidade|Retirar uma unidade/}).count(),0);
   for(const [verb,title,amount,expected] of [['Adicionar ao estoque de','Adicionar ao estoque','3',8],['Remover do estoque de','Remover do estoque','2',6]]){
    await standard.page.getByRole('button',{name:verb+' Botox estoque QA',exact:true}).click();

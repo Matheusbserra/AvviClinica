@@ -8,7 +8,7 @@ store("patients",{id:"patient",name:"Paciente QA",phone:"(98) 99999-0000",email:
 store("professionals",{id:"doctor",name:"Profissional QA",commissionPercent:30,monthlyGoal:77777,color:"#b8862b",active:true,specialty:"Dentista",notes:""});
 store("procedures",{id:"product",name:"Produto QA",price:300,averageCost:50,active:true});
 store("services",{id:"service",name:"Serviço QA",price:200,durationMinutes:60,active:true,priceType:"Fixo",category:"Consulta",description:""});
-store("inventory",{id:"product",procedureId:"product",quantity:4});
+store("inventory",{id:"product",procedureId:"product",quantity:6,visibleInStock:true});
 store("appointments",{id:"appointment",patientId:"patient",professionalId:"doctor",serviceId:"service",servicePrice:200,startsAt:date+"T10:00:00",endsAt:date+"T11:00:00",status:"Agendado",eventType:"Novo Agendamento",notes:""});
 for(const [serviceId,name,hour,price] of [["eval","Avaliação estética HOF","09",200],["return","Retorno pós-atendimento","11",0]]){
  store("services",{id:serviceId,name,price,durationMinutes:30,active:true,priceType:"fixed",category:"Consulta",description:""});
@@ -54,7 +54,7 @@ try{
  await page.getByRole("button",{name:"Salvar profissional",exact:true}).click();await saved();assert.equal(records.get("professionals:doctor").data.avatarDataUrl,photoUrl);assert.equal(records.get("professionals:doctor").data.monthlyGoal,77777);
  await tab("Agenda").click();const avatar=page.getByTestId("professional-doctor").getByRole("img",{name:"Foto de Profissional QA",exact:true});await avatar.waitFor();assert.equal(await avatar.getAttribute("src"),photoUrl);await page.waitForFunction(()=>document.querySelector('[data-testid="professional-doctor"] img')?.naturalWidth>0);
  await page.reload();await tab("Agenda").waitFor();await saved();assert.equal(await page.getByTestId("professional-doctor").getByRole("img").getAttribute("src"),photoUrl);
- await tab("Estoque").click();await page.getByLabel("Quantidade de Produto QA",{exact:true}).fill("6");await page.getByLabel("Quantidade de Produto QA",{exact:true}).blur();await saved();assert.equal(records.get("inventory:product").data.quantity,6);
+ await tab("Estoque").click();const stockQuantity=page.getByLabel("Quantidade de Produto QA",{exact:true});assert.equal(await stockQuantity.isEditable(),false);assert.equal(await stockQuantity.inputValue(),"6");assert.equal(await page.getByRole("button",{name:"Adicionar ao estoque de Produto QA",exact:true}).count(),0);
  await tab("Agenda").click();
  for(const [appointmentId,name] of [["eval","Avaliação estética HOF"],["return","Retorno pós-atendimento"]]){
   await page.getByTestId("appointment-"+appointmentId).click();await page.getByRole("menuitem",{name:"Fechar conta",exact:true}).click();const free=page.getByRole("dialog",{name:/Fechamento de conta/i});

@@ -34,16 +34,6 @@ export function InventoryView({ procedures, inventory, setInventory, moveStock, 
   const historyPage = Math.min(history?.page ?? 0, historyPages - 1);
   const listedProducts = procedures.filter(procedure => stockProductVisible(procedure, inventory)).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   const rows = listedProducts.filter(procedure => procedure.name.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR")));
-  function update(procedureId: string, value: number) {
-    if (!canMove) return;
-    setInventory((current) => {
-      const existing = current.find((item) => item.procedureId === procedureId);
-      const quantity = Math.trunc(value);
-      if (!Number.isFinite(quantity)) return current;
-      const saved = { ...existing, id: existing?.id ?? procedureId, procedureId, quantity };
-      return existing ? current.map((item) => item.procedureId === procedureId ? saved : item) : [...current, saved];
-    });
-  }
   function setProductVisibility(procedureId: string, visibleInStock: boolean) {
     setInventory(current => {
       const existing = current.find(item => item.procedureId === procedureId);
@@ -118,7 +108,7 @@ export function InventoryView({ procedures, inventory, setInventory, moveStock, 
       {rows.map((procedure) => {
         const quantity = inventory.find((item) => item.procedureId === procedure.id)?.quantity ?? 0;
         return <tr key={procedure.id} className="border-b border-avvi-line last:border-0"><td className="px-3 py-4 font-semibold">{procedure.name}</td><td className="px-3 py-3"><div className="flex flex-wrap items-center gap-2">
-          <input aria-label={`Quantidade de ${procedure.name}`} type="number" step={1} readOnly={!canMove} value={quantity} onChange={(event) => update(procedure.id, Number(event.target.value))} onKeyDown={event => { if (event.key === "ArrowDown" || event.key === "ArrowUp") event.preventDefault(); }} className={`input w-24 appearance-none text-center font-bold [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${quantity < 0 ? "text-red-600" : ""}`} />
+          <input aria-label={`Quantidade de ${procedure.name}`} readOnly value={quantity} className={`input w-24 cursor-default bg-slate-50 text-center font-bold ${quantity < 0 ? "text-red-600" : ""}`} />
           <button type="button" aria-label={`Histórico de ${procedure.name}`} onClick={() => setHistory({ procedureId: procedure.id, page: 0 })} className="flex items-center gap-1.5 rounded-md border border-avvi-line px-2 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"><History size={15} /><span className="hidden sm:inline">Histórico</span></button>
           {canMove && <div className="flex flex-wrap gap-1">
             <button type="button" aria-label={`Adicionar ao estoque de ${procedure.name}`} onClick={() => openMovement(procedure, "addition")} className="flex items-center gap-1 rounded-md border border-avvi-line px-2 py-2 text-xs font-semibold text-avvi-blue"><Plus size={16}/><span className="hidden sm:inline">Adicionar</span></button>
