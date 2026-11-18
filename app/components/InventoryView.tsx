@@ -1,11 +1,11 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { History, Minus, Package, Plus, X } from "lucide-react";
 import { stockProductVisible } from "@/lib/inventory";
 import { SearchSelect } from "./SearchSelect";
 import { ClinicalDialog } from "./ClinicalDialog";
-import { procedureUsageHistory } from "@/lib/inventoryHistory";
+import { currentStockDate, stockUsageHistory, stockUsageInPeriod } from "@/lib/inventoryHistory";
 import type { Appointment, FinancialEntry, InventoryItem, Patient, Procedure, Professional, StockMovementRequest } from "@/lib/types";
 
 const movementDate = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeZone: "America/Sao_Paulo" });
@@ -16,6 +16,18 @@ export function InventoryView({ procedures, inventory, setInventory, moveStock, 
   appointments: Appointment[]; entries: FinancialEntry[]; patients: Patient[]; professionals: Professional[];
 }) {
   const [search, setSearch] = useState("");
+  const [period, setPeriod] = useState(() => {
+    const today = currentStockDate();
+    return { start: today, end: today };
+  });
+  const [usagePage, setUsagePage] = useState(0);
+  const allUsage = useMemo(() => stockUsageHistory(appointments, entries, patients, professionals), [appointments, entries, patients, professionals]);
+  const productNames = useMemo(() => new Map(procedures.map(product => [product.id, product])), [procedures]);
+  const periodUsage = useMemo(() => stockUsageInPeriod(allUsage, period.start, period.end), [allUsage, period.start, period.end]);
+  const periodError = !period.start || !period.end ? "Informe a data inicial e a data final."
+    : period.start > period.end ? "A data final deve ser igual ou posterior à data inicial." : "";
+  const usagePages = Math.max(1, Math.ceil(periodUsage.length / 20));
+  const currentUsagePage = Math.min(usagePage, usagePages - 1);
   const [adding, setAdding] = useState(false);
   const [removingProduct, setRemovingProduct] = useState(false);
   const [movement, setMovement] = useState<{ procedure: Procedure; kind: StockMovementRequest["kind"]; id: string; quantity: string } | null>(null);
@@ -25,7 +37,7 @@ export function InventoryView({ procedures, inventory, setInventory, moveStock, 
   const available = procedures.filter(procedure => !procedure.comboItems && !stockProductVisible(procedure, inventory));
   const [history, setHistory] = useState<{ procedureId: string; page: number } | null>(null);
   const historyProcedure = procedures.find((procedure) => procedure.id === history?.procedureId);
-  const usage = history ? procedureUsageHistory(history.procedureId, appointments, entries, patients, professionals) : [];
+  const usage = history ? allUsage.filter(row => row.procedureId === history.procedureId) : [];
   const movements = history ? inventory.find(item => item.procedureId === history.procedureId)?.movements ?? [] : [];
   const historyRows = [...usage.map(row => ({ ...row, key: "use-" + row.id, dateLabel: row.date.slice(0, 10).split("-").reverse().join("/") })),
     ...movements.map(row => ({ id: row.id, key: "movement-" + row.id, date: row.at, dateLabel: movementDate.format(new Date(row.at)), professional: row.by,
@@ -66,7 +78,44 @@ export function InventoryView({ procedures, inventory, setInventory, moveStock, 
     } finally { setSavingMovement(false); }
   }
   const movementLabel = movement?.kind === "removal" ? "Remover do estoque" : "Adicionar ao estoque";
-  return <section className="rounded-2xl border border-white/70 bg-white p-5 shadow-panel">
+  return <div className="min-w-0 space-y-4">
+    <section aria-label="Produtos utilizados por período" className="min-w-0 rounded-2xl border border-white/70 bg-white p-4 shadow-panel sm:p-5">
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div><h3 className="text-lg font-bold">Produtos utilizados</h3><p className="mt-1 text-xs text-slate-500">Pela data do atendimento ou do lançamento.</p></div>
+        <div className="grid w-full min-w-0 grid-cols-2 items-end gap-2 sm:flex sm:w-auto sm:flex-wrap">
+          <label className="min-w-0 text-xs font-semibold text-slate-600">Data inicial
+            <input type="date" className="input mt-1 block min-w-0" value={period.start} onChange={event => { setPeriod(current => ({ ...current, start: event.target.value })); setUsagePage(0); }}/>
+          </label>
+          <label className="min-w-0 text-xs font-semibold text-slate-600">Data final
+            <input type="date" className="input mt-1 block min-w-0" value={period.end} onChange={event => { setPeriod(current => ({ ...current, end: event.target.value })); setUsagePage(0); }}/>
+          </label>
+          <button type="button" onClick={() => { const today = currentStockDate(); setPeriod({ start: today, end: today }); setUsagePage(0); }} className="rounded-lg border border-avvi-line px-3 py-2 text-sm font-semibold text-avvi-blue">Hoje</button>
+        </div>
+      </header>
+      {periodError ? <p role="alert" className="text-sm text-red-700">{periodError}</p> : periodUsage.length ? <>
+        <p className="mb-3 text-xs text-slate-600">{periodUsage.reduce((sum, row) => sum + row.quantity, 0)} unidades utilizadas · {new Set(periodUsage.map(row => row.procedureId)).size} produtos</p>
+        <div className="overflow-x-auto">
+          <table aria-label="Produtos utilizados no período" className="w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{["Data", "Produto", "Profissional", "Paciente", "Quantidade"].map(label => <th key={label} scope="col" className="px-3 py-3">{label}</th>)}</tr></thead>
+            <tbody>{periodUsage.slice(currentUsagePage * 20, (currentUsagePage + 1) * 20).map(row => {
+              const product = productNames.get(row.procedureId);
+              return <tr key={JSON.stringify([row.id, row.procedureId])} className="border-b border-avvi-line last:border-0">
+                <td className="whitespace-nowrap px-3 py-3">{row.date.slice(0, 10).split("-").reverse().join("/")}</td>
+                <td className="px-3 py-3"><span className="font-semibold">{product?.name ?? "Produto removido do cadastro"}</span>{product?.category && <span className="mt-1 block text-xs text-slate-500">{product.category}</span>}</td>
+                <td className="px-3 py-3">{row.professional}</td><td className="px-3 py-3">{row.patient}</td><td className="px-3 py-3 font-bold">{row.quantity}</td>
+              </tr>;
+            })}</tbody>
+          </table>
+        </div>
+        {usagePages > 1 && <nav aria-label="Paginação dos produtos utilizados" className="mt-3 flex items-center justify-between gap-2 text-xs">
+          <span>Página {currentUsagePage + 1} de {usagePages}</span><div className="flex gap-2">
+            <button type="button" disabled={currentUsagePage === 0} onClick={() => setUsagePage(currentUsagePage - 1)} className="rounded border border-avvi-line px-3 py-2 disabled:opacity-40">Anterior</button>
+            <button type="button" disabled={currentUsagePage === usagePages - 1} onClick={() => setUsagePage(currentUsagePage + 1)} className="rounded border border-avvi-line px-3 py-2 disabled:opacity-40">Próxima</button>
+          </div>
+        </nav>}
+      </> : <p className="py-4 text-sm text-slate-500">Nenhum produto utilizado no período selecionado.</p>}
+    </section>
+    <section className="rounded-2xl border border-white/70 bg-white p-5 shadow-panel">
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
       <div><h3 className="flex items-center gap-2 text-lg font-bold"><Package size={20} />Estoque de produtos</h3></div>
       <input aria-label="Buscar procedimento no estoque" className="input max-w-sm" placeholder="Buscar procedimento" value={search} onChange={(event) => setSearch(event.target.value)} />
@@ -104,7 +153,7 @@ export function InventoryView({ procedures, inventory, setInventory, moveStock, 
         </div>
       </form>
     </ClinicalDialog>}
-    <div className="overflow-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase text-slate-500"><tr><th className="px-3 py-3">Procedimento</th><th className="px-3 py-3">Quantidade em estoque</th></tr></thead><tbody>
+    <div className="overflow-auto"><table aria-label="Saldos do estoque" className="w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase text-slate-500"><tr><th className="px-3 py-3">Procedimento</th><th className="px-3 py-3">Quantidade em estoque</th></tr></thead><tbody>
       {rows.map((procedure) => {
         const quantity = inventory.find((item) => item.procedureId === procedure.id)?.quantity ?? 0;
         return <tr key={procedure.id} className="border-b border-avvi-line last:border-0"><td className="px-3 py-4 font-semibold">{procedure.name}</td><td className="px-3 py-3"><div className="flex flex-wrap items-center gap-2">
@@ -134,5 +183,6 @@ export function InventoryView({ procedures, inventory, setInventory, moveStock, 
         <footer className="flex items-center justify-between border-t border-avvi-line p-3 text-xs"><span>Página {historyPage + 1} de {historyPages}</span><div className="flex gap-2"><button type="button" disabled={historyPage === 0} onClick={() => setHistory({ ...history, page: historyPage - 1 })} className="rounded border border-avvi-line px-3 py-2 disabled:opacity-30">Anterior</button><button type="button" disabled={historyPage === historyPages - 1} onClick={() => setHistory({ ...history, page: historyPage + 1 })} className="rounded border border-avvi-line px-3 py-2 disabled:opacity-30">Próxima</button></div></footer>
       </section>
     </div>}
-  </section>;
+    </section>
+  </div>;
 }
