@@ -534,6 +534,27 @@ try{
  assert.equal(await standard.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
  await standard.page.setViewportSize({width:1440,height:1000});
  console.log('PASS: stock usage defaults to today, shows product specifications/professional/patient/physical quantities, filters inclusive dates with validation and empty state, resets to today and uses loaded data without changing stock.');
+ // Today navigation regression.
+ for(const session of [admin,standard]){
+  await navigationButton(session.page,'Agenda').click();
+  const calendar=session.page.locator('[aria-label="Calendário da agenda"]');
+  await session.page.getByTitle('Mês anterior',{exact:true}).click();
+  assert.notEqual(await calendar.getAttribute('data-selected-date'),date);
+  const todayButton=session.page.getByRole('button',{name:'Hoje',exact:true});
+  await todayButton.click();
+  assert.equal(await calendar.getAttribute('data-selected-date'),date);
+  await session.page.getByTitle('Próximo mês',{exact:true}).click();
+  await todayButton.focus();await todayButton.press('Enter');
+  assert.equal(await calendar.getAttribute('data-selected-date'),date);
+  assert.equal(await todayButton.evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(184, 134, 43)');
+  await session.page.setViewportSize({width:390,height:844});
+  await session.page.getByTitle('Dia anterior',{exact:true}).click();
+  await todayButton.click();
+  assert.equal(await calendar.getAttribute('data-selected-date'),date);
+  await session.page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1,null,{timeout:5000});
+  await session.page.setViewportSize({width:1440,height:1000});
+ }
+ console.log('PASS: Agenda Hoje button returns from past/future months to the clinic current date by click/keyboard, uses burned gold and works for admin/standard on desktop and mobile.');
  assert.deepEqual(errors,[]);
  console.log('PASS: admin/standard save past appointments through real gateway, reuse cancelled time, share both ways without reload and persist after reload; cancellation history and reactivation conflicts preserved; remote conflict while menu is open produces an explicit error and no orphan patient.');
  console.log('PASS: administrator saving and reload, three professionals at one time, fourth rejected in browser and server for both roles, lost acknowledgement retries without duplicate patients/bookings. Isolated mock cloud only.');
