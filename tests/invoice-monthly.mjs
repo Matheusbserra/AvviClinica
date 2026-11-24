@@ -5,7 +5,11 @@ const compile=file=>ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOpt
 const moduleUrl=code=>'data:text/javascript;base64,'+Buffer.from(code).toString('base64');
 const checkout=moduleUrl(compile('lib/checkout.ts')),services=moduleUrl(compile('lib/appointmentServices.ts')),calculations=moduleUrl(compile('lib/calculations.ts'));
 const source=compile('lib/invoices.ts').replace('"./appointmentServices"',JSON.stringify(services)).replace('"./checkout"',JSON.stringify(checkout)).replace('"./calculations"',JSON.stringify(calculations));
-const {invoiceRows,invoiceMonthlyGroups,invoicePdfSummary,invoiceMonthLabel,validInvoice,invoiceOnlyUpdate}=await import(moduleUrl(source));
+const {currentInvoiceMonth,invoiceRows,invoiceMonthlyGroups,invoicePdfSummary,invoiceMonthLabel,validInvoice,invoiceOnlyUpdate}=await import(moduleUrl(source));
+assert.equal(currentInvoiceMonth(new Date("2026-12-01T02:59:59Z")),"2026-11","The clinic month follows São Paulo at the UTC month boundary");
+assert.equal(currentInvoiceMonth(new Date("2026-12-01T03:00:00Z")),"2026-12");
+assert.equal(currentInvoiceMonth(new Date("2027-01-01T02:59:59Z")),"2026-12");
+assert.equal(currentInvoiceMonth(new Date("2027-01-01T03:00:00Z")),"2027-01");
 const professionals=[{id:'p',name:'Profissional QA'}];
 const row=(id,date,total,invoice)=>({id,professionalId:'p',patientId:'patient',accountClosed:true,startsAt:date+'T10:00:00',invoice,closedAccount:{procedureLines:[{id:'line',quantity:2,servicePrice:total/2,discount:0}],products:[{quantity:1,unitCost:999}],payments:[{amount:1}]}});
 const appointments=[row('pdf','2026-10-10',100.10,{issued:true,pdfPath:'61/12345678-1234-1234-1234-123456789abc.pdf'}),row('manual','2026-10-12',300,{issued:true}),row('pending','2026-10-14',50,undefined),row('november','2026-11-03',200.20,{issued:false,localPdf:'data:application/pdf;base64,JVBERi0='}),row('old-year','2025-10-10',40,{issued:true,localPdf:'data:application/pdf;base64,JVBERi0='})];

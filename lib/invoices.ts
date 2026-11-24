@@ -43,6 +43,9 @@ export function invoiceMonthLabel(month:string) {
  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return "Sem mês";
  return new Intl.DateTimeFormat("pt-BR",{month:"long",year:"numeric",timeZone:"UTC"}).format(new Date(`${month}-01T12:00:00Z`));
 }
+export function currentInvoiceMonth(now = new Date()) {
+ return new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(now).slice(0, 7);
+}
 export function invoiceMonthlyGroups(rows: readonly InvoiceRow[]) {
  const groups=new Map<string,InvoiceRow[]>();
  for(const row of rows){const month=row.date.slice(0,7),group=groups.get(month);if(group)group.push(row);else groups.set(month,[row]);}

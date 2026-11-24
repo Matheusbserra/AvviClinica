@@ -1,7 +1,7 @@
 "use client";
 import {useEffect,useState} from "react";
 import {FileText,Upload,ExternalLink,Search,Trash2,Plus,Copy,Check} from "lucide-react";
-import {invoiceRows,invoiceVisible,invoiceMaxBytes,invoiceMonthlyGroups,invoiceMonthLabel,invoicePdfSummary} from "@/lib/invoices";
+import {currentInvoiceMonth,invoiceRows,invoiceVisible,invoiceMaxBytes,invoiceMonthlyGroups,invoiceMonthLabel,invoicePdfSummary} from "@/lib/invoices";
 import {currency} from "@/lib/calculations";
 import {isSupabaseConfigured} from "@/lib/supabase";
 import {notifySharedSave} from "@/lib/sharedUpdates";
@@ -11,7 +11,7 @@ export function InvoiceView({appointments,patients,professionals,services,entrie
  const [showRemoved,setShowRemoved]=useState(false);
  const [copiedCpf,setCopiedCpf]=useState<string|null>(null);
  useEffect(()=>{if(!copiedCpf)return;const timer=setTimeout(()=>setCopiedCpf(null),2000);return()=>clearTimeout(timer);},[copiedCpf]);
- const [query,setQuery]=useState("");const [status,setStatus]=useState("all");const [month,setMonth]=useState("");const [start,setStart]=useState("");const [end,setEnd]=useState("");const [busy,setBusy]=useState<string|null>(null);const [error,setError]=useState("");
+ const [query,setQuery]=useState("");const [status,setStatus]=useState("all");const [month,setMonth]=useState(currentInvoiceMonth);const [start,setStart]=useState("");const [end,setEnd]=useState("");const [busy,setBusy]=useState<string|null>(null);const [error,setError]=useState("");
  const visibleRows=invoiceRows(appointments,patients,professionals,services,entries).filter(row=>invoiceVisible(row.appointment)!==showRemoved);
  const availableMonths=invoiceMonthlyGroups(visibleRows).map(({month,label})=>({month,label}));
  if(month&&!availableMonths.some(group=>group.month===month)){availableMonths.push({month,label:invoiceMonthLabel(month)});availableMonths.sort((a,b)=>b.month.localeCompare(a.month));}
@@ -41,7 +41,7 @@ export function InvoiceView({appointments,patients,professionals,services,entrie
    const response=await fetch(`/api/invoices?appointmentId=${encodeURIComponent(appointment.id)}`);const result=await response.json();if(!response.ok)throw new Error(result.error);url=result.url;window.open(url,"_blank","noopener,noreferrer");
   }catch(error){setError(error instanceof Error?error.message:"Não foi possível abrir o PDF.");}finally{setBusy(null);}
  }
- return <section className="rounded-xl bg-white p-4 shadow-panel sm:p-5"><header className="flex flex-wrap items-center gap-2"><FileText size={20} className="text-avvi-blue"/><h2 className="font-bold">Nota Fiscal</h2><button type="button" aria-pressed={showRemoved} onClick={()=>{setShowRemoved(!showRemoved);setCpfEditor(null);setMonth("");setStart("");setEnd("");setStatus("all");setQuery("");}} className="ml-auto flex items-center gap-1 rounded-lg border border-avvi-line px-3 py-2 text-xs font-bold text-avvi-blue"><Plus size={14}/>{showRemoved?"Voltar às notas":"Adicionar notas anteriores ou excluídas"}</button><span className="text-xs text-slate-500">{rows.length} fechamento(s)</span></header>
+ return <section className="rounded-xl bg-white p-4 shadow-panel sm:p-5"><header className="flex flex-wrap items-center gap-2"><FileText size={20} className="text-avvi-blue"/><h2 className="font-bold">Nota Fiscal</h2><button type="button" aria-pressed={showRemoved} onClick={()=>{setShowRemoved(!showRemoved);setCpfEditor(null);setMonth(showRemoved?currentInvoiceMonth():"");setStart("");setEnd("");setStatus("all");setQuery("");}} className="ml-auto flex items-center gap-1 rounded-lg border border-avvi-line px-3 py-2 text-xs font-bold text-avvi-blue"><Plus size={14}/>{showRemoved?"Voltar às notas":"Adicionar notas anteriores ou excluídas"}</button><span className="text-xs text-slate-500">{rows.length} fechamento(s)</span></header>
   <div role="region" aria-label="Resumo das notas fiscais" className="mt-4 grid gap-3 sm:grid-cols-2">
    <div className="rounded-lg border border-avvi-line bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-600">Notas com PDF</p><strong data-testid="invoice-pdf-count" className="mt-1 block text-2xl text-avvi-ink">{summary.count}</strong></div>
    <div className="rounded-lg border border-avvi-line bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-600">Total emitido com PDF</p><strong data-testid="invoice-pdf-total" className="mt-1 block text-2xl text-avvi-blue">{currency(summary.total)}</strong></div>

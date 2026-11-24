@@ -10,6 +10,7 @@ const summary=async(count,total)=>{assert.equal(await page.getByTestId('invoice-
 const month=()=>page.getByRole('combobox',{name:'Mês das notas fiscais',exact:true});
 const pdf={name:'nota-teste.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\nIsolated invoice fixture\n%%EOF\n')};
 try{
+ await page.clock.setFixedTime(new Date('2026-11-24T12:00:00Z'));
  await page.route('**/api/access',route=>route.fulfill({json:{user:{login:'admin',role:'admin'}}}));
  await page.goto(origin);await page.getByRole('status',{name:'Status do salvamento',exact:true}).filter({hasText:'Prévia local'}).waitFor();
  await page.evaluate(key=>{const snapshot=JSON.parse(localStorage.getItem(key)),data=snapshot.data;for(const entity of Object.keys(data))data[entity]=[];
@@ -18,13 +19,16 @@ try{
   data.patients=fixture.map(([id])=>({id,name:'Paciente '+id+' QA',cpf:'012.345.678-90',phone:'',notes:''}));
   data.appointments=fixture.map(([id,date,total,invoice])=>({id,patientId:id,professionalId:'professional',startsAt:date+'T09:00:00',endsAt:date+'T10:00:00',eventType:'Novo Agendamento',status:'Finalizado',accountClosed:true,notes:'',invoice,closedAccount:{id:'account-'+id,patientId:id,professionalId:'professional',appointmentId:id,date,procedureLines:[{id:'line',manualProcedure:'Serviço QA',quantity:1,servicePrice:total}],products:[{quantity:1,unitCost:999}],payments:[{method:'Pix',amount:1}]}}));localStorage.setItem(key,JSON.stringify(snapshot));
  },key);
- await page.reload();await navigationButton(page,'Nota Fiscal').click();await card('attached').waitFor();
+ await page.reload();await navigationButton(page,'Nota Fiscal').click();await month().waitFor();
+ assert.equal(await month().inputValue(),'2026-11');await summary(1,'200,20');
+ assert.equal(await card('attached').count(),0);assert.equal(await card('old-year').count(),0);
+ await month().selectOption('');await card('attached').waitFor();
  await summary(3,'340,30');assert.equal(await card('hidden').count(),0);
  assert.deepEqual(await page.locator('section[aria-label^="Notas de "]').evaluateAll(elements=>elements.map(el=>el.getAttribute('aria-label'))),['Notas de novembro de 2026','Notas de outubro de 2026','Notas de outubro de 2025']);
  await month().selectOption('2026-10');await summary(1,'100,10');assert.equal(await card('november').count(),0);assert.equal(await card('old-year').count(),0);
  const invalid=card('attached').getByLabel('CPF inválido de Paciente attached QA',{exact:true});await invalid.check();assert.equal(await background(card('attached')),'rgb(254, 226, 226)');await summary(1,'100,10');assert.equal(await background(card('manual')),'rgb(220, 252, 231)');
  await card('pending').getByLabel('CPF inválido de Paciente pending QA',{exact:true}).check();assert.equal(await background(card('pending')),'rgb(254, 226, 226)');await card('pending').getByLabel('CPF inválido de Paciente pending QA',{exact:true}).uncheck();assert.equal(await background(card('pending')),'rgb(255, 255, 255)');
- await page.reload();await navigationButton(page,'Nota Fiscal').click();await card('attached').waitFor();assert.equal(await invalid.isChecked(),true);assert.equal(await background(card('attached')),'rgb(254, 226, 226)');await summary(3,'340,30');
+ await page.reload();await navigationButton(page,'Nota Fiscal').click();assert.equal(await month().inputValue(),'2026-11');await month().selectOption('');await card('attached').waitFor();assert.equal(await invalid.isChecked(),true);assert.equal(await background(card('attached')),'rgb(254, 226, 226)');await summary(3,'340,30');
  await month().selectOption('2026-10');await page.getByLabel('Status das notas fiscais',{exact:true}).selectOption('pending');await summary(0,'0,00');assert.equal(await card('attached').count(),0);
  await page.getByLabel('Status das notas fiscais',{exact:true}).selectOption('issued');await summary(1,'100,10');
  await page.getByLabel('Buscar nota fiscal',{exact:true}).fill('manual');await summary(0,'0,00');await card('manual').waitFor();
@@ -36,13 +40,21 @@ try{
  await card('pending').getByLabel('PDF da nota fiscal de Paciente pending QA',{exact:true}).setInputFiles({...pdf,name:'substituta.pdf'});await card('pending').getByRole('button',{name:'Ver PDF · substituta.pdf',exact:true}).waitFor();await summary(2,'150,10');
  await card('attached').getByRole('button',{name:/Excluir nota fiscal de/}).click();await summary(1,'50,00');
  await page.getByRole('button',{name:'Adicionar notas anteriores ou excluídas',exact:true}).click();await summary(2,'1.100,10');await card('attached').getByRole('button',{name:/Adicionar novamente de/}).click();await summary(1,'1.000,00');
- await page.getByRole('button',{name:'Voltar às notas',exact:true}).click();await summary(4,'390,30');
+ await page.getByRole('button',{name:'Voltar às notas',exact:true}).click();assert.equal(await month().inputValue(),'2026-11');await summary(1,'200,20');await month().selectOption('');await summary(4,'390,30');
  await month().selectOption('2026-11');await card('november').getByRole('button',{name:/Excluir nota fiscal de/}).click();await summary(0,'0,00');assert.equal(await month().inputValue(),'2026-11');assert.equal(await month().locator('option:checked').innerText(),'novembro de 2026','Removing the last record keeps the selected empty month explicit');
- await page.getByRole('button',{name:'Adicionar notas anteriores ou excluídas',exact:true}).click();await card('november').getByRole('button',{name:/Adicionar novamente de/}).click();await page.getByRole('button',{name:'Voltar às notas',exact:true}).click();await summary(4,'390,30');
+ await page.getByRole('button',{name:'Adicionar notas anteriores ou excluídas',exact:true}).click();await card('november').getByRole('button',{name:/Adicionar novamente de/}).click();await page.getByRole('button',{name:'Voltar às notas',exact:true}).click();assert.equal(await month().inputValue(),'2026-11');await month().selectOption('');await summary(4,'390,30');
  await invalid.uncheck();assert.equal(await background(card('attached')),'rgb(220, 252, 231)');await invalid.check();
  await page.getByRole('button',{name:'Ativar modo escuro',exact:true}).click();assert.equal(await background(card('attached')),'rgb(67, 35, 41)');await summary(4,'390,30');
  await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1&&getComputedStyle(document.querySelector('.avvi-sidebar').nextElementSibling).marginLeft==='0px');await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:'.avvi-local/invoice-monthly-mobile.png'});
  await page.setViewportSize({width:1440,height:1000});await page.waitForFunction(()=>getComputedStyle(document.querySelector('.avvi-sidebar').nextElementSibling).marginLeft==='256px');await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:'.avvi-local/invoice-monthly-dark.png'});await card('attached').screenshot({path:'.avvi-local/invoice-invalid-cpf.png'});
- await page.reload();await navigationButton(page,'Nota Fiscal').click();await card('attached').waitFor();await summary(4,'390,30');assert.equal(await invalid.isChecked(),true);await card('pending').getByRole('button',{name:'Ver PDF · substituta.pdf',exact:true}).waitFor();
+ await page.reload();await navigationButton(page,'Nota Fiscal').click();assert.equal(await month().inputValue(),'2026-11');await summary(1,'200,20');await month().selectOption('');await card('attached').waitFor();await summary(4,'390,30');assert.equal(await invalid.isChecked(),true);await card('pending').getByRole('button',{name:'Ver PDF · substituta.pdf',exact:true}).waitFor();
+ await page.clock.setFixedTime(new Date('2026-12-01T02:59:59Z'));
+ await navigationButton(page,'Agenda').click();await navigationButton(page,'Nota Fiscal').click();
+ assert.equal(await month().inputValue(),'2026-11');
+ await page.clock.setFixedTime(new Date('2026-12-01T03:00:00Z'));
+ await navigationButton(page,'Agenda').click();await navigationButton(page,'Nota Fiscal').click();
+ assert.equal(await month().inputValue(),'2026-12');await summary(0,'0,00');
+ await page.getByText('Nenhum fechamento neste filtro.',{exact:true}).waitFor();
+ await month().selectOption('2026-10');await summary(2,'150,10');await card('attached').waitFor();
  assert.deepEqual(errors,[]);console.log('PASS: month/year sections and filters; PDF-only count/value follow search/date/status/archive; manual issue flag excluded, invalid/replaced PDF does not inflate totals; CPF warning persists red over green and restores prior color; reload, mobile and dark theme. Isolated local fixtures.');
 }catch(error){await page.screenshot({path:'.avvi-local/invoice-monthly-debug.png'});throw error;}finally{await browser.close();}

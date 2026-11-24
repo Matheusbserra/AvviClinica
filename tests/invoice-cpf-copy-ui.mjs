@@ -17,7 +17,7 @@ try{
   data.appointments=data.patients.map((patient,index)=>({id:patient.id,patientId:patient.id,professionalId:'professional',startsAt:`2026-10-12T${index?'11':'09'}:00:00`,endsAt:`2026-10-12T${index?12:10}:00:00`,eventType:'Novo Agendamento',status:'Finalizado',accountClosed:true,notes:'',closedAccount:{id:'account-'+patient.id,patientId:patient.id,professionalId:'professional',appointmentId:patient.id,date:'2026-10-12',procedureLines:[{id:'line',manualProcedure:'Serviço QA',quantity:1,servicePrice:300}],products:[],payments:[{method:'Pix',amount:300}]}}));
   localStorage.setItem(key,JSON.stringify(snapshot));
  },key);
- await page.reload();await navigationButton(page,'Nota Fiscal').click();
+ await page.reload();await navigationButton(page,'Nota Fiscal').click();await page.getByRole('combobox',{name:'Mês das notas fiscais',exact:true}).selectOption('');
  const saved=page.getByTestId('invoice-saved'),empty=page.getByTestId('invoice-empty');await saved.waitFor();await empty.waitFor();
  const before=await page.evaluate(key=>JSON.stringify(JSON.parse(localStorage.getItem(key)).data),key);
  const copy=saved.getByRole('button',{name:'Copiar CPF de Paciente com CPF QA',exact:true});await copy.click();
@@ -28,7 +28,7 @@ try{
  assert.equal(await empty.getByRole('button',{name:/Copiar CPF/}).count(),0,'No copy button without a saved CPF');
  await empty.getByRole('button',{name:'Editar CPF de Paciente sem CPF QA',exact:true}).click();await empty.getByLabel('CPF de Paciente sem CPF QA',{exact:true}).fill('00987654321');await empty.getByRole('button',{name:'Salvar CPF',exact:true}).click();
  await empty.getByRole('button',{name:'Copiar CPF de Paciente sem CPF QA',exact:true}).click();assert.equal(await page.evaluate(()=>window.__copiedCpf),'00987654321');
- await page.reload();await navigationButton(page,'Nota Fiscal').click();await empty.getByRole('button',{name:'Copiar CPF de Paciente sem CPF QA',exact:true}).click();assert.equal(await page.evaluate(()=>window.__copiedCpf),'00987654321','Edited CPF remains copyable after reload');
+ await page.reload();await navigationButton(page,'Nota Fiscal').click();await page.getByRole('combobox',{name:'Mês das notas fiscais',exact:true}).selectOption('');await empty.getByRole('button',{name:'Copiar CPF de Paciente sem CPF QA',exact:true}).click();assert.equal(await page.evaluate(()=>window.__copiedCpf),'00987654321','Edited CPF remains copyable after reload');
  await page.evaluate(()=>{navigator.clipboard.writeText=async()=>{throw new DOMException('Clipboard blocked','NotAllowedError');};});await copy.click();await page.getByRole('alert').filter({hasText:'Não foi possível copiar o CPF'}).waitFor();
  await page.setViewportSize({width:390,height:844});
  await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1,null,{timeout:3000}).catch(async error=>{await page.screenshot({path:'.avvi-local/invoice-cpf-copy-mobile.png'});console.log(await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(element=>element.getBoundingClientRect().right>innerWidth+1).map(element=>({tag:element.tagName,classes:element.className,right:element.getBoundingClientRect().right})).slice(0,12)));throw error;});
