@@ -2,7 +2,7 @@ import {createClient} from "@supabase/supabase-js";
 import {resolveAccess,sameOrigin} from "@/lib/accessServer";
 import {canAccessTab} from "@/lib/access";
 import {zeroClosedAppointment} from "@/lib/calculations";
-import {invoiceBucket,invoiceMaxBytes,excludedInvoiceProfessional} from "@/lib/invoices";
+import {invoiceBucket,invoiceMaxBytes,invoiceProfessionalAllowed} from "@/lib/invoices";
 import type {Appointment,Professional,InvoiceAttachment} from "@/lib/types";
 export const runtime="nodejs";
 const headers={"Cache-Control":"no-store"};
@@ -18,7 +18,7 @@ async function attach(db:ReturnType<typeof database>,id:string,path:string,filen
  }
  throw new Error("O atendimento foi alterado durante o envio. Atualize os dados e tente anexar novamente.");
 }
-async function account(db:ReturnType<typeof database>,id:string){const {data,error}=await db.from("avvi_records").select("data").eq("entity","appointments").eq("record_id",id).maybeSingle();if(error)throw error;const appointment=data?.data as Appointment|undefined;if(!appointment?.accountClosed)throw new Error("Feche a conta antes de anexar a nota.");const professional=await db.from("avvi_records").select("data").eq("entity","professionals").eq("record_id",appointment.professionalId).maybeSingle();if(professional.error)throw professional.error;if(zeroClosedAppointment(appointment)||excludedInvoiceProfessional(professional.data?.data as Professional))throw new Error("Este fechamento não faz parte das notas fiscais.");return appointment;}
+async function account(db:ReturnType<typeof database>,id:string){const {data,error}=await db.from("avvi_records").select("data").eq("entity","appointments").eq("record_id",id).maybeSingle();if(error)throw error;const appointment=data?.data as Appointment|undefined;if(!appointment?.accountClosed)throw new Error("Feche a conta antes de anexar a nota.");const professional=await db.from("avvi_records").select("data").eq("entity","professionals").eq("record_id",appointment.professionalId).maybeSingle();if(professional.error)throw professional.error;if(zeroClosedAppointment(appointment)||!invoiceProfessionalAllowed(appointment,professional.data?.data as Professional))throw new Error("Este fechamento não faz parte das notas fiscais.");return appointment;}
 export async function POST(request:Request){const user=await resolveAccess(request);if(!user||!canAccessTab(user,"Nota Fiscal"))return Response.json({error:"Acesso às notas fiscais não autorizado."},{status:403,headers});if(!sameOrigin(request))return Response.json({error:"Origem não autorizada."},{status:403,headers});
  try{const form=await request.formData();const file=form.get("file");const id=String(form.get("appointmentId")??"");if(!(file instanceof File)||!id||file.size>invoiceMaxBytes)return Response.json({error:"Envie um PDF de até 3 MB."},{status:400,headers});const bytes=Buffer.from(await file.arrayBuffer());if(bytes.subarray(0,5).toString()!=="%PDF-")return Response.json({error:"Selecione um PDF válido."},{status:400,headers});const db=database();await account(db,id);
  const bucket=await db.storage.getBucket(invoiceBucket);if(bucket.error){const created=await db.storage.createBucket(invoiceBucket,{public:false,fileSizeLimit:invoiceMaxBytes,allowedMimeTypes:["application/pdf"]});if(created.error&&!/already exists/i.test(created.error.message))throw created.error;}else if(bucket.data.public)throw new Error("O armazenamento de notas precisa ser privado.");

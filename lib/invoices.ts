@@ -25,11 +25,14 @@ export function excludedInvoiceProfessional(professional?: Pick<Professional,"id
  const name=professional.name.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/^(dra?\.?|doutora?)\s+/g,"").trim();
  return professional.id==="ana"||name==="ana"||name.startsWith("ana ");
 }
-export function invoiceRows(appointments: Appointment[],patients:Patient[],professionals:Professional[],services:Service[],entries:FinancialEntry[]) {
+export function invoiceProfessionalAllowed(appointment:Appointment,professional?:Pick<Professional,"id"|"name">) {
+ return !!professional&&(!excludedInvoiceProfessional(professional)||appointment.invoice?.visibility==="visible");
+}
+export function invoiceRows(appointments: Appointment[],patients:Patient[],professionals:Professional[],services:Service[],entries:FinancialEntry[],options:{allProfessionals?:boolean}={}) {
  return appointments.flatMap(appointment=>{
    const professional=professionals.find(item=>item.id===appointment.professionalId);
    const account=appointment.closedAccount??entries.find(entry=>!entry.sourceAccountId&&entry.accountClosed&&(entry.appointmentId===appointment.id||entry.id===appointment.financialEntryId));
-   if((!appointment.accountClosed&&!account)||excludedInvoiceProfessional(professional)||zeroClosedAppointment(appointment,entries,services))return [];
+   if((!appointment.accountClosed&&!account)||!professional||(!options.allProfessionals&&!invoiceProfessionalAllowed(appointment,professional))||zeroClosedAppointment(appointment,entries,services))return [];
    const lines=account?.procedureLines?.length?account.procedureLines.map(line=>({name:line.manualProcedure||services.find(item=>item.id===line.serviceId)?.name||"Serviço registrado",quantity:line.quantity,value:moneyRound(Math.max(0,line.quantity*line.servicePrice-(line.discount??0)))})):appointmentServices(appointment,services).map(line=>({name:line.name,quantity:1,value:line.price}));
    return [{appointment,professional,patient:patients.find(item=>item.id===appointment.patientId),date:appointment.startsAt.slice(0,10),lines,total:moneyRound(lines.reduce((sum,line)=>sum+line.value,0))}];
  }).sort((a,b)=>b.date.localeCompare(a.date));
