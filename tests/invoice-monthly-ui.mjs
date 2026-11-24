@@ -39,10 +39,17 @@ try{
  await card('pending').getByLabel('PDF da nota fiscal de Paciente pending QA',{exact:true}).setInputFiles(pdf);await card('pending').getByRole('button',{name:'Ver PDF · nota-teste.pdf',exact:true}).waitFor();await summary(2,'150,10');
  await card('pending').getByLabel('PDF da nota fiscal de Paciente pending QA',{exact:true}).setInputFiles({...pdf,name:'substituta.pdf'});await card('pending').getByRole('button',{name:'Ver PDF · substituta.pdf',exact:true}).waitFor();await summary(2,'150,10');
  await card('attached').getByRole('button',{name:/Excluir nota fiscal de/}).click();await summary(1,'50,00');
- await page.getByRole('button',{name:'Adicionar notas anteriores ou excluídas',exact:true}).click();await summary(2,'1.100,10');await card('attached').getByRole('button',{name:/Adicionar novamente de/}).click();await summary(1,'1.000,00');
+ await page.getByRole('button',{name:'Adicionar notas',exact:true}).click();
+ assert.equal(await month().inputValue(),'2026-11');await summary(1,'200,20');
+ assert.equal(await card('november').getByRole('button',{name:/Adicionar nota de/}).isDisabled(),true,'Existing notes are identified without offering duplicates');
+ assert.equal(await card('attached').count(),0);
+ await month().selectOption('2026-10');await summary(3,'1.150,10');
+ await card('attached').getByRole('button',{name:/Adicionar nota de/}).click();
+ assert.equal(await card('attached').getByRole('button',{name:/Adicionar nota de/}).isDisabled(),true);
+ await summary(3,'1.150,10');
  await page.getByRole('button',{name:'Voltar às notas',exact:true}).click();assert.equal(await month().inputValue(),'2026-11');await summary(1,'200,20');await month().selectOption('');await summary(4,'390,30');
  await month().selectOption('2026-11');await card('november').getByRole('button',{name:/Excluir nota fiscal de/}).click();await summary(0,'0,00');assert.equal(await month().inputValue(),'2026-11');assert.equal(await month().locator('option:checked').innerText(),'novembro de 2026','Removing the last record keeps the selected empty month explicit');
- await page.getByRole('button',{name:'Adicionar notas anteriores ou excluídas',exact:true}).click();await card('november').getByRole('button',{name:/Adicionar novamente de/}).click();await page.getByRole('button',{name:'Voltar às notas',exact:true}).click();assert.equal(await month().inputValue(),'2026-11');await month().selectOption('');await summary(4,'390,30');
+ await page.getByRole('button',{name:'Adicionar notas',exact:true}).click();assert.equal(await month().inputValue(),'2026-11');await card('november').getByRole('button',{name:/Adicionar nota de/}).click();await page.getByRole('button',{name:'Voltar às notas',exact:true}).click();assert.equal(await month().inputValue(),'2026-11');await month().selectOption('');await summary(4,'390,30');
  await invalid.uncheck();assert.equal(await background(card('attached')),'rgb(220, 252, 231)');await invalid.check();
  await page.getByRole('button',{name:'Ativar modo escuro',exact:true}).click();assert.equal(await background(card('attached')),'rgb(67, 35, 41)');await summary(4,'390,30');
  await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1&&getComputedStyle(document.querySelector('.avvi-sidebar').nextElementSibling).marginLeft==='0px');await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:'.avvi-local/invoice-monthly-mobile.png'});
@@ -55,6 +62,11 @@ try{
  await navigationButton(page,'Agenda').click();await navigationButton(page,'Nota Fiscal').click();
  assert.equal(await month().inputValue(),'2026-12');await summary(0,'0,00');
  await page.getByText('Nenhum fechamento neste filtro.',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Adicionar notas',exact:true}).click();
+ assert.equal(await month().inputValue(),'2026-12');
+ await page.getByText('Nenhum fechamento neste filtro.',{exact:true}).waitFor();
+ await month().selectOption('2026-10');await card('hidden').getByRole('button',{name:/Adicionar nota de/}).waitFor();
+ await page.getByRole('button',{name:'Voltar às notas',exact:true}).click();assert.equal(await month().inputValue(),'2026-12');
  await month().selectOption('2026-10');await summary(2,'150,10');await card('attached').waitFor();
  assert.deepEqual(errors,[]);console.log('PASS: month/year sections and filters; PDF-only count/value follow search/date/status/archive; manual issue flag excluded, invalid/replaced PDF does not inflate totals; CPF warning persists red over green and restores prior color; reload, mobile and dark theme. Isolated local fixtures.');
 }catch(error){await page.screenshot({path:'.avvi-local/invoice-monthly-debug.png'});throw error;}finally{await browser.close();}
